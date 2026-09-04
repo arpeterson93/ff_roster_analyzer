@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+.env
+.DS_Store
+node_modules/
+dist/
+build/
+*.log
+credentials.json
+token.json
+service_account.json
+.idea/
