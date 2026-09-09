@@ -194,6 +194,7 @@ def run_league(cfg: dict) -> dict:
     schedules_current = nd.schedules(season, current_season=season)
     weeks_played, bye_weeks, opponent = nd.nfl_week_context(season, schedules_current)
     is_home = nd.home_away_from_schedule(schedules_current, season)
+    kickoff = nd.kickoff_utc_from_schedule(schedules_current, season)
     current_week = settings.current_week
     final_week = settings.final_week
     reg_season_count = settings.reg_season_count
@@ -370,6 +371,7 @@ def run_league(cfg: dict) -> dict:
                 "weekly": [
                     {
                         "week": wp.week, "opponent": wp.opponent, "home": is_home.get((p.nfl_team, wp.week)),
+                        "kickoff": kickoff.get((p.nfl_team, wp.week)),
                         "index": wp.index, "rank": wp.rank, "projected": wp.projected, "sd": wp.sd,
                         "actual": _actual_weekly_stats(p.position, p.nfl_team, res.id, wp.week, weeks_played, actual_offense_by_id_week, actual_dst_by_team_week),
                     }
@@ -377,6 +379,7 @@ def run_league(cfg: dict) -> dict:
                 ],
                 "espn_projected_total": p.espn_projected_total, "espn_projected_week": p.espn_projected_week,
                 "percent_owned": p.percent_owned, "percent_owned_delta": p.percent_owned_delta,
+                "percent_started": p.percent_started,
                 "fp_week_pos_rank_label": weekly_row["pos_rank"] if weekly_row else None,
                 "fp_week_projected_pts": weekly_row["r2p_pts"] if weekly_row else None,
             }

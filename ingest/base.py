@@ -43,6 +43,7 @@ class RosterPlayer:
     injured: bool = False
     percent_owned: float = 0.0
     percent_owned_delta: float | None = None
+    percent_started: float = 0.0
     espn_projected_total: float = 0.0
     # None means ESPN hasn't published a week-specific projection for this
     # player (e.g. a deep free agent) - distinct from an explicit 0.0

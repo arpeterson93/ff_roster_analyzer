@@ -1,5 +1,5 @@
 import { fmt, escapeHtml, getYourTeam, setYourTeam } from "./state.js";
-import { POSITION_COLOR, INJURY_BADGE, opponentCellHtml, sortByPositionOrder, teamLabel } from "./colors.js";
+import { POSITION_COLOR, INJURY_BADGE, opponentCellHtml, formatKickoff, sortByPositionOrder, teamLabel } from "./colors.js";
 import { openPlayerModal } from "./playermodal.js";
 import { openPointsAgainstModal } from "./pointsagainstmodal.js";
 
@@ -13,16 +13,32 @@ function healthBadge(status) {
   return letters ? `<span class="pill" style="background:var(--red-600)">${letters}</span>` : "";
 }
 
-// Data columns: [Slot], Player (name + health badge in the same column),
-// Opp/Matchup (combined), Proj, ESPN proj. Kept in sync with the <tfoot>
+// Data columns: [Slot], Player (name + health badge, with a second smaller
+// meta line for team/ownership), Opp/Matchup (combined, with kickoff time on
+// its own line above it), Proj, ESPN proj. Kept in sync with the <tfoot>
 // colspan below so totals line up under the right columns.
+function playerMetaLine(p) {
+  const parts = [];
+  if (p.nfl_team) parts.push(escapeHtml(p.nfl_team));
+  if (p.percent_owned) parts.push(`${fmt(p.percent_owned, 0)}% Rost`);
+  if (p.percent_started) parts.push(`${fmt(p.percent_started, 0)}% Start`);
+  return parts.join(" · ");
+}
+
 function playerRow(p, week, slotLabel) {
   const weekEntry = (p.weekly || []).find((w) => w.week === week) || {};
   const slotCell = slotLabel !== undefined ? `<td class="muted small">${slotLabel}</td>` : "";
+  const kickoff = formatKickoff(weekEntry.kickoff);
   return `<tr data-player-id="${p.id}" class="clickable-row">
     ${slotCell}
-    <td>${posTag(p.position)} ${escapeHtml(p.name)} ${healthBadge(p.injury_status)}</td>
-    <td data-opp-cell data-team="${escapeHtml(weekEntry.opponent || "")}" data-pos="${p.position}">${opponentCellHtml(weekEntry)}</td>
+    <td>
+      <div>${posTag(p.position)} <strong>${escapeHtml(p.name)}</strong> ${healthBadge(p.injury_status)}</div>
+      <div class="muted small row-meta">${playerMetaLine(p)}</div>
+    </td>
+    <td data-opp-cell data-team="${escapeHtml(weekEntry.opponent || "")}" data-pos="${p.position}">
+      ${kickoff ? `<div class="muted small row-meta">${kickoff}</div>` : ""}
+      <div>${opponentCellHtml(weekEntry)}</div>
+    </td>
     <td>${fmt(p.this_week, 1)}</td>
     <td>${fmt(p.espn_projected_week, 1)}</td>
   </tr>`;

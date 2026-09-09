@@ -9,7 +9,9 @@ equivalent).
 from __future__ import annotations
 
 import time
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import nflreadpy as nfl
 import polars as pl
@@ -167,6 +169,34 @@ def home_away_from_schedule(schedules_df: pl.DataFrame, season: int) -> dict[tup
         is_home[(row["home_team"], row["week"])] = True
         is_home[(row["away_team"], row["week"])] = False
     return is_home
+
+
+_EASTERN = ZoneInfo("America/New_York")
+_UTC = ZoneInfo("UTC")
+
+
+def kickoff_utc_from_schedule(schedules_df: pl.DataFrame, season: int) -> dict[tuple[str, int], str | None]:
+    """{(team, week): kickoff time as an ISO-8601 UTC timestamp ("...Z")},
+    REG season only. nflverse reports `gameday`/`gametime` in US Eastern time
+    (verified against known kickoff slots) - converted here via
+    America/New_York (so DST is handled automatically for the Nov/Dec
+    EST games) rather than left for the frontend to guess a source zone.
+    The frontend then renders this in each *viewer's own* local time zone via
+    plain `new Date(iso)` - no timezone math needed there."""
+    reg = schedules_df.filter((pl.col("season") == season) & (pl.col("game_type") == "REG"))
+    kickoff: dict[tuple[str, int], str | None] = {}
+    for row in reg.iter_rows(named=True):
+        gameday, gametime = row.get("gameday"), row.get("gametime")
+        if not gameday or not gametime:
+            continue
+        try:
+            local_dt = datetime.strptime(f"{gameday} {gametime}", "%Y-%m-%d %H:%M").replace(tzinfo=_EASTERN)
+        except ValueError:
+            continue
+        iso = local_dt.astimezone(_UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        kickoff[(row["home_team"], row["week"])] = iso
+        kickoff[(row["away_team"], row["week"])] = iso
+    return kickoff
 
 
 def nfl_week_context(

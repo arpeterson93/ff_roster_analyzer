@@ -80,3 +80,16 @@ export function opponentCellHtml(weekEntry) {
   const rankTitle = hasRank ? `title="Matchup rank ${weekEntry.rank} of 32 (1 = best)"` : "";
   return `<span class="pill" style="background:${color}" ${rankTitle}>${label}${hasRank ? ` (${weekEntry.rank})` : ""}</span>`;
 }
+
+// "Sun 3:25 PM" in the VIEWER's own local time zone - the pipeline only ever
+// emits an absolute UTC instant (see ingest/nfl_data.py's
+// kickoff_utc_from_schedule), so a plain Date + no explicit timeZone option
+// is all that's needed; the browser supplies the rest.
+export function formatKickoff(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const weekday = d.toLocaleDateString(undefined, { weekday: "short" });
+  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return `${weekday} ${time}`;
+}

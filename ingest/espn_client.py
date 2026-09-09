@@ -125,6 +125,7 @@ class EspnClient:
             injured=bool(p.injured),
             percent_owned=float(p.percent_owned or 0.0),
             percent_owned_delta=self._ownership_deltas().get(p.playerId),
+            percent_started=float(p.percent_started or 0.0),
             espn_projected_total=float(p.projected_total_points or 0.0),
             espn_projected_week=self._week_projected_points(p, self._league.current_week),
         )

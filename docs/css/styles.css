@@ -137,6 +137,8 @@ th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--bord
 th { color: var(--ink-500); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; cursor: pointer; }
 tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
 
+.row-meta { margin-top: 2px; line-height: 1.2; }
+
 .pill {
   display: inline-block;
   padding: 1px 8px;

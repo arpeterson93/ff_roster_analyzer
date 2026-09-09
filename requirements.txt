@@ -7,3 +7,4 @@ numpy
 scipy
 pytest
 python-dotenv
+tzdata  # zoneinfo's IANA database - stdlib-only on Linux, but Windows has no system copy
