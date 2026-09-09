@@ -1,0 +1,269 @@
+:root {
+  --paper: #f7f7f5;
+  --card: #ffffff;
+  --border: #dcdcd6;
+  --ink-900: #1b1b18;
+  --ink-700: #4a4a45;
+  --ink-500: #7a7a73;
+  --accent: #2f6f4f;
+  --accent-ink: #ffffff;
+  --green-600: #2f9e5c;
+  --amber-500: #d69b1f;
+  --red-600: #c0392b;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --radius: 10px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #17181a;
+    --card: #212226;
+    --border: #34363b;
+    --ink-900: #f1f1ef;
+    --ink-700: #c7c7c2;
+    --ink-500: #93938d;
+    --accent: #4fae7d;
+    --accent-ink: #0d130f;
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  }
+}
+
+:root[data-theme="dark"] {
+  --paper: #17181a;
+  --card: #212226;
+  --border: #34363b;
+  --ink-900: #f1f1ef;
+  --ink-700: #c7c7c2;
+  --ink-500: #93938d;
+  --accent: #4fae7d;
+  --accent-ink: #0d130f;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background: var(--paper);
+  color: var(--ink-900);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+header.app-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+}
+
+header.app-header h1 {
+  font-size: 16px;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.header-meta {
+  color: var(--ink-500);
+  font-size: 12px;
+  margin-left: auto;
+  text-align: right;
+}
+
+select#league-select {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--ink-900);
+}
+
+.warning-banner {
+  background: color-mix(in srgb, var(--amber-500) 18%, var(--card));
+  border: 1px solid var(--amber-500);
+  color: var(--ink-900);
+  padding: 8px 16px;
+  font-size: 12px;
+}
+
+nav.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 16px 0;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+}
+
+nav.tabs button {
+  border: none;
+  background: transparent;
+  color: var(--ink-500);
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+}
+
+nav.tabs button.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+.tabpanel { display: none; padding: 16px; max-width: 1100px; margin: 0 auto; }
+.tabpanel.active { display: block; }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px;
+  margin-bottom: 16px;
+}
+
+.card h2 { font-size: 14px; margin: 0 0 10px; }
+.card h3 { font-size: 12px; color: var(--ink-500); margin: 12px 0 6px; text-transform: uppercase; letter-spacing: 0.04em; }
+
+.table-wrap { overflow-x: auto; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+th { color: var(--ink-500); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; cursor: pointer; }
+tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+
+.pill {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.bar-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 12px; }
+.bar-label { width: 90px; flex-shrink: 0; color: var(--ink-700); }
+.bar-track { flex: 1; height: 14px; background: var(--border); border-radius: 4px; overflow: hidden; position: relative; }
+.bar-fill { height: 100%; background: var(--accent); }
+.bar-value { width: 60px; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+
+.select-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+.select-row select { padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--ink-900); }
+
+.player-picker { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.player-chip {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  background: var(--card);
+  color: var(--ink-700);
+}
+.player-chip.selected { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+
+.trade-result { display: flex; gap: 16px; flex-wrap: wrap; }
+.trade-side { flex: 1; min-width: 220px; }
+.trade-verdict { font-size: 16px; font-weight: 700; margin: 10px 0; }
+
+.heat-cell { text-align: center; font-variant-numeric: tabular-nums; color: #111; }
+
+.muted { color: var(--ink-500); }
+.small { font-size: 12px; }
+
+.pos-tag {
+  display: inline-block;
+  min-width: 26px;
+  text-align: center;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.25);
+}
+
+.clickable-row { cursor: pointer; }
+
+.your-team-row { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.your-team-row:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+
+.selected-row { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+
+.sparkline { display: flex; align-items: flex-end; gap: 1px; height: 20px; width: 90px; }
+.spark-bar { flex: 1; min-width: 2px; border-radius: 1px; }
+
+.value-readout { font-variant-numeric: tabular-nums; min-width: 40px; display: inline-block; }
+code { background: color-mix(in srgb, var(--ink-500) 15%, transparent); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+#settings-save { padding: 6px 14px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); cursor: pointer; font-weight: 600; }
+
+details { margin-top: 10px; }
+details summary { cursor: pointer; color: var(--accent); }
+details[open] summary { margin-bottom: 8px; }
+
+.totals-row td { border-top: 2px solid var(--border); border-bottom: none; background: color-mix(in srgb, var(--accent) 5%, transparent); }
+
+/* table-layout:fixed makes the <colgroup> widths authoritative regardless of
+   cell content, so home/score/away line up the same way at every week. */
+.schedule-table { table-layout: fixed; width: 100%; }
+.schedule-cell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; font-variant-numeric: tabular-nums; }
+.week-divider td { background: color-mix(in srgb, var(--ink-500) 10%, transparent); font-weight: 600; font-size: 12px; text-align: left; }
+
+/* :not([hidden]) matters here - a bare .modal-overlay{display:flex} rule
+   ties in specificity with the UA's [hidden]{display:none} and, as the
+   later/author rule, would win, leaving the modal visible after el.hidden
+   is set to true. */
+.modal-overlay:not([hidden]) {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 5vh 16px;
+  z-index: 1000;
+  overflow-y: auto;
+}
+.modal-box {
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px;
+  max-width: 860px;
+  width: 100%;
+  position: relative;
+}
+.modal-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  border: none;
+  background: transparent;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--ink-500);
+}
+.modal-box h2 { font-size: 16px; margin: 0 0 4px; }
+
+@media (max-width: 700px) {
+  .tabpanel { padding: 10px; }
+  header.app-header { flex-direction: column; align-items: flex-start; }
+  .header-meta { margin-left: 0; text-align: left; }
+  th, td { padding: 5px 6px; font-size: 12px; }
+  select, input, button { font-size: 16px; } /* prevents iOS auto-zoom on focus */
+  nav.tabs button { padding: 8px 10px; font-size: 12px; }
+  .modal-box { padding: 14px; max-width: 100%; }
+  .bar-label { width: 64px; }
+  .bar-value { width: 46px; }
+  .player-picker { gap: 4px; }
+}
+
+@media (pointer: coarse) {
+  nav.tabs button, .player-chip, th, .modal-close { min-height: 30px; }
+}

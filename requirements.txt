@@ -1,0 +1,9 @@
+nflreadpy==0.1.5
+polars
+espn_api==0.46.0
+pyyaml
+requests
+numpy
+scipy
+pytest
+python-dotenv

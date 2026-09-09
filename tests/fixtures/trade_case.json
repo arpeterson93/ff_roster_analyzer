@@ -1,0 +1,36 @@
+{
+  "_comment": "Small 2-team league state for engine.trades / docs/js/trade.js parity checks. slots={QB:1,RB:1}, eligibility={QB:{QB},RB:{RB}}, weeks=[1,2,3].",
+  "slots": {"QB": 1, "RB": 1},
+  "eligibility": {"QB": ["QB"], "RB": ["RB"]},
+  "weeks": [1, 2, 3],
+  "players": {
+    "qbA1": {"position": "QB", "ppw": 18.0, "ros_total": 54.0},
+    "rbA1": {"position": "RB", "ppw": 20.0, "ros_total": 60.0},
+    "rbA2": {"position": "RB", "ppw": 5.0, "ros_total": 15.0},
+    "qbB1": {"position": "QB", "ppw": 10.0, "ros_total": 30.0},
+    "rbB1": {"position": "RB", "ppw": 8.0, "ros_total": 24.0},
+    "rbB2": {"position": "RB", "ppw": 22.0, "ros_total": 66.0}
+  },
+  "roster_a": ["qbA1", "rbA1", "rbA2"],
+  "roster_b": ["qbB1", "rbB1", "rbB2"],
+  "cases": [
+    {
+      "name": "favors_a_bench_for_starter",
+      "gives_a": ["rbA2"],
+      "gives_b": ["rbB2"],
+      "expected": {"gain_a": 6.0, "gain_b": -42.0, "favors": "a"}
+    },
+    {
+      "name": "favors_b_starter_for_worse_starter",
+      "gives_a": ["rbA1"],
+      "gives_b": ["rbB1"],
+      "expected": {"gain_a": -36.0, "gain_b": 0.0, "favors": "b"}
+    },
+    {
+      "name": "even_bench_swap",
+      "gives_a": ["rbA2"],
+      "gives_b": ["rbB1"],
+      "expected": {"gain_a": 0.0, "gain_b": 0.0, "favors": "even"}
+    }
+  ]
+}

@@ -13,3 +13,6 @@ credentials.json
 token.json
 service_account.json
 .idea/
+docs/data/
+.cache/
+

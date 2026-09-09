@@ -1,0 +1,30 @@
+slug: any-given-sunday
+name: Any Given Sunday
+platform: espn
+league_id: 544449541
+season: 2026
+private: true
+credentials: {espn_s2: ESPN_S2_AGS, swid: SWID_AGS}
+scoring_format: half       # standard | half | ppr  -> FantasyPros page family
+settings_sheet_id: null    # Google Sheet id for live-editable settings (see README "Settings sheet"); null = use the values below
+valuation:
+  curve_seasons: [2022, 2023, 2024, 2025]
+  curve_min_games: 8
+  curve_current_max_weight: 0.5
+  curve_current_full_weight_weeks: 8
+  matchup_dampening: 0.5
+  index_clamp: [0.5, 1.5]
+  pa_basis: blend            # season | l5 | blend
+  pa_l5_weight: 0.5          # used when pa_basis == blend
+  pa_opponent_adjusted: true
+  pa_prior_season_weeks: 6
+  zero_this_week_statuses: [OUT, INJURY_RESERVE, SUSPENSION, DOUBTFUL]
+  starter_pool: {QB: 32, RB: 64, WR: 96, TE: 48, K: 32, DST: 32}   # display-only position averages
+strength:
+  replacement_from_waivers: true   # trade/pickup math uses value_delta_ww
+  max_pickups: 10
+  max_trade_targets: 10
+sim:
+  iterations: 10000
+  seed: 2026
+  division_winners_first: true
