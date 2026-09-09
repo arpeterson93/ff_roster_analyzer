@@ -139,6 +139,11 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 
 .row-meta { margin-top: 2px; line-height: 1.2; }
 
+/* Start/Sit rows: ".desktop-col" (Opp/ESPN-proj columns) and ".mobile-line"
+   (the same info, stacked inside the Player/Score cells instead) are two
+   renderings of the same data - the 700px breakpoint below picks one. */
+.mobile-line { display: none; }
+
 .pill {
   display: inline-block;
   padding: 1px 8px;
@@ -264,6 +269,8 @@ details[open] summary { margin-bottom: 8px; }
   .bar-label { width: 64px; }
   .bar-value { width: 46px; }
   .player-picker { gap: 4px; }
+  .desktop-col { display: none; }
+  .mobile-line { display: block; }
 }
 
 @media (pointer: coarse) {

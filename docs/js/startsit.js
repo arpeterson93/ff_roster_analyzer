@@ -13,10 +13,12 @@ function healthBadge(status) {
   return letters ? `<span class="pill" style="background:var(--red-600)">${letters}</span>` : "";
 }
 
-// Data columns: [Slot], Player (name + health badge, with a second smaller
-// meta line for team/ownership), Opp/Matchup (combined, with kickoff time on
-// its own line above it), Proj, ESPN proj. Kept in sync with the <tfoot>
-// colspan below so totals line up under the right columns.
+// Desktop keeps the separate Slot/Player/Opp/Proj/ESPN-proj columns (marked
+// ".desktop-col" where they'd be redundant on mobile). On mobile (see the
+// ".desktop-col"/".mobile-line" media query in styles.css) those columns
+// collapse away and everything folds into two stacked blocks per row -
+// Player (name+badge, team/ownership, kickoff+opponent) and Score (our
+// projection, ESPN's beneath it) - matching a native app's compact list.
 function playerMetaLine(p) {
   const parts = [];
   if (p.nfl_team) parts.push(escapeHtml(p.nfl_team));
@@ -29,18 +31,23 @@ function playerRow(p, week, slotLabel) {
   const weekEntry = (p.weekly || []).find((w) => w.week === week) || {};
   const slotCell = slotLabel !== undefined ? `<td class="muted small">${slotLabel}</td>` : "";
   const kickoff = formatKickoff(weekEntry.kickoff);
+  const oppAttrs = `data-opp-cell data-team="${escapeHtml(weekEntry.opponent || "")}" data-pos="${p.position}"`;
   return `<tr data-player-id="${p.id}" class="clickable-row">
     ${slotCell}
     <td>
       <div>${posTag(p.position)} <strong>${escapeHtml(p.name)}</strong> ${healthBadge(p.injury_status)}</div>
       <div class="muted small row-meta">${playerMetaLine(p)}</div>
+      <div class="muted small row-meta mobile-line" ${oppAttrs}>${kickoff ? escapeHtml(kickoff) + " " : ""}${opponentCellHtml(weekEntry)}</div>
     </td>
-    <td data-opp-cell data-team="${escapeHtml(weekEntry.opponent || "")}" data-pos="${p.position}">
+    <td class="desktop-col" ${oppAttrs}>
       ${kickoff ? `<div class="muted small row-meta">${kickoff}</div>` : ""}
       <div>${opponentCellHtml(weekEntry)}</div>
     </td>
-    <td>${fmt(p.this_week, 1)}</td>
-    <td>${fmt(p.espn_projected_week, 1)}</td>
+    <td>
+      <div><strong>${fmt(p.this_week, 1)}</strong></div>
+      <div class="muted small row-meta mobile-line">ESPN ${fmt(p.espn_projected_week, 1)}</div>
+    </td>
+    <td class="desktop-col">${fmt(p.espn_projected_week, 1)}</td>
   </tr>`;
 }
 
@@ -65,18 +72,28 @@ function lineupSection(roster, week, lineupWeek) {
 
   return `
     <table>
-      <thead><tr><th>Slot</th><th>Player</th><th>Opp</th><th>Proj</th><th>ESPN proj</th></tr></thead>
+      <thead><tr><th>Slot</th><th>Player</th><th class="desktop-col">Opp</th><th>Score</th><th class="desktop-col">ESPN proj</th></tr></thead>
       <tbody>${rows}</tbody>
       <tfoot>
-        <tr class="totals-row"><td colspan="2">Starters total</td><td></td><td><strong>${fmt(ourTotal, 1)}</strong></td><td><strong>${fmt(espnTotal, 1)}</strong></td></tr>
+        <tr class="totals-row">
+          <td colspan="2">Starters total</td>
+          <td class="desktop-col"></td>
+          <td><strong>${fmt(ourTotal, 1)}</strong><div class="muted small mobile-line">ESPN ${fmt(espnTotal, 1)}</div></td>
+          <td class="desktop-col"><strong>${fmt(espnTotal, 1)}</strong></td>
+        </tr>
       </tfoot>
     </table>
     <h3>Bench <span class="muted small">(sorted by ESPN proj)</span></h3>
     <table>
-      <thead><tr><th>Player</th><th>Opp</th><th>Proj</th><th>ESPN proj</th></tr></thead>
+      <thead><tr><th>Player</th><th class="desktop-col">Opp</th><th>Score</th><th class="desktop-col">ESPN proj</th></tr></thead>
       <tbody>${benchRows}</tbody>
       <tfoot>
-        <tr class="totals-row"><td>Bench total</td><td></td><td><strong>${fmt(benchOurTotal, 1)}</strong></td><td><strong>${fmt(benchEspnTotal, 1)}</strong></td></tr>
+        <tr class="totals-row">
+          <td>Bench total</td>
+          <td class="desktop-col"></td>
+          <td><strong>${fmt(benchOurTotal, 1)}</strong><div class="muted small mobile-line">ESPN ${fmt(benchEspnTotal, 1)}</div></td>
+          <td class="desktop-col"><strong>${fmt(benchEspnTotal, 1)}</strong></td>
+        </tr>
       </tfoot>
     </table>
   `;
