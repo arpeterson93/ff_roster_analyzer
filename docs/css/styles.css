@@ -139,6 +139,28 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 
 .row-meta { margin-top: 2px; line-height: 1.2; }
 
+/* Start/Sit's Player/Score cells hold multi-line stacked content (name,
+   team/ownership, kickoff+opponent) - letting that text wrap instead of
+   forcing the site-wide "th, td { white-space: nowrap }" default is what
+   keeps the table itself no wider than the screen, rather than just
+   scrollable. table-wrap's overflow-x below is still the fallback for
+   anything that doesn't fit even wrapped (e.g. a very long player name). */
+#tab-startsit td { white-space: normal; }
+
+/* Settings' field rows used a fixed 220px label + inline range/select/checkbox
+   in one unbroken flex row - on a narrow phone that's simply wider than the
+   screen, with nothing to scroll (it's not a table). Letting the row wrap
+   moves the control(s) to their own line under the label instead. */
+.settings-label { width: 220px; flex-shrink: 0; }
+.settings-help { margin: -4px 0 10px 220px; }
+.settings-row input[type="range"] { flex: 1; min-width: 60px; }
+
+@media (max-width: 700px) {
+  .settings-row { flex-wrap: wrap; }
+  .settings-label { width: 100%; }
+  .settings-help { margin: -2px 0 10px 0; }
+}
+
 /* Start/Sit rows: ".desktop-col" (Opp/ESPN-proj columns) and ".mobile-line"
    (the same info, stacked inside the Player/Score cells instead) are two
    renderings of the same data - the 700px breakpoint below picks one. */

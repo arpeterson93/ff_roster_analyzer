@@ -71,31 +71,35 @@ function lineupSection(roster, week, lineupWeek) {
   const benchEspnTotal = bench.reduce((acc, p) => acc + (p.espn_projected_week || 0), 0);
 
   return `
-    <table>
-      <thead><tr><th>Slot</th><th>Player</th><th class="desktop-col">Opp</th><th>Score</th><th class="desktop-col">ESPN proj</th></tr></thead>
-      <tbody>${rows}</tbody>
-      <tfoot>
-        <tr class="totals-row">
-          <td colspan="2">Starters total</td>
-          <td class="desktop-col"></td>
-          <td><strong>${fmt(ourTotal, 1)}</strong><div class="muted small mobile-line">ESPN ${fmt(espnTotal, 1)}</div></td>
-          <td class="desktop-col"><strong>${fmt(espnTotal, 1)}</strong></td>
-        </tr>
-      </tfoot>
-    </table>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Slot</th><th>Player</th><th class="desktop-col">Opp</th><th>Score</th><th class="desktop-col">ESPN proj</th></tr></thead>
+        <tbody>${rows}</tbody>
+        <tfoot>
+          <tr class="totals-row">
+            <td colspan="2">Starters total</td>
+            <td class="desktop-col"></td>
+            <td><strong>${fmt(ourTotal, 1)}</strong><div class="muted small mobile-line">ESPN ${fmt(espnTotal, 1)}</div></td>
+            <td class="desktop-col"><strong>${fmt(espnTotal, 1)}</strong></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
     <h3>Bench <span class="muted small">(sorted by ESPN proj)</span></h3>
-    <table>
-      <thead><tr><th>Player</th><th class="desktop-col">Opp</th><th>Score</th><th class="desktop-col">ESPN proj</th></tr></thead>
-      <tbody>${benchRows}</tbody>
-      <tfoot>
-        <tr class="totals-row">
-          <td>Bench total</td>
-          <td class="desktop-col"></td>
-          <td><strong>${fmt(benchOurTotal, 1)}</strong><div class="muted small mobile-line">ESPN ${fmt(benchEspnTotal, 1)}</div></td>
-          <td class="desktop-col"><strong>${fmt(benchEspnTotal, 1)}</strong></td>
-        </tr>
-      </tfoot>
-    </table>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Player</th><th class="desktop-col">Opp</th><th>Score</th><th class="desktop-col">ESPN proj</th></tr></thead>
+        <tbody>${benchRows}</tbody>
+        <tfoot>
+          <tr class="totals-row">
+            <td>Bench total</td>
+            <td class="desktop-col"></td>
+            <td><strong>${fmt(benchOurTotal, 1)}</strong><div class="muted small mobile-line">ESPN ${fmt(benchEspnTotal, 1)}</div></td>
+            <td class="desktop-col"><strong>${fmt(benchEspnTotal, 1)}</strong></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
   `;
 }
 

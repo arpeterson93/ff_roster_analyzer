@@ -61,7 +61,7 @@ export function renderSettings(container, data) {
   const fieldsEl = container.querySelector("#settings-fields");
   const pending = {};
   fieldsEl.innerHTML = FIELDS.map(
-    (f) => `<div class="bar-row"><div class="bar-label" style="width:220px">${f.label}</div>${fieldControl(f, settings[f.key])}</div><p class="muted small" style="margin:-4px 0 10px 220px">${f.help}</p>`
+    (f) => `<div class="bar-row settings-row"><div class="bar-label settings-label">${f.label}</div>${fieldControl(f, settings[f.key])}</div><p class="muted small settings-help">${f.help}</p>`
   ).join("");
 
   const editable = writeConfigured && sheetConfigured;
