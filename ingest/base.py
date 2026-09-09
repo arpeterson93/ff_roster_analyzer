@@ -44,7 +44,11 @@ class RosterPlayer:
     percent_owned: float = 0.0
     percent_owned_delta: float | None = None
     espn_projected_total: float = 0.0
-    espn_projected_week: float = 0.0
+    # None means ESPN hasn't published a week-specific projection for this
+    # player (e.g. a deep free agent) - distinct from an explicit 0.0
+    # (e.g. a correctly-zeroed OUT player), so callers can fall back to
+    # their own estimate only in the former case.
+    espn_projected_week: float | None = None
 
 
 @dataclass

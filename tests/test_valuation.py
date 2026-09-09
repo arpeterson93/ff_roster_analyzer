@@ -29,6 +29,7 @@ def _project(**overrides):
         reg_season_count=4,
         opponent=OPPONENT,
         cfg=CFG,
+        espn_week_projection=None,
     )
     kwargs.update(overrides)
     return project_player(**kwargs)
@@ -86,6 +87,45 @@ def test_no_week_pos_rank_falls_back_to_baseline_times_matchup():
     proj = _project(week_pos_rank=None)
     weekly = {w.week: w.projected for w in proj.weekly}
     assert weekly[1] == pytest.approx(11.0)  # unchanged from the no-direct-mapping case
+
+
+def test_espn_week_projection_takes_priority_over_fantasypros_rank():
+    # Both an ESPN projection and a FantasyPros weekly rank are available -
+    # ESPN wins, since their model reacts same-week to news a nightly scrape
+    # may not have caught yet.
+    proj = _project(week_pos_rank=15, espn_week_projection=7.5)
+    weekly = {w.week: w.projected for w in proj.weekly}
+    raw_week1 = 7.5
+    total_raw = raw_week1 + 9.0 + 0.0 + 10.0
+    scale = 30.0 / total_raw
+    assert weekly[1] == pytest.approx(raw_week1 * scale)
+
+
+def test_espn_week_projection_used_even_without_a_fantasypros_rank():
+    proj = _project(week_pos_rank=None, espn_week_projection=7.5)
+    weekly = {w.week: w.projected for w in proj.weekly}
+    raw_week1 = 7.5
+    total_raw = raw_week1 + 9.0 + 0.0 + 10.0
+    scale = 30.0 / total_raw
+    assert weekly[1] == pytest.approx(raw_week1 * scale)
+
+
+def test_espn_week_projection_still_overridden_by_out_status():
+    proj = _project(espn_week_projection=7.5, injury_status="OUT")
+    weekly = {w.week: w.projected for w in proj.weekly}
+    assert weekly[1] == pytest.approx(0.0)
+    assert proj.zeroed_this_week is True
+
+
+def test_no_espn_projection_falls_back_to_fantasypros_rank():
+    # espn_week_projection=None (ESPN hasn't published one) - falls back to
+    # the FantasyPros weekly-rank mapping exactly as before.
+    proj = _project(week_pos_rank=15, espn_week_projection=None)
+    weekly = {w.week: w.projected for w in proj.weekly}
+    raw_week1 = 4.0
+    total_raw = raw_week1 + 9.0 + 0.0 + 10.0
+    scale = 30.0 / total_raw
+    assert weekly[1] == pytest.approx(raw_week1 * scale)
 
 
 def test_unranked_player_gets_zero_projection():

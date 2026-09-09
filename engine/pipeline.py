@@ -341,6 +341,7 @@ def run_league(cfg: dict) -> dict:
             injury_status=p.injury_status, week_pos_rank=week_pos_rank,
             curve=curve, matchup_index=matchup_index, current_week=current_week, final_week=final_week,
             reg_season_count=reg_season_count, opponent=opponent, cfg=val_cfg,
+            espn_week_projection=p.espn_projected_week,
         )
 
         players_ctx[res.id] = PlayerCtx(
@@ -504,7 +505,7 @@ def run_league(cfg: dict) -> dict:
             started = set(assignment.values())
             bench = sorted(
                 (pid for pid in roster_ids if pid not in started),
-                key=lambda pid: players_by_id[pid]["espn_projected_week"], reverse=True,
+                key=lambda pid: players_by_id[pid]["espn_projected_week"] or 0, reverse=True,
             )
             weeks_out[str(w)] = {"total": total, "slots": assignment, "bench": bench}
 

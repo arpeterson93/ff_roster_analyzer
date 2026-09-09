@@ -132,12 +132,31 @@ DST_STAT_EXPR: dict[str, callable] = {
     ),
     "DEFRETTD": lambda ctx: _get(ctx["team_row"], "def_tds"),
     "INTTD": lambda ctx: _get(ctx["team_row"], "def_tds"),
+    # nflverse's team_stats has no column isolating a blocked-punt/FG return
+    # specifically - def_tds already lumps every defensive/return TD into one
+    # count, so this folds into the same bucket as DEFRETTD/INTTD above. A
+    # league scoring more than one of these three non-zero at once would
+    # double-count; not the case for either of this repo's two leagues.
+    "BLKKRTD": lambda ctx: _get(ctx["team_row"], "def_tds"),
     "FRTD": lambda ctx: _get(ctx["team_row"], "fumble_recovery_tds"),
     "TRTD": lambda ctx: _get(ctx["team_row"], "special_teams_tds"),
+    # A defensive return of a failed 2-point try, and the rule-book oddity of
+    # a 1-point safety off a botched PAT, are each a handful-of-times-per-
+    # decade event across the whole NFL and nflverse's team_stats has no
+    # column for either - always scored 0 rather than failing the pipeline.
+    # from_espn() below warns if a league configures non-zero points here.
+    "2PRET": lambda ctx: 0.0,
+    "1PSF": lambda ctx: 0.0,
     "PTSA": lambda ctx: ctx["points_allowed"],
     "DPTSA": lambda ctx: ctx["points_allowed"],
     "YA": lambda ctx: ctx["yards_allowed"],
 }
+
+# Scoring items ScoringRules maps but can never compute a non-zero value for,
+# because nflverse's data doesn't expose the underlying stat at all - see the
+# comments above. from_espn() warns (rather than silently saying nothing) if
+# a league actually configures points for one of these.
+_ALWAYS_ZERO_DST_ABBRS = {"2PRET", "1PSF"}
 for _abbr in [b[2] for b in _PA_BRACKETS]:
     DST_STAT_EXPR[_abbr] = _pa_bracket_expr(_abbr)
     DST_STAT_EXPR[f"D{_abbr}"] = _pa_bracket_expr(f"D{_abbr}")
@@ -185,6 +204,15 @@ class ScoringRules:
                 f"scoring item(s) {truly_unmapped} have no point mapping anywhere in "
                 "engine/scoring.py - add them before running the pipeline"
             )
+
+        if is_dst:
+            for item in nonzero:
+                if item["abbr"] in _ALWAYS_ZERO_DST_ABBRS:
+                    logger.warning(
+                        "league scores %s at %s points but nflverse has no data for this stat "
+                        "(see engine/scoring.py's DST_STAT_EXPR) - it will always score 0",
+                        item["abbr"], item["points"],
+                    )
         return cls(items=nonzero, is_dst=is_dst)
 
     def points_for_row(self, row: dict) -> float:

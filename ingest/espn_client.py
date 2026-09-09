@@ -97,9 +97,10 @@ class EspnClient:
             }
         return self._ownership_delta_cache
 
-    def _week_projected_points(self, p, week: int) -> float:
-        """The CURRENT WEEK's specific projection - never projected_avg_points
-        (a season-long average that doesn't reflect this week's injury status,
+    def _week_projected_points(self, p, week: int) -> float | None:
+        """The CURRENT WEEK's specific projection, or None if ESPN hasn't
+        published one for this player - never projected_avg_points (a
+        season-long average that doesn't reflect this week's injury status,
         bye, or matchup; e.g. an OUT player's avg stays nonzero even though
         their actual week-N projection correctly drops to ~0)."""
         week_stats = (getattr(p, "stats", None) or {}).get(week)
@@ -108,7 +109,7 @@ class EspnClient:
         # BoxPlayer (free agents, already queried for a specific week) carries
         # the value directly as a top-level attribute instead of via .stats.
         direct = getattr(p, "projected_points", None)
-        return float(direct) if direct is not None else 0.0
+        return float(direct) if direct is not None else None
 
     def _roster_player(self, p, fantasy_team_id: int | None) -> RosterPlayer:
         pos = _canon_pos(p.position)

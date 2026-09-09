@@ -49,6 +49,7 @@ def project_player(
     reg_season_count: int,
     opponent: dict[tuple[str, int], str | None],
     cfg: dict,
+    espn_week_projection: float | None = None,
 ) -> Projection:
     ranked = ros_pos_rank is not None
     baseline = curve.ppg_at(position, ros_pos_rank) if ranked else 0.0
@@ -80,17 +81,25 @@ def project_player(
     active_weeks = [w for w in weeks if opp_for_week[w] is not None]
     ros_total = baseline * len(active_weeks)
 
-    # Current week only: map FantasyPros' WEEKLY consensus rank directly to
-    # the curve baseline, instead of our own ROS-rank baseline * matchup
-    # multiplier. Their weekly rank already reflects this week's specific
-    # opponent (their experts rank him knowing who he plays), so layering our
-    # own opponent adjustment on top of it would double-count the matchup.
-    # Every other remaining week still uses our own baseline*matchup method,
-    # since we only have a weekly consensus rank for the current week.
-    if week_pos_rank is not None and current_week in raw and opp_for_week.get(current_week) is not None:
-        direct = curve.ppg_at(position, week_pos_rank)
-        raw[current_week] = direct
-        mult_for_week[current_week] = (direct / baseline) if baseline > 0 else 0.0
+    # Current week only: prefer a source that already knows this week's
+    # specific matchup/injury/game-script over our own ROS-rank baseline *
+    # matchup multiplier (layering our own opponent adjustment on top of one
+    # of these would double-count the matchup). Preference order:
+    #   1. ESPN's own weekly projection - their model reacts same-week to
+    #      news our nightly FantasyPros scrape may not have caught yet.
+    #   2. FantasyPros' weekly consensus rank mapped to the curve baseline.
+    #   3. (fall through) our own baseline*matchup value, computed above.
+    # Every other remaining week always uses our own baseline*matchup method,
+    # since neither source publishes a rank/projection beyond the current week.
+    if current_week in raw and opp_for_week.get(current_week) is not None:
+        direct = None
+        if espn_week_projection is not None:
+            direct = espn_week_projection
+        elif week_pos_rank is not None:
+            direct = curve.ppg_at(position, week_pos_rank)
+        if direct is not None:
+            raw[current_week] = direct
+            mult_for_week[current_week] = (direct / baseline) if baseline > 0 else 0.0
 
     zeroed = False
     zero_reason: str | None = None

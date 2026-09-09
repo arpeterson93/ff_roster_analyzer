@@ -108,3 +108,17 @@ def test_points_for_row_rejects_dst_rules():
     rules = ScoringRules.from_espn(DST_ITEMS, is_dst=True)
     with pytest.raises(TypeError):
         rules.points_for_row({})
+
+
+def test_blkkrtd_folds_into_def_tds():
+    rules = ScoringRules.from_espn([{"id": 93, "abbr": "BLKKRTD", "points": 6}], is_dst=True)
+    assert rules.dst_points_for_row({"def_tds": 1}, points_allowed=0, yards_allowed=0) == pytest.approx(6.0)
+
+
+def test_uncomputable_dst_stats_always_score_zero(caplog):
+    rules = ScoringRules.from_espn(
+        [{"id": 206, "abbr": "2PRET", "points": 2}, {"id": 209, "abbr": "1PSF", "points": 1}], is_dst=True
+    )
+    assert rules.dst_points_for_row({}, points_allowed=0, yards_allowed=0) == pytest.approx(0.0)
+    assert "2PRET" in caplog.text
+    assert "1PSF" in caplog.text
