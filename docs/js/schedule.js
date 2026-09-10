@@ -5,14 +5,18 @@ function posTag(pos) {
   return `<span class="pos-tag" style="background:${POSITION_COLOR[pos] || "#888"}">${pos}</span>`;
 }
 
-// A player's `this_week` field is always the CURRENT week's number, not the
-// week being displayed here (schedule rows cover every past/future week) -
-// look up that specific week's own projection/actual from p.weekly instead.
-// p.weekly only spans current_week..final_week though, so a played week
-// before that has no entry here - callers showing an `actual: true` lineup
-// (see actualLineupWeek/box-score weeks) should prefer that lineup's own
-// `points` map instead and only fall back to this for projected weeks.
-function pointsForWeek(p, week) {
+// The current week always defers to ESPN's own number (see startsit.js's
+// projValueFor - same rule, same reasoning: ESPN should always control the
+// current week's projection). Every other week uses our own proprietary
+// number instead - p.weekly only spans current_week..final_week, and a
+// played week before that has no entry here at all; callers showing an
+// `actual: true` lineup (see actualLineupWeek/box-score weeks) should
+// prefer that lineup's own `points` map and only fall back to this for
+// projected weeks. A player's `this_week` field is always the CURRENT
+// week's number regardless of which week is being displayed here (schedule
+// rows cover every past/future week), so it can't substitute for this.
+function pointsForWeek(p, week, currentWeek) {
+  if (week === currentWeek) return p.espn_projected_week;
   const w = (p.weekly || []).find((e) => e.week === week);
   if (!w) return null;
   return w.actual ? w.actual.points : w.projected;
@@ -21,9 +25,9 @@ function pointsForWeek(p, week) {
 // Prefers a real lineup's own recorded points (current-week live state or a
 // past week's box-score snapshot) over p.weekly, which doesn't cover weeks
 // before current_week at all.
-function pointsForPlayerInLineup(p, week, lineupWeek) {
+function pointsForPlayerInLineup(p, week, lineupWeek, currentWeek) {
   const recorded = lineupWeek && lineupWeek.points ? lineupWeek.points[p.id] : undefined;
-  return recorded !== undefined ? recorded : pointsForWeek(p, week);
+  return recorded !== undefined ? recorded : pointsForWeek(p, week, currentWeek);
 }
 
 // A past week's real ESPN lineup (see engine/pipeline.py) can name a player
@@ -93,7 +97,7 @@ function scoreOf(m, side, data) {
   if (m.played) return side === "home" ? m.home_score : m.away_score;
   const teamId = side === "home" ? m.home_team_id : m.away_team_id;
   if (m.week === data.meta.current_week) {
-    return actualStarters(teamId, data).reduce((acc, p) => acc + (pointsForWeek(p, m.week) || 0), 0);
+    return actualStarters(teamId, data).reduce((acc, p) => acc + (pointsForWeek(p, m.week, data.meta.current_week) || 0), 0);
   }
   return (data.lineups[String(teamId)]?.weeks[String(m.week)] || {}).total ?? null;
 }
@@ -116,48 +120,45 @@ function symmetricLineupHtml(homeTeamId, awayTeamId, week, data) {
     if (!pid) return "";
     const p = resolvePlayer(pid, data);
     if (!p) return "";
-    const badge = streamed.has(pid) ? ` <span class="pill small stream-badge" title="Free-agent bye-week fill-in, not on your roster">FA</span>` : "";
-    return `${posTag(p.position)} ${escapeHtml(p.name)}${badge}`;
+    const streamBadge = streamed.has(pid) ? ` <span class="pill small stream-badge" title="Free-agent bye-week fill-in, not on your roster">FA</span>` : "";
+    const irBadge = p.lineup_slot === "IR" ? ` <span class="muted small">(IR)</span>` : "";
+    return `${posTag(p.position)} ${escapeHtml(p.name)}${streamBadge}${irBadge}`;
   };
   const scoreCell = (pid, lineupWeek) => {
     const p = pid && resolvePlayer(pid, data);
-    return p ? fmt(pointsForPlayerInLineup(p, week, lineupWeek), 1) : "–";
+    return p ? fmt(pointsForPlayerInLineup(p, week, lineupWeek, data.meta.current_week), 1) : "–";
+  };
+  const lineupRow = (hPid, aPid, middleLabel) => {
+    const rowClass = streamed.has(hPid) || streamed.has(aPid) ? "streamed-row" : "";
+    return `<tr class="${rowClass}">
+      <td class="lineup-player lineup-player-home">${playerCell(hPid)}</td>
+      <td class="lineup-score">${scoreCell(hPid, home)}</td>
+      <td class="lineup-slot muted small">${middleLabel}</td>
+      <td class="lineup-score">${scoreCell(aPid, away)}</td>
+      <td class="lineup-player lineup-player-away">${playerCell(aPid)}</td>
+    </tr>`;
   };
 
-  const rows = keys
-    .map((key) => {
-      const hPid = (home.slots || {})[key];
-      const aPid = (away.slots || {})[key];
-      const rowClass = streamed.has(hPid) || streamed.has(aPid) ? "streamed-row" : "";
-      return `<tr class="${rowClass}">
-        <td class="lineup-player lineup-player-home">${playerCell(hPid)}</td>
-        <td class="lineup-score">${scoreCell(hPid, home)}</td>
-        <td class="lineup-slot muted small">${key.replace(/\d+$/, "")}</td>
-        <td class="lineup-score">${scoreCell(aPid, away)}</td>
-        <td class="lineup-player lineup-player-away">${playerCell(aPid)}</td>
-      </tr>`;
-    })
-    .join("");
+  const starterRows = keys.map((key) => lineupRow((home.slots || {})[key], (away.slots || {})[key], key.replace(/\d+$/, ""))).join("");
 
   // Bench sizes/order between the two teams have no natural row-for-row
-  // pairing the way starting slots do, so these stay two independent lists
-  // rather than forced into the symmetric grid above.
-  const benchList = (ids, lineupWeek) =>
-    (ids || [])
-      .map((id) => resolvePlayer(id, data))
-      .filter(Boolean)
-      .map((p) => `<div>${posTag(p.position)} ${escapeHtml(p.name)}${p.lineup_slot === "IR" ? ` <span class="muted small">(IR)</span>` : ""} <span class="value-readout">${fmt(pointsForPlayerInLineup(p, week, lineupWeek), 1)}</span></div>`)
-      .join("");
+  // pairing the way starting slots do (each side is independently sorted by
+  // its own points) - paired by position in the list purely to share the
+  // same row-per-line layout as the starters above, not because a given row
+  // means anything about the two players relative to each other.
+  const homeBench = home.bench || [];
+  const awayBench = away.bench || [];
+  const benchRowCount = Math.max(homeBench.length, awayBench.length);
+  const benchRows = Array.from({ length: benchRowCount }, (_, i) => lineupRow(homeBench[i], awayBench[i], "")).join("");
 
   return `
     <table class="lineup-symmetric">
       <colgroup><col style="width:36%"><col style="width:9%"><col style="width:10%"><col style="width:9%"><col style="width:36%"></colgroup>
-      <tbody>${rows}</tbody>
+      <tbody>
+        ${starterRows}
+        ${benchRowCount ? `<tr class="week-divider"><td colspan="5">Bench</td></tr>${benchRows}` : ""}
+      </tbody>
     </table>
-    <div class="lineup-bench-cols muted small">
-      <div>${benchList(home.bench, home)}</div>
-      <div>${benchList(away.bench, away)}</div>
-    </div>
   `;
 }
 

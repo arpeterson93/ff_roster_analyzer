@@ -167,6 +167,12 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
    tab so a widescreen viewport doesn't have to scroll to see it. */
 #tab-startsit.tabpanel { max-width: 1400px; }
 
+/* Rankings' table (up to 15 columns with Watch/NMD once a team's selected)
+   needs just over the site-wide 1100px cap to avoid horizontal scroll -
+   same reasoning/pattern as Start/Sit above, with headroom for whatever a
+   row's longest player name/rank happens to be. */
+#tab-rankings.tabpanel { max-width: 1300px; }
+
 /* Rest-of-season opponent grid: full-cell color fill (via .heat-cell) with
    the opponent centered above its rank, and the player-name column pinned to
    one line (overriding the general Start/Sit white-space:normal above, which
@@ -325,9 +331,6 @@ details[open] summary { margin-bottom: 8px; }
 .lineup-player-away { text-align: left; }
 .lineup-score { text-align: center; font-variant-numeric: tabular-nums; }
 .lineup-slot { text-align: center; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
-.lineup-bench-cols { display: flex; justify-content: space-between; gap: 16px; margin-top: 8px; }
-.lineup-bench-cols > div { flex: 1; }
-.lineup-bench-cols > div:last-child { text-align: right; }
 
 /* :not([hidden]) matters here - a bare .modal-overlay{display:flex} rule
    ties in specificity with the UA's [hidden]{display:none} and, as the
