@@ -10,6 +10,7 @@
   --green-600: #2f9e5c;
   --amber-500: #d69b1f;
   --red-600: #c0392b;
+  --blue-500: #3170b8;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
   --radius: 10px;
 }
@@ -24,6 +25,7 @@
     --ink-500: #93938d;
     --accent: #4fae7d;
     --accent-ink: #0d130f;
+    --blue-500: #6fb3ec;
     --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
   }
 }
@@ -37,6 +39,7 @@
   --ink-500: #93938d;
   --accent: #4fae7d;
   --accent-ink: #0d130f;
+  --blue-500: #6fb3ec;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }
 
@@ -48,6 +51,16 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   font-size: 14px;
   line-height: 1.4;
+}
+
+/* header + warning banner + nav.tabs stack as one unit and stick together as
+   a single sticky element (rather than each independently sticky, which
+   would overlap - see app.js's --sticky-top, which mirrors this block's
+   actual rendered height for anything that needs to stick below it). */
+.app-top {
+  position: sticky;
+  top: 0;
+  z-index: 100;
 }
 
 header.app-header {
@@ -129,6 +142,11 @@ nav.tabs button.active {
 
 .card h2 { font-size: 14px; margin: 0 0 10px; }
 .card h3 { font-size: 12px; color: var(--ink-500); margin: 12px 0 6px; text-transform: uppercase; letter-spacing: 0.04em; }
+
+/* Some cards (Team Strength's viz/depth/pickups/targets, Start/Sit's lineup)
+   read better narrower than the wide grid views next to them - capped
+   independently rather than shrinking the whole tabpanel. */
+.card-compact { max-width: 720px; }
 
 .table-wrap { overflow-x: auto; }
 
@@ -254,8 +272,11 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 .watch-star { cursor: pointer; font-size: 15px; color: var(--ink-500); }
 .watch-star.watched { color: #d6a000; }
 
-.your-team-row { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.your-team-row:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+/* Blue rather than accent green - accent is already the hover/selected/link
+   color everywhere, so a green own-team wash blended into those. Blue reads
+   as a distinct "this is you" signal in both light and dark (see --blue-500). */
+.your-team-row { background: color-mix(in srgb, var(--blue-500) 16%, transparent); }
+.your-team-row:hover { background: color-mix(in srgb, var(--blue-500) 24%, transparent); }
 
 .selected-row { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 
@@ -343,3 +364,38 @@ details[open] summary { margin-bottom: 8px; }
 @media (pointer: coarse) {
   nav.tabs button, .player-chip, th, .modal-close { min-height: 30px; }
 }
+
+/* Rankings' filter row and table header both stick below the frozen
+   .app-top bar. --sticky-top (app.js) tracks .app-top's real height;
+   --rankings-filters-h (rankings.js) tracks the filter row's, since both can
+   change (warning banner, filters wrapping on narrow screens). */
+.rankings-filters {
+  position: sticky;
+  top: var(--sticky-top, 0px);
+  z-index: 41;
+  background: var(--card);
+  padding: 6px 0;
+  margin: 0 0 12px;
+}
+#rankings-table-wrap thead th {
+  position: sticky;
+  top: calc(var(--sticky-top, 0px) + var(--rankings-filters-h, 0px));
+  background: var(--card);
+  z-index: 39;
+}
+
+/* Compact stat summary at the top of the player modal - a grid of tiles
+   instead of a narrow label/value column, so it uses the modal's full width. */
+.player-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+.stat-tile {
+  background: color-mix(in srgb, var(--ink-500) 8%, transparent);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+.stat-tile .stat-label { font-size: 11px; color: var(--ink-500); text-transform: uppercase; letter-spacing: 0.03em; }
+.stat-tile .stat-value { font-size: 17px; font-weight: 600; margin-top: 2px; }

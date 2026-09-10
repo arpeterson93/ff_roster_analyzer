@@ -173,7 +173,7 @@ export function renderStrength(container, data, slug) {
   const team = data.teamsById.get(Number(yourTeamId)) || data.teams[0];
 
   container.innerHTML = `
-    <div class="card">
+    <div class="card card-compact">
       <div class="select-row"><label>Your team:</label> ${teamSelect(data, slug, team.team_id)}</div>
       <h2>Starting Lineup vs. League Avg</h2>
       ${positionBars(team.slot_strength, computeTotalStrength(data, team))}

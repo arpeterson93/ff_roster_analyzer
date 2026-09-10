@@ -169,7 +169,7 @@ export function renderRankings(container, data, slug) {
   const nflTeams = ["ALL", ...new Set(data.players.map((p) => p.nfl_team).filter(Boolean))].sort();
   container.innerHTML = `
     <div class="card">
-      <div class="select-row">
+      <div class="select-row rankings-filters" id="rankings-filters">
         <select id="rankings-pos-filter">${positions.map((p) => `<option value="${p}">${p}</option>`).join("")}</select>
         <select id="rankings-team-filter">${nflTeams.map((t) => `<option value="${t}">${t === "ALL" ? "All NFL teams" : t}</option>`).join("")}</select>
         <label><input type="checkbox" id="rankings-fa-only" /> Free agents only</label>
@@ -178,6 +178,14 @@ export function renderRankings(container, data, slug) {
       <div class="table-wrap" id="rankings-table-wrap"></div>
     </div>
   `;
+
+  // Keeps the table header's own sticky offset (--rankings-filters-h, see
+  // styles.css) in sync with this row's real height - it wraps onto two
+  // lines on narrow screens, so a fixed guess would leave a gap or overlap.
+  const filtersEl = container.querySelector("#rankings-filters");
+  const setFiltersHeightVar = () => document.documentElement.style.setProperty("--rankings-filters-h", `${filtersEl.offsetHeight}px`);
+  setFiltersHeightVar();
+  new ResizeObserver(setFiltersHeightVar).observe(filtersEl);
 
   const filters = { position: "ALL", faOnly: false, team: "ALL", watchedOnly: false };
   let watched = new Set();

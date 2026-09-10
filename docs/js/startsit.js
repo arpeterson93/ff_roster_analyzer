@@ -193,7 +193,7 @@ export function renderStartSit(container, data, slug) {
   function draw() {
     const lineupWeek = (lineupTeam.weeks || {})[String(selectedWeek)] || { total: 0, slots: {}, bench: [] };
     container.innerHTML = `
-      <div class="card">
+      <div class="card card-compact">
         <div class="select-row">
           <label>Team:</label><select id="startsit-team-select">${teamOptions}</select>
           <label>Week:</label><select id="startsit-week-select">${weekOptions.map((w) => `<option value="${w}" ${w === selectedWeek ? "selected" : ""}>${w}${w === data.meta.current_week ? " (cur)" : ""}</option>`).join("")}</select>
@@ -202,10 +202,10 @@ export function renderStartSit(container, data, slug) {
         ${selectedWeek === data.meta.current_week
           ? `<h3>Changes vs. your ESPN lineup</h3><div class="table-wrap">${changesTable(lineupTeam.changes_vs_espn, data.playersById)}</div>`
           : ""}
-        <details>
-          <summary class="small">Rest-of-season opponent schedule</summary>
-          <div class="table-wrap">${scheduleGrid(roster, data.meta.current_week, data.meta.final_week)}</div>
-        </details>
+      </div>
+      <div class="card">
+        <h2>Rest-of-season opponent schedule</h2>
+        <div class="table-wrap">${scheduleGrid(roster, data.meta.current_week, data.meta.final_week)}</div>
       </div>
     `;
     container.querySelector("#startsit-team-select").addEventListener("change", (e) => {

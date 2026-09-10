@@ -70,9 +70,21 @@ async function selectLeague(slug, leagues) {
   renderActiveView();
 }
 
+// Keeps --sticky-top in sync with .app-top's real rendered height, so
+// anything that needs to stick below the frozen header/banner/nav (e.g.
+// rankings.js's filter row + table header) doesn't have to guess it - the
+// banner toggling and the header wrapping on narrow screens both change it.
+function watchStickyTopHeight() {
+  const top = document.getElementById("app-top");
+  const setVar = () => document.documentElement.style.setProperty("--sticky-top", `${top.offsetHeight}px`);
+  setVar();
+  new ResizeObserver(setVar).observe(top);
+}
+
 async function init() {
   applyTheme(getTheme());
   wireTabs();
+  watchStickyTopHeight();
   const leagues = await loadLeagues();
   if (!leagues.length) {
     document.body.innerHTML = "<p style='padding:20px'>No leagues configured yet.</p>";

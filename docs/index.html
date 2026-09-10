@@ -7,26 +7,28 @@
   <link rel="stylesheet" href="css/styles.css" />
 </head>
 <body>
-  <header class="app-header">
-    <h1 id="header-league-name">FF Roster Analyzer</h1>
-    <select id="league-select"></select>
-    <div class="header-meta">
-      <div id="header-week"></div>
-      <div id="header-generated"></div>
-    </div>
-  </header>
-  <div id="warning-banner" class="warning-banner" hidden></div>
+  <div id="app-top" class="app-top">
+    <header class="app-header">
+      <h1 id="header-league-name">FF Roster Analyzer</h1>
+      <select id="league-select"></select>
+      <div class="header-meta">
+        <div id="header-week"></div>
+        <div id="header-generated"></div>
+      </div>
+    </header>
+    <div id="warning-banner" class="warning-banner" hidden></div>
 
-  <nav class="tabs">
-    <button data-tab="strength" class="active">Team Strength</button>
-    <button data-tab="startsit">Start/Sit</button>
-    <button data-tab="rankings">Rankings</button>
-    <button data-tab="trade">Trade Calculator</button>
-    <button data-tab="matchups">Matchups</button>
-    <button data-tab="standings">Standings</button>
-    <button data-tab="schedule">Schedule</button>
-    <button data-tab="settings">Settings</button>
-  </nav>
+    <nav class="tabs">
+      <button data-tab="strength" class="active">Team Strength</button>
+      <button data-tab="startsit">Start/Sit</button>
+      <button data-tab="rankings">Rankings</button>
+      <button data-tab="trade">Trade Calculator</button>
+      <button data-tab="matchups">Matchups</button>
+      <button data-tab="standings">Standings</button>
+      <button data-tab="schedule">Schedule</button>
+      <button data-tab="settings">Settings</button>
+    </nav>
+  </div>
 
   <section class="tabpanel active" id="tab-strength"></section>
   <section class="tabpanel" id="tab-startsit"></section>
