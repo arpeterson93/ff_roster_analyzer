@@ -1,9 +1,10 @@
 """Scrapes ESPN's public NFL injuries page (espn.com/nfl/injuries - NOT the
 fantasy API) for each player's ESPN-estimated return date. Used by the
-pipeline to know how many *future* weeks a fantasy-rostered IR player should
-stay projected at zero before engine/valuation.py's rebalancing step spreads
-their ROS total across the weeks they're actually expected to play (see
-project_player's ir_return_week param).
+pipeline to know how many *future* weeks an injured player - any player with
+a listed return estimate, regardless of fantasy roster/IR-slot status -
+should stay projected at zero before engine/valuation.py's rebalancing step
+spreads their ROS total across the weeks they're actually expected to play
+(see project_player's ir_return_week param).
 
 ESPN's fantasy player id and the numeric id in this page's player URLs
 (espn.com/nfl/player/_/id/<id>/...) are the same underlying athlete id -

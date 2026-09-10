@@ -88,9 +88,35 @@ in a league's YAML to skip it entirely and just use the YAML values.
    o-league    | pa_l5_weight           | 0.5
    o-league    | division_winners_first | true
    ```
-   Recognized keys are listed in `ingest/settings_sheet.py`'s
+   Recognized flat keys are listed in `ingest/settings_sheet.py`'s
    `_SETTINGS_SCHEMA`. An unrecognized key is ignored with a warning, not a
    pipeline failure.
+
+   Playoff-seeding tiebreakers are a second, per-seed group of keys instead
+   of one flat schema entry - `division_tiebreak_<1-4>` (ranks each
+   division's own members to pick its #1 team, then ranks the division
+   winners against each other for the top seeds) and, per playoff seed n,
+   `seed_<n>_division_priority` (fill this seed from the next-best
+   division winner) plus `seed_<n>_tiebreak_<1-4>` (that seed's own
+   wildcard tiebreak chain, used when it isn't filled from the
+   division-winner queue). Each criterion is one of `wins`, `points_for`,
+   `points_against`, `head_to_head`. e.g., to give divisions 1-3 the top
+   3 seeds by Wins→PF→PA and make seed 6 go to the best remaining team by
+   Points For alone (a real O-League rule):
+   ```
+   league_slug | key                       | value
+   o-league    | division_tiebreak_1       | wins
+   o-league    | division_tiebreak_2       | points_for
+   o-league    | division_tiebreak_3       | points_against
+   o-league    | seed_1_division_priority  | true
+   o-league    | seed_2_division_priority  | true
+   o-league    | seed_3_division_priority  | true
+   o-league    | seed_6_tiebreak_1         | points_for
+   ```
+   This is all editable from the site's Settings tab (see "Playoff seeding"
+   there) rather than the sheet directly. Unconfigured seeds/leagues fall
+   back to today's behavior - `division_winners_first` for the top seeds,
+   Wins→Points For for the rest.
 2. Share it as "Anyone with the link can view" (the pipeline reads it
    unauthenticated via the public CSV export endpoint).
 3. Put the sheet's id (the long string in its URL between `/d/` and `/edit`)
@@ -138,11 +164,14 @@ else on the site) is what a watch list is keyed on - pick the same team on
 each device/browser to see the same list. Without steps 3-4, the ★ column
 still works, just local to that one browser.
 
-**Not yet built:** custom tiebreaker chains (head-to-head, points against,
-etc.) beyond ESPN's own `playoff_seed_tie_rule` - `engine/standings.py`
-currently only supports the single tiebreak ESPN reports
-(`TOTAL_POINTS_SCORED` for both leagues, verified). `division_winners_first`
-is the only seeding behavior exposed as a setting today.
+**Real current seed vs. simulated odds:** the Standings page's Seed column
+is `engine.standings.compute_current_seeds`' deterministic read of the real
+current standings under the settings-sheet tiebreaker config above; the Seed
+dist./Playoff%/Bye% columns are `simulate_playoffs`' 10,000-iteration Monte
+Carlo forecast of the *rest of the season*, which still resolves in-sim ties
+with a fixed Wins→PF rule (not the configurable chain) since re-deriving
+head-to-head/PA results inside every simulated season isn't worth the added
+cost for a probabilistic forecast.
 
 ## Local development
 

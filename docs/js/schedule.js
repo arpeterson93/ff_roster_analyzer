@@ -8,10 +8,34 @@ function posTag(pos) {
 // A player's `this_week` field is always the CURRENT week's number, not the
 // week being displayed here (schedule rows cover every past/future week) -
 // look up that specific week's own projection/actual from p.weekly instead.
+// p.weekly only spans current_week..final_week though, so a played week
+// before that has no entry here - callers showing an `actual: true` lineup
+// (see actualLineupWeek/box-score weeks) should prefer that lineup's own
+// `points` map instead and only fall back to this for projected weeks.
 function pointsForWeek(p, week) {
   const w = (p.weekly || []).find((e) => e.week === week);
   if (!w) return null;
   return w.actual ? w.actual.points : w.projected;
+}
+
+// Prefers a real lineup's own recorded points (current-week live state or a
+// past week's box-score snapshot) over p.weekly, which doesn't cover weeks
+// before current_week at all.
+function pointsForPlayerInLineup(p, week, lineupWeek) {
+  const recorded = lineupWeek && lineupWeek.points ? lineupWeek.points[p.id] : undefined;
+  return recorded !== undefined ? recorded : pointsForWeek(p, week);
+}
+
+// A past week's real ESPN lineup (see engine/pipeline.py) can name a player
+// who's since been dropped from every roster and isn't in the current
+// top-N free-agent pull, so they're missing from data.playersById (the
+// site's normal "current universe" of rostered + top free agents). They're
+// still resolvable - the pipeline stashes a minimal name/position/team stub
+// for exactly this case in lineups._unrostered_players - just without the
+// projections/ownership/etc. fields a current player has, which is fine
+// here since a past week's lineup only ever needs name/position/points.
+function resolvePlayer(pid, data) {
+  return data.playersById.get(pid) || (data.lineups._unrostered_players || {})[pid];
 }
 
 // ESPN's raw lineupSlot strings -> the same base labels engine/lineup.py's
@@ -31,10 +55,13 @@ function actualStarters(teamId, data) {
 
 // The real, ESPN-set lineup for the CURRENT week - not our optimal computed
 // one - since that's the lineup that's actually live for a week already
-// underway. Past/future weeks have no such "actual" lineup to pull (ESPN
-// doesn't retain history here and obviously can't know a future week's
-// lineup), so those keep using the computed optimal lineup below. Shaped
-// like a computed week's {slots, bench} so both paths render identically.
+// underway, built from the live current-roster lineup_slot (data.players).
+// Already-played weeks get their own real lineup too, but from the pipeline's
+// box-score snapshot instead (data.lineups[...].weeks[week], flagged
+// `actual: true`) since ESPN's live roster state has moved on since then.
+// Future weeks have no "actual" lineup to pull (ESPN can't know it yet), so
+// those keep using the computed optimal lineup. Shaped like a computed
+// week's {slots, bench} so all three paths render identically.
 function actualLineupWeek(teamId, data) {
   const roster = data.players.filter((p) => p.fantasy_team_id === teamId);
   const byBase = new Map();
@@ -87,14 +114,14 @@ function symmetricLineupHtml(homeTeamId, awayTeamId, week, data) {
 
   const playerCell = (pid) => {
     if (!pid) return "";
-    const p = data.playersById.get(pid);
+    const p = resolvePlayer(pid, data);
     if (!p) return "";
     const badge = streamed.has(pid) ? ` <span class="pill small stream-badge" title="Free-agent bye-week fill-in, not on your roster">FA</span>` : "";
     return `${posTag(p.position)} ${escapeHtml(p.name)}${badge}`;
   };
-  const scoreCell = (pid) => {
-    const p = pid && data.playersById.get(pid);
-    return p ? fmt(pointsForWeek(p, week), 1) : "–";
+  const scoreCell = (pid, lineupWeek) => {
+    const p = pid && resolvePlayer(pid, data);
+    return p ? fmt(pointsForPlayerInLineup(p, week, lineupWeek), 1) : "–";
   };
 
   const rows = keys
@@ -104,9 +131,9 @@ function symmetricLineupHtml(homeTeamId, awayTeamId, week, data) {
       const rowClass = streamed.has(hPid) || streamed.has(aPid) ? "streamed-row" : "";
       return `<tr class="${rowClass}">
         <td class="lineup-player lineup-player-home">${playerCell(hPid)}</td>
-        <td class="lineup-score">${scoreCell(hPid)}</td>
+        <td class="lineup-score">${scoreCell(hPid, home)}</td>
         <td class="lineup-slot muted small">${key.replace(/\d+$/, "")}</td>
-        <td class="lineup-score">${scoreCell(aPid)}</td>
+        <td class="lineup-score">${scoreCell(aPid, away)}</td>
         <td class="lineup-player lineup-player-away">${playerCell(aPid)}</td>
       </tr>`;
     })
@@ -115,11 +142,11 @@ function symmetricLineupHtml(homeTeamId, awayTeamId, week, data) {
   // Bench sizes/order between the two teams have no natural row-for-row
   // pairing the way starting slots do, so these stay two independent lists
   // rather than forced into the symmetric grid above.
-  const benchList = (ids) =>
+  const benchList = (ids, lineupWeek) =>
     (ids || [])
-      .map((id) => data.playersById.get(id))
+      .map((id) => resolvePlayer(id, data))
       .filter(Boolean)
-      .map((p) => `<div>${posTag(p.position)} ${escapeHtml(p.name)}${p.lineup_slot === "IR" ? ` <span class="muted small">(IR)</span>` : ""} <span class="value-readout">${fmt(pointsForWeek(p, week), 1)}</span></div>`)
+      .map((p) => `<div>${posTag(p.position)} ${escapeHtml(p.name)}${p.lineup_slot === "IR" ? ` <span class="muted small">(IR)</span>` : ""} <span class="value-readout">${fmt(pointsForPlayerInLineup(p, week, lineupWeek), 1)}</span></div>`)
       .join("");
 
   return `
@@ -128,8 +155,8 @@ function symmetricLineupHtml(homeTeamId, awayTeamId, week, data) {
       <tbody>${rows}</tbody>
     </table>
     <div class="lineup-bench-cols muted small">
-      <div>${benchList(home.bench)}</div>
-      <div>${benchList(away.bench)}</div>
+      <div>${benchList(home.bench, home)}</div>
+      <div>${benchList(away.bench, away)}</div>
     </div>
   `;
 }
@@ -148,13 +175,18 @@ function matchupRow(m, data, expandedKey, yourTeamId, avg, spread) {
     return `<span class="heat-cell" style="background:${colorForRatio(ratio)}; display:inline-block; width:100%;">${fmt(v, 1)}</span>`;
   };
 
+  // Only populated for the current week's real matchups (see engine/
+  // pipeline.py's live win-probability block) - accurate as of the last site
+  // build, not updated live minute-to-minute during games.
+  const winPct = (pct) => (pct === null || pct === undefined ? "" : `<div class="muted small">${fmt(pct * 100, 0)}% to win</div>`);
+
   const expanded = expandedKey === key;
   return `
     <tr class="clickable-row schedule-row ${isYours ? "your-team-row" : ""}" data-key="${key}">
-      <td class="schedule-cell">${escapeHtml(teamLabel(home) || m.home_team_id)}</td>
+      <td class="schedule-cell">${escapeHtml(teamLabel(home) || m.home_team_id)}${winPct(m.home_win_pct)}</td>
       <td class="schedule-cell small">${scoreCell(homeScore)}</td>
       <td class="schedule-cell small">${scoreCell(awayScore)}</td>
-      <td class="schedule-cell">${escapeHtml(teamLabel(away) || m.away_team_id)}</td>
+      <td class="schedule-cell">${escapeHtml(teamLabel(away) || m.away_team_id)}${winPct(m.away_win_pct)}</td>
     </tr>
     ${expanded
       ? `<tr><td colspan="4">
@@ -202,7 +234,7 @@ export function renderSchedule(container, data, slug) {
     container.innerHTML = `
       <div class="card">
         <h2>Schedule</h2>
-        <p class="muted small">Click a matchup to see each team's lineup that week - your actual ESPN-set starters for the current week, optimal projected lineups otherwise.</p>
+        <p class="muted small">Click a matchup to see each team's lineup that week - the actual ESPN-set starters for played weeks, optimal projected lineups for the current/future weeks.</p>
         <div class="table-wrap">
           <table class="schedule-table">
             <colgroup><col style="width:32%"><col style="width:18%"><col style="width:18%"><col style="width:32%"></colgroup>

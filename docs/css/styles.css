@@ -74,12 +74,6 @@ header.app-header {
   background: var(--card);
 }
 
-header.app-header h1 {
-  font-size: 16px;
-  margin: 0;
-  white-space: nowrap;
-}
-
 .header-meta {
   color: var(--ink-500);
   font-size: 12px;
@@ -195,6 +189,13 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
   .settings-label { width: 100%; }
   .settings-help { margin: -2px 0 10px 0; }
 }
+
+/* Playoff seeding rows: a "Next division winner" checkbox plus a 4-deep
+   tiebreak dropdown chain per seed - group the chain's selects tightly so
+   they read as one ranked sequence, and give the checkbox label breathing
+   room before it. */
+.seeding-chain { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.seeding-checkbox { display: inline-flex; align-items: center; gap: 4px; margin-right: 10px; white-space: nowrap; }
 
 /* Start/Sit rows: ".desktop-col" (Opp/ESPN-proj columns) and ".mobile-line"
    (the same info, stacked inside the Player/Score cells instead) are two
@@ -367,8 +368,16 @@ details[open] summary { margin-bottom: 8px; }
 
 @media (max-width: 700px) {
   .tabpanel { padding: 10px; }
-  header.app-header { flex-direction: column; align-items: flex-start; }
-  .header-meta { margin-left: 0; text-align: left; }
+  /* The league select is the only item left in normal flow on mobile (it
+     wraps to give the OPTIONS room, e.g. a long league name) - Week X /
+     Updated tucks into the header's own top-right corner via absolute
+     positioning instead of stacking below it, so it doesn't eat vertical
+     space that's precious in the sticky header (--sticky-top eats into the
+     visible page on a short mobile screen). padding-right on the header
+     keeps a long select value from ever running under that corner text. */
+  header.app-header { flex-direction: column; align-items: flex-start; position: relative; padding-right: 110px; }
+  header.app-header select#league-select { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  .header-meta { position: absolute; top: 12px; right: 16px; margin-left: 0; text-align: right; }
   th, td { padding: 5px 6px; font-size: 12px; }
   select, input, button { font-size: 16px; } /* prevents iOS auto-zoom on focus */
   nav.tabs button { padding: 8px 10px; font-size: 12px; }
@@ -394,10 +403,9 @@ details[open] summary { margin-bottom: 8px; }
   nav.tabs button, .player-chip, th, .modal-close { min-height: 30px; }
 }
 
-/* Rankings' filter row and table header both stick below the frozen
-   .app-top bar. --sticky-top (app.js) tracks .app-top's real height;
-   --rankings-filters-h (rankings.js) tracks the filter row's, since both can
-   change (warning banner, filters wrapping on narrow screens). */
+/* The filter row sticks below the frozen .app-top bar. --sticky-top
+   (app.js) tracks .app-top's real height, since it can change (warning
+   banner, filters wrapping on narrow screens). */
 .rankings-filters {
   position: sticky;
   top: var(--sticky-top, 0px);
@@ -406,18 +414,35 @@ details[open] summary { margin-bottom: 8px; }
   padding: 6px 0;
   margin: 0 0 12px;
 }
-/* position:sticky on a <th> is unreliable under border-collapse:collapse
-   (the site-wide table default) in every major engine - separate borders
-   (with 0 spacing, so it still looks identical to collapsed ones, since
-   only border-bottom is ever set) is what makes the sticky header actually
-   stick instead of rendering wherever the table's internal layout pass
-   happens to leave it. */
+/* The table header can NOT use the same page-level sticky trick: any
+   ancestor with overflow-x set (needed here so a 14+ column table can
+   scroll horizontally on a narrow screen) forces its overflow-y to compute
+   as auto too (CSS Overflow Module's visible/non-visible pairing rule) -
+   that silently turns #rankings-table-wrap into the sticky th's containing
+   block instead of the viewport, and since #rankings-table-wrap's own
+   scrollTop never moves (the page scrolls, not the div), the th just sits
+   at its static position and never visibly sticks. Confirmed empirically
+   (Playwright: th tracked exactly 144px below the wrap's own top through
+   1000px of page scroll - a page-relative offset of 0, not a bug in the
+   `top` calc's arithmetic).
+   Fix: stop fighting that pairing and use it instead - give the wrap its
+   own bounded height and let IT scroll (both axes), so `top: 0` sticks the
+   header to the top of its own real scrollport. 40px below accounts for
+   .card's 14px top+bottom padding plus .rankings-filters' 12px bottom
+   margin (not included in --rankings-filters-h, which is only its
+   offsetHeight). border-collapse:separate is still required - position:
+   sticky on a <th> is unreliable under the site-wide collapsed-border
+   default in every major engine. */
 #rankings-table-wrap table { border-collapse: separate; border-spacing: 0; }
+#rankings-table-wrap {
+  overflow: auto;
+  max-height: calc(100vh - var(--sticky-top, 0px) - var(--rankings-filters-h, 0px) - 40px);
+}
 #rankings-table-wrap thead th {
   position: sticky;
-  top: calc(var(--sticky-top, 0px) + var(--rankings-filters-h, 0px));
+  top: 0;
   background: var(--card);
-  z-index: 39;
+  z-index: 2;
 }
 
 /* Compact stat summary at the top of the player modal - a grid of tiles

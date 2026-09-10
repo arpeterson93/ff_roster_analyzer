@@ -28,7 +28,16 @@ from engine.matchups import (
 )
 from engine.points_against import dst_points_against_detail, points_against_detail
 from engine.scoring import ScoringRules
-from engine.standings import RemainingMatchup, TeamState, simulate_playoffs
+from engine.standings import (
+    PlayedMatchup,
+    RemainingMatchup,
+    SeedConfig,
+    SeedTeamState,
+    TeamState,
+    compute_current_seeds,
+    matchup_win_probability,
+    simulate_playoffs,
+)
 from engine.team_strength import (
     PlayerCtx,
     depth_values_by_week,
@@ -46,14 +55,22 @@ from ingest import ids as ids_mod
 from ingest import nfl_data as nd
 from ingest import rankings as rk
 from ingest.config import load_all_league_configs
+from ingest.base import Matchup
 from ingest.espn_client import EspnClient
 from ingest.espn_injuries import fetch_ir_return_weeks
-from ingest.settings_sheet import SettingsSheetError, apply_remote_settings, fetch_remote_settings
+from ingest.settings_sheet import SettingsSheetError, apply_remote_settings, fetch_remote_settings, parse_seeding_config
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 _IR_SLOTS = {"IR"}
+
+# ESPN's raw box-score lineupSlot strings -> the same base labels
+# engine/lineup.py's display_label uses for computed-lineup slot keys, so a
+# real past-week ESPN slot and a computed-optimal slot instance line up under
+# one label space in the frontend (mirrors docs/js/schedule.js's slotBase).
+_PAST_LINEUP_SLOT_BASE = {"D/ST": "DST", "RB/WR/TE": "FLEX", "RB/WR": "FLEX", "WR/TE": "FLEX", "TQB": "QB"}
+_PAST_LINEUP_BENCH_SLOTS = {"BE", "IR", "", None}
 
 # Raw actual stat lines for the player-detail modal's game log (position-aware
 # columns are a frontend concern - this just exposes everything relevant).
@@ -457,11 +474,11 @@ def run_league(cfg: dict) -> dict:
         weekly_row = weekly_lookup.get(res.id)
         ros_pos_rank = ros_row["ros_pos_rank"] if ros_row else None
         week_pos_rank = weekly_row["week_pos_rank"] if weekly_row else None
-        # Only for a player actually on a fantasy roster's IR slot - the NFL
-        # injury report's own Out/Doubtful/Questionable guys shouldn't have
-        # their whole ROS projection reshaped off a single scraped estimate,
-        # only someone whose owner has actually committed them to IR.
-        ir_return_week = ir_return_weeks_by_espn_id.get(p.espn_id) if p.lineup_slot in _IR_SLOTS else None
+        # Applies to any player with an espn.com/nfl/injuries return-date
+        # estimate, not just those sitting in a fantasy roster's IR slot -
+        # the injury is real regardless of whether a fantasy owner has
+        # actually moved them to IR (or rosters them at all).
+        ir_return_week = ir_return_weeks_by_espn_id.get(p.espn_id)
 
         proj = project_player(
             position=p.position, nfl_team=p.nfl_team, ros_pos_rank=ros_pos_rank,
@@ -634,6 +651,19 @@ def run_league(cfg: dict) -> dict:
     # --- lineups (every remaining week, so Start/Sit can show future weeks) ---
     all_week_lineups: dict[tuple[int, int], tuple[float, dict[str, str]]] = {}
     lineups_out: dict[str, dict] = {}
+    past_weeks = list(range(1, current_week))
+    past_lineups = client.get_past_lineups(past_weeks) if past_weeks else {}
+    espn_started_by_team: dict[int, set[str]] = {}
+    # A past week's box score can name a player who's since been dropped from
+    # every roster and fallen out of the current top-N free-agent pull (see
+    # get_free_agents' fa_size) - they're real and resolvable (box_scores
+    # gives their name/position/team same as anyone else), just missing from
+    # players_out's "current universe" of rostered + top free agents. Keyed
+    # separately here (not appended to players_out) so this doesn't leak a
+    # mostly-blank row into Rankings/Team Strength/Trade Calculator, which
+    # all iterate players_out wholesale - only Schedule's past-week view,
+    # which resolves a specific known id, ever looks here.
+    unrostered_stub_players: dict[str, dict] = {}
     for t in espn_teams:
         roster_ids = team_rosters[t.team_id]
         weeks_out = {}
@@ -663,16 +693,17 @@ def run_league(cfg: dict) -> dict:
         # - ESPN's actual lineup submission is a live, current-state snapshot,
         # not something set for future weeks. Only true bench<->start swaps
         # count: which specific starting slot a player occupies (RB vs the
-        # flex slot) is not a "change" by itself - the Hungarian solver has
-        # no preference between equally-eligible slots, so the same two
-        # starters can land in either slot from one run to the next with no
-        # real difference. Pair each newly-started player with a newly-benched
+        # flex slot) is not a "change" by itself - engine.lineup's tie-break
+        # picks a natural-looking slot among equally-valuable options, but
+        # it's still just a display preference, not a real lineup difference.
+        # Pair each newly-started player with a newly-benched
         # player of the SAME position where possible, so a swap always tells a
         # coherent single-position story; only fall back across positions if
         # there's no same-position counterpart.
         cur_total, cur_assignment = all_week_lineups[(t.team_id, current_week)]
         our_started = set(cur_assignment.values())
         espn_started = {pid for pid in roster_ids if espn_lineup_slot.get(pid, "BE") not in ("BE", "IR")}
+        espn_started_by_team[t.team_id] = espn_started
         added = sorted(our_started - espn_started, key=lambda pid: players_by_id[pid]["this_week"], reverse=True)
         removed = list(espn_started - our_started)
 
@@ -692,7 +723,48 @@ def run_league(cfg: dict) -> dict:
                 }
             )
 
+        # Already-played weeks get ESPN's own real, submitted lineup (via
+        # box_scores) instead of our computed-optimal one, so the Schedule
+        # page's per-week detail reflects what actually happened rather than
+        # what would have been best in hindsight.
+        for w in past_weeks:
+            entries = past_lineups.get((t.team_id, w))
+            if not entries:
+                continue
+            by_base: dict[str, list[str]] = {}
+            bench_ids: list[str] = []
+            points_by_pid: dict[str, float] = {}
+            total = 0.0
+            for e in entries:
+                res = id_map.resolve(espn_id=e.espn_id, name=e.name, pos=e.position, team=e.nfl_team)
+                if res.id not in players_by_id:
+                    unrostered_stub_players[res.id] = {
+                        "id": res.id, "name": e.name, "position": e.position, "nfl_team": e.nfl_team,
+                    }
+                points_by_pid[res.id] = e.points
+                if e.lineup_slot in _PAST_LINEUP_BENCH_SLOTS:
+                    bench_ids.append(res.id)
+                    continue
+                base = _PAST_LINEUP_SLOT_BASE.get(e.lineup_slot, e.lineup_slot)
+                by_base.setdefault(base, []).append(res.id)
+                total += e.points
+            slots_assignment = {}
+            for base, pids in by_base.items():
+                if len(pids) == 1:
+                    slots_assignment[base] = pids[0]
+                else:
+                    for i, pid in enumerate(pids, start=1):
+                        slots_assignment[f"{base}{i}"] = pid
+            weeks_out[str(w)] = {
+                "total": total, "slots": slots_assignment, "bench": bench_ids,
+                "streamed": [], "actual": True, "points": points_by_pid,
+            }
+
         lineups_out[str(t.team_id)] = {"weeks": weeks_out, "changes_vs_espn": changes}
+
+    # Not a team - see unrostered_stub_players above. Every real key above is
+    # a str(team_id), so this can't collide with one.
+    lineups_out["_unrostered_players"] = unrostered_stub_players
 
     # --- matchups.json (points-allowed index table) ---
     matchups_out = {
@@ -714,13 +786,46 @@ def run_league(cfg: dict) -> dict:
         RemainingMatchup(week=m.week, home_team_id=m.home_team_id, away_team_id=m.away_team_id)
         for m in espn_matchups if not m.played and m.week <= reg_season_count
     ]
-    schedule_out = [
-        {
-            "week": m.week, "home_team_id": m.home_team_id, "away_team_id": m.away_team_id,
-            "home_score": m.home_score, "away_score": m.away_score, "played": m.played,
-        }
-        for m in espn_matchups
-    ]
+    # --- live win probability (current week's real matchups only) ---
+    # Each starter's (mean, sd) collapses to (actual points, 0) once their
+    # game is done (per ESPN's own game_played heuristic - no live polling
+    # needed, this just reads whatever's true as of this build), otherwise
+    # stays at their full projected week + sd. Summed per team into one
+    # Normal(mean, sd), then engine.standings.matchup_win_probability turns
+    # the two teams' distributions into a single win% for the matchup -
+    # accurate as of the last site build, not truly real-time in-game.
+    live_status_by_espn_id = client.get_live_week_player_status(current_week)
+    team_live_mean_sd: dict[int, tuple[float, float]] = {}
+    for team_id, starters in espn_started_by_team.items():
+        mean_total = 0.0
+        var_total = 0.0
+        for pid in starters:
+            p = players_by_id[pid]
+            wp = next((w for w in p["weekly"] if w["week"] == current_week), None)
+            mean, sd = p["this_week"] or 0.0, wp["sd"] if wp else 0.0
+            live = live_status_by_espn_id.get(p["espn_id"])
+            if live is not None and live[1]:
+                mean, sd = live[0], 0.0
+            mean_total += mean
+            var_total += sd**2
+        team_live_mean_sd[team_id] = (mean_total, var_total**0.5)
+
+    def _win_pcts(m: Matchup) -> tuple[float | None, float | None]:
+        if m.week != current_week or m.home_team_id not in team_live_mean_sd or m.away_team_id not in team_live_mean_sd:
+            return None, None
+        home_win_pct = matchup_win_probability(*team_live_mean_sd[m.home_team_id], *team_live_mean_sd[m.away_team_id])
+        return home_win_pct, 1.0 - home_win_pct
+
+    schedule_out = []
+    for m in espn_matchups:
+        home_win_pct, away_win_pct = _win_pcts(m)
+        schedule_out.append(
+            {
+                "week": m.week, "home_team_id": m.home_team_id, "away_team_id": m.away_team_id,
+                "home_score": m.home_score, "away_score": m.away_score, "played": m.played,
+                "home_win_pct": home_win_pct, "away_win_pct": away_win_pct,
+            }
+        )
     team_week_mean: dict[tuple[int, int], float] = {}
     team_week_sd: dict[tuple[int, int], float] = {}
     for t in espn_teams:
@@ -743,12 +848,46 @@ def run_league(cfg: dict) -> dict:
         iterations=sim_cfg["iterations"], seed=sim_cfg["seed"],
         playoff_team_count=settings.playoff_team_count, division_winners_first=sim_cfg["division_winners_first"],
     )
+    # --- current seed (real, not simulated) ---
+    # Uses configurable per-seed tiebreakers (see docs/js/settings.js and
+    # README's "Settings sheet" section) rather than simulate_playoffs' fixed
+    # wins->PF sim tiebreak, which stays as-is (a reasonable approximation
+    # for a 10000-iteration Monte Carlo forecast, not the real current
+    # standings). Falls back to today's behavior - division_winners_first +
+    # wins->PF for every seed - until seeding is actually configured in the
+    # settings sheet, so unconfigured leagues don't silently change.
+    division_count = len(set(settings.divisions.keys()) & {t.division_id for t in espn_teams})
+    division_tiebreak_order, seed_configs = parse_seeding_config(sim_cfg.get("seeding_raw", {}))
+    if not division_tiebreak_order:
+        division_tiebreak_order = ["wins", "points_for"]
+    if not seed_configs:
+        seed_configs = {
+            n: SeedConfig(division_priority=sim_cfg["division_winners_first"] and n <= division_count, tiebreak_order=["wins", "points_for"])
+            for n in range(1, settings.playoff_team_count + 1)
+        }
+    seed_team_states = [
+        SeedTeamState(
+            team_id=t.team_id, division_id=t.division_id, wins=t.wins, losses=t.losses, ties=t.ties,
+            points_for=t.points_for, points_against=t.points_against,
+        )
+        for t in espn_teams
+    ]
+    played_matchups = [
+        PlayedMatchup(home_team_id=m.home_team_id, away_team_id=m.away_team_id, home_score=m.home_score, away_score=m.away_score)
+        for m in espn_matchups
+        if m.played and m.home_score is not None and m.away_score is not None
+    ]
+    current_seeds = compute_current_seeds(
+        seed_team_states, played_matchups, settings.playoff_team_count, division_tiebreak_order, seed_configs,
+    )
+
     standings_out = []
     for t in espn_teams:
         s = sim_results[t.team_id]
         standings_out.append(
             {
                 "team_id": t.team_id, "wins": t.wins, "losses": t.losses, "ties": t.ties, "points_for": t.points_for,
+                "points_against": t.points_against, "seed": current_seeds.get(t.team_id),
                 "division": settings.divisions.get(t.division_id, str(t.division_id)),
                 "expected_wins": s["expected_wins"], "playoff_odds": s["playoff_odds"], "bye_odds": s["bye_odds"],
                 "division_win_odds": s["division_win_odds"], "seed_probs": s["seed_probs"], "iterations": s["iterations"],
@@ -770,6 +909,8 @@ def run_league(cfg: dict) -> dict:
         "rankings_source": rankings_source, "curve_seasons": val_cfg["curve_seasons"],
         "positions": settings.positions,
         "slots": settings.slots, "slot_eligibility": {k: sorted(v) for k, v in settings.slot_eligibility.items()},
+        "playoff_team_count": settings.playoff_team_count,
+        "division_count": division_count,
         "teams": [
             {"team_id": t.team_id, "name": t.team_name, "manager": t.manager, "abbrev": t.abbrev, "division": settings.divisions.get(t.division_id, str(t.division_id))}
             for t in espn_teams
@@ -780,6 +921,7 @@ def run_league(cfg: dict) -> dict:
             "pa_basis": val_cfg["pa_basis"],
             "pa_l5_weight": val_cfg["pa_l5_weight"],
             "division_winners_first": sim_cfg["division_winners_first"],
+            "seeding_raw": sim_cfg.get("seeding_raw", {}),
         },
         "settings_sheet_id": settings_sheet_id,
         "settings_overrides_applied": settings_overrides,

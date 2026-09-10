@@ -53,6 +53,20 @@ class RosterPlayer:
 
 
 @dataclass
+class PastLineupEntry:
+    """One roster spot in a team's real, ESPN-set lineup for an already-played
+    week (see LeagueClient.get_past_lineups) - name/position/nfl_team are
+    carried alongside espn_id purely to help id resolution for a player who's
+    since been dropped and isn't in the current roster/free-agent universe."""
+    espn_id: int
+    name: str
+    position: str
+    nfl_team: str
+    lineup_slot: str
+    points: float
+
+
+@dataclass
 class Matchup:
     week: int
     home_team_id: int
@@ -85,3 +99,7 @@ class LeagueClient(Protocol):
     def get_matchups(self) -> list[Matchup]: ...
 
     def get_free_agents(self, position: str, size: int) -> list[RosterPlayer]: ...
+
+    def get_past_lineups(self, weeks: list[int]) -> dict[tuple[int, int], list[PastLineupEntry]]: ...
+
+    def get_live_week_player_status(self, week: int) -> dict[int, tuple[float, bool]]: ...

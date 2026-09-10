@@ -43,8 +43,7 @@ function renderActiveView() {
   if (renderFn) renderFn(panel, currentData, currentLeagueSlug);
 }
 
-function renderHeader(leagueMeta, leagueName) {
-  document.getElementById("header-league-name").textContent = leagueName;
+function renderHeader(leagueMeta) {
   document.getElementById("header-week").textContent = `Week ${leagueMeta.current_week}`;
   const generated = new Date(leagueMeta.generated_at);
   document.getElementById("header-generated").textContent = `Updated ${generated.toLocaleString()}`;
@@ -59,14 +58,13 @@ function renderHeader(leagueMeta, leagueName) {
   }
 }
 
-async function selectLeague(slug, leagues) {
+async function selectLeague(slug) {
   currentLeagueSlug = slug;
   setLastLeague(slug);
   document.getElementById("league-select").value = slug;
 
-  const leagueInfo = leagues.find((l) => l.slug === slug);
   currentData = await loadLeagueData(slug);
-  renderHeader(currentData.meta, leagueInfo.name);
+  renderHeader(currentData.meta);
   renderActiveView();
 }
 
@@ -95,9 +93,8 @@ async function init() {
   leagueSelect.innerHTML = leagues.map((l) => `<option value="${l.slug}">${escapeHtml(l.name)}</option>`).join("");
   leagueSelect.addEventListener("change", (e) => {
     setHash(e.target.value, currentView);
-    selectLeague(e.target.value, leagues);
+    selectLeague(e.target.value);
   });
-  leagueSelect.hidden = leagues.length <= 1;
 
   const hash = parseHash();
   const initialLeague = leagues.find((l) => l.slug === hash.league) ? hash.league : getLastLeague() && leagues.find((l) => l.slug === getLastLeague()) ? getLastLeague() : leagues[0].slug;
@@ -106,7 +103,7 @@ async function init() {
   document.querySelectorAll("nav.tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === initialView));
   document.querySelectorAll(".tabpanel").forEach((p) => p.classList.toggle("active", p.id === `tab-${initialView}`));
 
-  await selectLeague(initialLeague, leagues);
+  await selectLeague(initialLeague);
 }
 
 init().catch((err) => {

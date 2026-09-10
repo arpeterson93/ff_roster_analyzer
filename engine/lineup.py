@@ -14,6 +14,16 @@ _DISPLAY_LABEL = {
 
 _INELIGIBLE_COST = -1e9
 
+# Breaks ties between equally-eligible slots (e.g. a WR filling WR2 vs. FLEX
+# doesn't change the total, so scipy would otherwise pick arbitrarily). Adding
+# a point-proportional bonus, larger for more specific (fewer-eligible-
+# position) slots, makes the solver prefer the assignment that puts the
+# higher-projected player in the dedicated slot and the lower one in FLEX -
+# by the rearrangement inequality that's exactly the sum-maximizing pairing
+# among ties. _TIE_BREAK_EPS is small enough (~1e-4 pts on a ~50-pt player)
+# to never outweigh a genuine difference in total projected points.
+_TIE_BREAK_EPS = 1e-6
+
 
 def display_label(slot_label: str) -> str:
     return _DISPLAY_LABEL.get(slot_label, slot_label)
@@ -54,11 +64,13 @@ def optimal_lineup(
     dummy_ids = [f"__empty_{i}__" for i in range(n_slots)]
     all_players = list(players) + [(pid, None, 0.0) for pid in dummy_ids]
 
+    specificity = [1.0 / len(eligibility[base_label]) for _, base_label in slot_instances]
+
     cost = np.full((len(all_players), n_slots), _INELIGIBLE_COST)
     for i, (_, pos, pts) in enumerate(all_players):
         for j, (_, base_label) in enumerate(slot_instances):
             if pos is None or pos in eligibility[base_label]:
-                cost[i, j] = pts if pos is not None else 0.0
+                cost[i, j] = (pts + _TIE_BREAK_EPS * pts * specificity[j]) if pos is not None else 0.0
 
     row_ind, col_ind = linear_sum_assignment(cost, maximize=True)
 

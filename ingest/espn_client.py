@@ -7,7 +7,7 @@ import os
 from espn_api.football import League as EspnLeague
 
 from ingest import nfl_data as nd
-from ingest.base import FantasyTeam, LeagueSettings, Matchup, RosterPlayer, sort_positions
+from ingest.base import FantasyTeam, LeagueSettings, Matchup, PastLineupEntry, RosterPlayer, sort_positions
 
 _NON_STARTING_SLOTS = {"BE", "IR", "", "IR", "Rookie"}
 
@@ -176,6 +176,48 @@ class EspnClient:
         size = size or _FA_SIZE_BY_POS.get(position, 50)
         players = self._league.free_agents(size=size, position=espn_pos)
         return [self._roster_player(p, None) for p in players]
+
+    def get_past_lineups(self, weeks: list[int]) -> dict[tuple[int, int], list[PastLineupEntry]]:
+        """Real, ESPN-set lineup + actual points for each already-played week,
+        via box_scores - a historical per-week snapshot, unlike get_teams()'s
+        live current-roster lineupSlot (which only reflects right now).
+        box_scores only covers week <= current_week, so later weeks are
+        silently skipped rather than erroring."""
+        result: dict[tuple[int, int], list[PastLineupEntry]] = {}
+        player_team_cache: dict[int, int] = {}
+        for week in weeks:
+            if week >= self._league.current_week:
+                continue
+            for box in self._league.box_scores(week=week, player_team_cache=player_team_cache):
+                for team_id, lineup in ((box.home_team, box.home_lineup), (box.away_team, box.away_lineup)):
+                    if team_id is None:
+                        continue
+                    result[(team_id, week)] = [
+                        PastLineupEntry(
+                            espn_id=bp.playerId,
+                            name=bp.name,
+                            position=_canon_pos(bp.position),
+                            nfl_team=nd.normalize_team(bp.proTeam),
+                            lineup_slot=bp.slot_position,
+                            points=float(bp.points or 0.0),
+                        )
+                        for bp in lineup
+                    ]
+        return result
+
+    def get_live_week_player_status(self, week: int) -> dict[int, tuple[float, bool]]:
+        """{espn_id: (points_so_far, game_completed)} for the given week's
+        live box scores. game_completed is espn_api's own ~3-hours-past-
+        kickoff heuristic (BoxPlayer.game_played == 100) - lets a live
+        matchup win-probability read collapse a finished player's remaining
+        uncertainty to 0 without needing minute-by-minute polling; an
+        in-progress or not-yet-started player keeps their full projected SD."""
+        result: dict[int, tuple[float, bool]] = {}
+        for box in self._league.box_scores(week=week):
+            for lineup in (box.home_lineup, box.away_lineup):
+                for bp in lineup:
+                    result[bp.playerId] = (float(bp.points or 0.0), bp.game_played == 100)
+        return result
 
     def get_waiver_status_espn_ids(self) -> set[int]:
         """ESPN ids of players currently on waivers (need a FAAB claim to

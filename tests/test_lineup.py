@@ -80,3 +80,18 @@ def test_flex_slot_numbering_when_count_greater_than_one():
     total, assignment = optimal_lineup(players, slots, eligibility)
     assert total == pytest.approx(18.0)
     assert set(assignment.keys()) == {"WR1", "WR2"}
+
+
+def test_ties_prefer_top_scorer_in_dedicated_slot_over_flex():
+    """Two ways to hit the same 38.0 total: best WR in WR + 2nd WR in FLEX, or
+    vice versa. The tie-break should pick the natural-looking one (top scorer
+    gets the dedicated slot) rather than an arbitrary solver pick - this was
+    reported as Ja'Marr Chase (highest WR proj) showing up in FLEX instead of
+    WR1 while a lower-projected WR sat in the dedicated slot."""
+    slots = {"WR": 1, "RB/WR/TE": 1}
+    eligibility = {"WR": {"WR"}, "RB/WR/TE": {"RB", "WR", "TE"}}
+    players = [("chase", "WR", 22.0), ("w2", "WR", 16.0)]
+    total, assignment = optimal_lineup(players, slots, eligibility)
+    assert total == pytest.approx(38.0)
+    assert assignment["WR"] == "chase"
+    assert assignment["FLEX"] == "w2"
