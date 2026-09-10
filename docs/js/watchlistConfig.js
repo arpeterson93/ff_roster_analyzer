@@ -5,5 +5,5 @@
 // "Me", access "Anyone"), and copying the resulting URL below. See the
 // README's "Watch list sheet" section. Leave both null to keep the watch
 // list working locally only (per-browser, no cross-device sync).
-export const WATCHLIST_SHEET_ID = null;
-export const WATCHLIST_WEBAPP_URL = null;
+export const WATCHLIST_SHEET_ID = "1BZz_MrrW2hKNoBq0UtA-eHxRybLcYexXzOTngVnZpss";
+export const WATCHLIST_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbywU-2imQuPIu_LRCAcr-o8wV_bNwNnp2OFUBXT5sgQsYIpXXRsxfl17xgsjQorsDh0/exec";
