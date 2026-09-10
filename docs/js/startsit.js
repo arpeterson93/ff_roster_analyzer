@@ -13,6 +13,23 @@ function healthBadge(status) {
   return letters ? `<span class="pill" style="background:var(--red-600)">${letters}</span>` : "";
 }
 
+// ESPN's own CDN, keyed off the espn_id every player already carries - a
+// D/ST "player" has no individual headshot, so it gets its team's logo
+// instead (keyed off nfl_team; ESPN's logo path accepts both "was" and
+// "wsh" for Washington, so no per-team alias table is needed). A handful of
+// deep-roster/practice-squad ids 404 rather than falling back to a generic
+// silhouette - onerror just removes the broken <img> instead of showing a
+// broken-image icon.
+function playerPhotoUrl(p) {
+  if (p.position === "DST") return p.nfl_team ? `https://a.espncdn.com/i/teamlogos/nfl/500/${p.nfl_team.toLowerCase()}.png` : null;
+  return p.espn_id ? `https://a.espncdn.com/i/headshots/nfl/players/full/${p.espn_id}.png` : null;
+}
+
+function playerPhotoHtml(p) {
+  const url = playerPhotoUrl(p);
+  return url ? `<img class="player-photo" src="${url}" alt="" loading="lazy" onerror="this.remove()" />` : "";
+}
+
 // Desktop keeps a separate Opp column (marked ".desktop-col"). On mobile (see
 // the ".desktop-col"/".mobile-line" media query in styles.css) that column
 // collapses away and its info folds into the Player cell instead - matching
@@ -51,9 +68,14 @@ function playerRow(p, week, currentWeek, slotLabel, isStreamed) {
   return `<tr data-player-id="${p.id}" class="clickable-row ${isStreamed ? "streamed-row" : ""}">
     ${slotCell}
     <td>
-      <div>${posTag(p.position)} <strong>${escapeHtml(p.name)}</strong> ${healthBadge(p.injury_status)} ${streamBadge}</div>
-      <div class="muted small row-meta">${playerMetaLine(p)}</div>
-      <div class="muted small row-meta mobile-line" ${oppAttrs}>${kickoff ? escapeHtml(kickoff) + " " : ""}${opponentCellHtml(weekEntry)}</div>
+      <div class="player-cell">
+        ${playerPhotoHtml(p)}
+        <div>
+          <div>${posTag(p.position)} <strong>${escapeHtml(p.name)}</strong> ${healthBadge(p.injury_status)} ${streamBadge}</div>
+          <div class="muted small row-meta">${playerMetaLine(p)}</div>
+          <div class="muted small row-meta mobile-line" ${oppAttrs}>${kickoff ? escapeHtml(kickoff) + " " : ""}${opponentCellHtml(weekEntry)}</div>
+        </div>
+      </div>
     </td>
     <td class="desktop-col" ${oppAttrs}>
       ${kickoff ? `<div class="muted small row-meta">${kickoff}</div>` : ""}

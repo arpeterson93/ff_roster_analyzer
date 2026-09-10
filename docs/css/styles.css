@@ -154,6 +154,14 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 
 .row-meta { margin-top: 2px; line-height: 1.2; }
 
+/* Start/Sit's lineup/bench rows: ESPN headshot (or team logo for D/ST) to
+   the left of the existing name/meta stack, sized to roughly match ESPN's
+   own lineup view. object-fit:cover crops a non-square source to the
+   circle instead of squishing it; the background shows through the
+   transparent margin most headshot PNGs have around the subject. */
+.player-cell { display: flex; align-items: center; gap: 8px; }
+.player-photo { width: 34px; height: 34px; min-width: 34px; border-radius: 50%; object-fit: cover; background: color-mix(in srgb, var(--ink-500) 12%, transparent); }
+
 /* Start/Sit's Player/Score cells hold multi-line stacked content (name,
    team/ownership, kickoff+opponent) - letting that text wrap instead of
    forcing the site-wide "th, td { white-space: nowrap }" default is what
