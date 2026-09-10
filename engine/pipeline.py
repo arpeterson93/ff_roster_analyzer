@@ -57,7 +57,7 @@ from ingest import rankings as rk
 from ingest.config import load_all_league_configs
 from ingest.base import Matchup
 from ingest.espn_client import EspnClient
-from ingest.espn_injuries import fetch_ir_return_weeks
+from ingest.espn_injuries import EspnInjuriesFetchError, fetch_ir_return_weeks
 from ingest.settings_sheet import SettingsSheetError, apply_remote_settings, fetch_remote_settings, parse_seeding_config
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -331,13 +331,31 @@ def run_league(cfg: dict) -> dict:
     # Best-effort: espn.com/nfl/injuries' own return-date estimates, used
     # below to zero an IR player's proprietary projection for the weeks
     # before they're expected back (see engine.valuation.project_player's
-    # ir_return_week param) rather than just the current week. None (not {})
-    # means the fetch/parse itself failed - surfaced as a warning since
-    # every IR player then silently falls back to current-week-only zeroing.
-    ir_return_weeks_by_espn_id = fetch_ir_return_weeks(season, schedules_current)
-    if ir_return_weeks_by_espn_id is None:
-        warnings.append("espn.com/nfl/injuries fetch failed; IR players only zeroed for the current week")
+    # ir_return_week param) rather than just the current week. A failure
+    # (retried a few times inside fetch_ir_return_weeks first) surfaces the
+    # actual cause in the warning banner, since every IR player then
+    # silently falls back to current-week-only zeroing.
+    try:
+        ir_return_weeks_by_espn_id = fetch_ir_return_weeks(season, schedules_current)
+    except EspnInjuriesFetchError as exc:
+        logger.warning("espn.com/nfl/injuries fetch failed: %s", exc, exc_info=True)
+        warnings.append(f"espn.com/nfl/injuries fetch failed ({exc}); IR players only zeroed for the current week")
         ir_return_weeks_by_espn_id = {}
+
+    # ESPN's own per-week projection for every remaining week, shown
+    # alongside our proprietary number as a second, independent data point
+    # (see docs/js/playermodal.js's "ESPN wk" column) - never fed into
+    # project_player below, which stays our own baseline*matchup method for
+    # every week beyond the current one. The current week already has this
+    # from espn_projected_week (get_teams()), so only future weeks need it.
+    # Best-effort: ~2x(final_week - current_week) extra ESPN requests, so a
+    # transient failure here shouldn't take down the whole build.
+    try:
+        espn_future_projections = client.get_future_espn_projections(weeks[1:])
+    except Exception as exc:
+        logger.warning("ESPN future-week projections fetch failed: %s", exc, exc_info=True)
+        warnings.append(f"ESPN future-week projections fetch failed: {exc}")
+        espn_future_projections = {}
 
     # --- curves ---
     curve = _build_curve_for_league(cfg, offense_positions, player_rules, weeks_played, season)
@@ -516,6 +534,7 @@ def run_league(cfg: dict) -> dict:
                         "week": wp.week, "opponent": wp.opponent, "home": is_home.get((p.nfl_team, wp.week)),
                         "kickoff": kickoff.get((p.nfl_team, wp.week)),
                         "index": wp.index, "rank": wp.rank, "projected": wp.projected, "sd": wp.sd,
+                        "espn_projected": espn_future_projections.get(p.espn_id, {}).get(wp.week),
                         "actual": _actual_weekly_stats(p.position, p.nfl_team, res.id, wp.week, weeks_played, actual_offense_by_id_week, actual_dst_by_team_week),
                     }
                     for wp in proj.weekly

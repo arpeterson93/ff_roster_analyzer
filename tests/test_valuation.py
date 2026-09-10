@@ -152,6 +152,19 @@ def test_ir_return_week_zeroes_weeks_before_it_and_rescales():
     assert sum(weekly.values()) == pytest.approx(proj.ros_total)
 
 
+def test_ir_return_week_beyond_final_week_zeroes_ros_total_too():
+    # Return week (5) is beyond final_week (4) - the whole tracked window
+    # ends up zeroed with nowhere left to redistribute the ROS total onto,
+    # so ros_total has to collapse to 0 too or it'd disagree with
+    # sum(weekly[].projected), same invariant every other case here holds
+    # (was the root cause of a real "weekly sum != ros_total" warning).
+    proj = _project(ir_return_week=5)
+    weekly = {w.week: w.projected for w in proj.weekly}
+    assert all(v == pytest.approx(0.0) for v in weekly.values())
+    assert proj.ros_total == pytest.approx(0.0)
+    assert sum(weekly.values()) == pytest.approx(proj.ros_total)
+
+
 def test_ir_return_week_in_the_past_is_a_no_op():
     proj = _project(current_week=2, ir_return_week=1)
     baseline = _project(current_week=2, ir_return_week=None)

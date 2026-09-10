@@ -1,25 +1,21 @@
 import { fmt, escapeHtml, getYourTeam } from "./state.js";
-import { POSITION_COLOR, sortByPositionOrder, colorForRatio, teamLabel } from "./colors.js";
+import { POSITION_COLOR, sortByPositionOrder, colorForRatio, teamLabel, weeklyProjection } from "./colors.js";
 
 function posTag(pos) {
   return `<span class="pos-tag" style="background:${POSITION_COLOR[pos] || "#888"}">${pos}</span>`;
 }
 
-// The current week always defers to ESPN's own number (see startsit.js's
-// projValueFor - same rule, same reasoning: ESPN should always control the
-// current week's projection). Every other week uses our own proprietary
-// number instead - p.weekly only spans current_week..final_week, and a
-// played week before that has no entry here at all; callers showing an
-// `actual: true` lineup (see actualLineupWeek/box-score weeks) should
-// prefer that lineup's own `points` map and only fall back to this for
-// projected weeks. A player's `this_week` field is always the CURRENT
-// week's number regardless of which week is being displayed here (schedule
-// rows cover every past/future week), so it can't substitute for this.
+// A played week's actual score always wins over any projection; otherwise
+// this defers to weeklyProjection's site-wide rule (current week -> ESPN's
+// number, every other week -> our own proprietary one - see colors.js).
+// p.weekly only spans current_week..final_week, so a played week before
+// that has no entry here at all - callers showing an `actual: true` lineup
+// (see actualLineupWeek/box-score weeks) should prefer that lineup's own
+// `points` map and only fall back to this for projected weeks.
 function pointsForWeek(p, week, currentWeek) {
-  if (week === currentWeek) return p.espn_projected_week;
   const w = (p.weekly || []).find((e) => e.week === week);
-  if (!w) return null;
-  return w.actual ? w.actual.points : w.projected;
+  if (w && w.actual) return w.actual.points;
+  return weeklyProjection(p, week, currentWeek);
 }
 
 // Prefers a real lineup's own recorded points (current-week live state or a

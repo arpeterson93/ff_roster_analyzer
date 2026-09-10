@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 
 from espn_api.football import League as EspnLeague
+from espn_api.football import Player as EspnPlayer
 
 from ingest import nfl_data as nd
 from ingest.base import FantasyTeam, LeagueSettings, Matchup, PastLineupEntry, RosterPlayer, sort_positions
+
+logger = logging.getLogger(__name__)
 
 _NON_STARTING_SLOTS = {"BE", "IR", "", "IR", "Rookie"}
 
@@ -36,6 +40,12 @@ def _canon_pos(pos: str) -> str:
 
 
 _FA_SIZE_BY_POS = {"QB": 40, "RB": 60, "WR": 60, "TE": 40, "K": 32, "DST": 32}
+
+# Every-position free-agent pool for get_future_espn_projections - one call
+# covering everyone (see that method), so this needs to be roughly as deep
+# as _FA_SIZE_BY_POS's per-position sizes summed (~264) rather than any one
+# position's own cap.
+_FUTURE_PROJECTIONS_FA_SIZE = 350
 
 
 class EspnClient:
@@ -217,6 +227,66 @@ class EspnClient:
             for lineup in (box.home_lineup, box.away_lineup):
                 for bp in lineup:
                     result[bp.playerId] = (float(bp.points or 0.0), bp.game_played == 100)
+        return result
+
+    def get_future_espn_projections(self, weeks: list[int]) -> dict[int, dict[int, float]]:
+        """ESPN's own per-week projection (not our proprietary one) for
+        every given week, covering both rostered and free-agent players -
+        {espn_id: {week: projected_points}}. Two requests per week rather
+        than one per roster slot/position:
+        - Rostered: one mRoster?scoringPeriodId=<week> request covers every
+          team's whole roster at once. Built from the raw response by hand
+          (bypassing League.load_roster_week, which mutates
+          league.teams[*].roster in place) so this can never leave shared
+          state pointing at some other week for whichever call happens to
+          run after this one (get_teams() in particular).
+        - Free agents: one free_agents(week=<week>) call with no position
+          filter, same filterSlotIds:[] trick get_waiver_status_espn_ids
+          already relies on to get every position back in a single request
+          instead of one call per position."""
+        result: dict[int, dict[int, float]] = {}
+        for week in weeks:
+            found_this_week = 0
+            try:
+                data = self._league.espn_request.league_get(params={"view": "mRoster", "scoringPeriodId": week})
+                sample_entry = None
+                for team_data in data.get("teams", []):
+                    for entry in team_data.get("roster", {}).get("entries", []):
+                        if sample_entry is None:
+                            sample_entry = entry
+                        p = EspnPlayer(entry, self._league.year)
+                        proj = self._week_projected_points(p, week)
+                        if proj is not None:
+                            result.setdefault(p.playerId, {})[week] = proj
+                            found_this_week += 1
+                if found_this_week == 0 and sample_entry is not None:
+                    # Nothing usable this week even though rosters came back -
+                    # log one raw entry's stats array so a live run pinpoints
+                    # exactly which key/shape assumption is wrong (e.g. no
+                    # statSourceId==1 row for this scoringPeriodId at all,
+                    # meaning ESPN just hasn't published that far out yet,
+                    # vs. a shape this parsing doesn't expect).
+                    raw_player = sample_entry.get("playerPoolEntry", {}).get("player") or sample_entry.get("player", {})
+                    logger.warning(
+                        "get_future_espn_projections: week %s - 0 rostered players had a usable projection; "
+                        "sample player %r stats=%r",
+                        week, raw_player.get("fullName"), raw_player.get("stats"),
+                    )
+            except Exception:
+                logger.warning("get_future_espn_projections: week %s rostered-roster fetch failed", week, exc_info=True)
+
+            try:
+                fa_found = 0
+                for p in self._league.free_agents(week=week, size=_FUTURE_PROJECTIONS_FA_SIZE):
+                    proj = self._week_projected_points(p, week)
+                    if proj is not None:
+                        result.setdefault(p.playerId, {})[week] = proj
+                        fa_found += 1
+                found_this_week += fa_found
+            except Exception:
+                logger.warning("get_future_espn_projections: week %s free-agent fetch failed", week, exc_info=True)
+
+            logger.info("get_future_espn_projections: week %s - %s players with a projection", week, found_this_week)
         return result
 
     def get_waiver_status_espn_ids(self) -> set[int]:

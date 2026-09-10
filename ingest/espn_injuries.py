@@ -11,15 +11,19 @@ ESPN's fantasy player id and the numeric id in this page's player URLs
 verified live 2026-09-10 (Zach Charbonnet: 4426385 on both).
 
 Best-effort only: this page embeds its data as a `window['__espnfitt__']`
-JSON blob whose shape is undocumented and can change without notice, so any
-fetch/parse failure here returns {} rather than raising - a missing
-return-week estimate just falls back to the existing current-week-only zero
-(see engine/valuation.py's zero_this_week_statuses)."""
+JSON blob whose shape is undocumented and can change without notice.
+Retries (same pattern/backoff as ingest/rankings.py's FantasyPros scrape)
+cover a transient blip; a real failure raises EspnInjuriesFetchError with
+the underlying cause, which the pipeline surfaces in its warning banner
+(cfg/pipeline.py) - a missing return-week estimate just falls back to the
+existing current-week-only zero (see engine/valuation.py's
+zero_this_week_statuses)."""
 from __future__ import annotations
 
 import json
 import logging
 import re
+import time
 from datetime import date, datetime
 
 import polars as pl
@@ -32,6 +36,13 @@ logger = logging.getLogger(__name__)
 _INJURIES_URL = "https://www.espn.com/nfl/injuries"
 _FITT_RE = re.compile(r"window\['__espnfitt__'\]\s*=\s*(\{.*?\});", re.DOTALL)
 _ID_RE = re.compile(r"/id/(\d+)/")
+_USER_AGENT = "Mozilla/5.0"
+_TIMEOUT = 15
+_RETRIES = 3
+
+
+class EspnInjuriesFetchError(Exception):
+    pass
 
 
 def _parse_return_date(date_str: str, season: int) -> date | None:
@@ -49,21 +60,40 @@ def _parse_return_date(date_str: str, season: int) -> date | None:
         return None
 
 
-def fetch_ir_return_weeks(season: int, schedules_df: pl.DataFrame) -> dict[int, int] | None:
-    """{espn_id: first week they're expected to play again}. None on any
-    fetch/parse failure (caller can surface that as a warning); an entry
-    whose date can't itself be resolved is just skipped, not a failure."""
-    try:
-        resp = requests.get(_INJURIES_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-        resp.raise_for_status()
-        match = _FITT_RE.search(resp.text)
-        if not match:
-            logger.warning("espn_injuries: __espnfitt__ blob not found on the page")
-            return None
-        teams = json.loads(match.group(1))["page"]["content"]["injuries"]
-    except Exception:
-        logger.warning("espn_injuries: fetch/parse failed", exc_info=True)
-        return None
+def _fetch_injuries_blob() -> list[dict]:
+    """The page's raw {team: [...items]} list. Retries transient failures
+    (timeouts, connection resets, a momentary non-200) up to _RETRIES times
+    before giving up - a structural failure (blob missing, JSON shape
+    changed) raises immediately instead, since retrying an unchanged page
+    can't fix that."""
+    last_exc: Exception | None = None
+    for attempt in range(_RETRIES):
+        try:
+            resp = requests.get(_INJURIES_URL, timeout=_TIMEOUT, headers={"User-Agent": _USER_AGENT})
+            resp.raise_for_status()
+            match = _FITT_RE.search(resp.text)
+            if not match:
+                raise EspnInjuriesFetchError(f"__espnfitt__ blob not found on the page (status {resp.status_code}, {len(resp.text)} bytes)")
+            try:
+                return json.loads(match.group(1))["page"]["content"]["injuries"]
+            except (json.JSONDecodeError, KeyError) as exc:
+                raise EspnInjuriesFetchError(f"__espnfitt__ blob found but didn't match the expected shape: {exc}") from exc
+        except EspnInjuriesFetchError:
+            raise  # structural failure - no point retrying an unchanged page
+        except Exception as exc:  # noqa: BLE001 - retry loop, re-raised below
+            last_exc = exc
+            logger.warning("espn_injuries: attempt %s/%s failed: %s", attempt + 1, _RETRIES, exc)
+            if attempt < _RETRIES - 1:
+                time.sleep(1.5 * (attempt + 1))
+    raise EspnInjuriesFetchError(f"failed after {_RETRIES} attempts: {last_exc}") from last_exc
+
+
+def fetch_ir_return_weeks(season: int, schedules_df: pl.DataFrame) -> dict[int, int]:
+    """{espn_id: first week they're expected to play again}. Raises
+    EspnInjuriesFetchError on any fetch/parse failure (caller surfaces that
+    in its warning banner); an entry whose date can't itself be resolved is
+    just skipped, not a failure."""
+    teams = _fetch_injuries_blob()
 
     result: dict[int, int] = {}
     for team in teams:

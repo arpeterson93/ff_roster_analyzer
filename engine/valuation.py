@@ -128,6 +128,17 @@ def project_player(
                 zeroed, zero_reason = True, f"ir_return_week:{ir_return_week}"
 
     total_raw = sum(raw.values())
+    # The IR-zeroing loop above only zeroes weeks strictly before
+    # ir_return_week - if that's beyond final_week (a long-term injury not
+    # expected back within the tracked window at all), every remaining week
+    # ends up zeroed with nothing left to redistribute onto. ros_total is
+    # otherwise guaranteed by construction to equal sum(weekly[].projected)
+    # (that's what the rescale below does), so it has to collapse to 0 here
+    # too rather than staying at its pre-zeroing value - the player's ROS
+    # total within this window really is 0 if they're not projected to play
+    # any of it.
+    if total_raw <= 0:
+        ros_total = 0.0
     scale = (ros_total / total_raw) if total_raw > 0 else 0.0
     adjusted = {w: raw[w] * scale for w in weeks}
 

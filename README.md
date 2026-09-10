@@ -65,6 +65,14 @@ removed, computed both roster-only (`value_delta`) and with the best
 available free agent backfilling the position (`value_delta_ww`, used as
 the primary basis for trade verdicts and pickup suggestions).
 
+The player modal's "ESPN wk" column is a second, independent number - ESPN's
+own per-week projection (`EspnClient.get_future_espn_projections`, one
+`mRoster?scoringPeriodId=<week>` request per remaining week for rostered
+players, one no-position-filter `free_agents(week=...)` request per week for
+everyone else) - shown purely for comparison. It never feeds into the
+method above; the current week's own baseline*matchup step (4) already
+prefers a weekly-rank-based source over it.
+
 **Future option, not built:** an alternative curve-construction method
 pairing historical ROS rankings with the players' subsequent actual PPG,
 rather than the current end-of-season-rank approach.

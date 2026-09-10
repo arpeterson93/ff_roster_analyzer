@@ -69,6 +69,20 @@ export function teamLabel(team) {
   return team.manager || team.name || "";
 }
 
+// The single site-wide rule for "our own proprietary Proj number vs ESPN's"
+// - the current week always defers to ESPN (espn_projected_week, which only
+// ever covers the current week - see ingest/espn_client.py), every other
+// week uses our own proprietary number (p.weekly[].projected). Every view
+// that shows a "Proj" column should read from here rather than
+// reimplementing this rule locally - that's exactly how the player modal's
+// Proj column drifted out of sync with Start/Sit and Schedule once, before
+// this existed.
+export function weeklyProjection(p, week, currentWeek) {
+  if (week === currentWeek) return p.espn_projected_week;
+  const w = (p.weekly || []).find((e) => e.week === week);
+  return w ? w.projected : null;
+}
+
 // ESPN's own CDN, keyed off the espn_id every player already carries - a
 // D/ST "player" has no individual headshot, so it gets its team's logo
 // instead (keyed off nfl_team; ESPN's logo path accepts both "was" and

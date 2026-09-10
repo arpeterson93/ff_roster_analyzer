@@ -1,5 +1,5 @@
 import { fmt, escapeHtml, getYourTeam, setYourTeam } from "./state.js";
-import { POSITION_COLOR, INJURY_BADGE, opponentCellHtml, ratioForRank, colorForRatio, formatKickoff, sortByPositionOrder, teamLabel, playerPhotoHtml } from "./colors.js";
+import { POSITION_COLOR, INJURY_BADGE, opponentCellHtml, ratioForRank, colorForRatio, formatKickoff, sortByPositionOrder, teamLabel, playerPhotoHtml, weeklyProjection } from "./colors.js";
 import { openPlayerModal } from "./playermodal.js";
 import { openPointsAgainstModal } from "./pointsagainstmodal.js";
 
@@ -25,15 +25,7 @@ function playerMetaLine(p) {
   return parts.join(" · ");
 }
 
-// Current week already gets its "our" projection straight from ESPN (see
-// rankings.js), so there's no separate proprietary number to show alongside
-// it there - only future weeks have our own week-by-week projection
-// (p.weekly[].projected, the same field schedule.js reads).
-function projValueFor(p, week, currentWeek) {
-  if (week === currentWeek) return p.espn_projected_week;
-  const weekEntry = (p.weekly || []).find((w) => w.week === week);
-  return weekEntry ? weekEntry.projected : null;
-}
+const projValueFor = weeklyProjection;
 
 // isStreamed: this slot's occupant isn't actually on the roster - the real
 // starter was on bye, so the optimal-lineup calc pulled in the best

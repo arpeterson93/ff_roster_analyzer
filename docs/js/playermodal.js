@@ -1,5 +1,5 @@
 import { fmt, escapeHtml } from "./state.js";
-import { POSITION_COLOR, opponentCellHtml, teamLabel, playerPhotoHtml } from "./colors.js";
+import { POSITION_COLOR, opponentCellHtml, teamLabel, playerPhotoHtml, weeklyProjection } from "./colors.js";
 import { openModal } from "./modal.js";
 import { groupedHeaderHtml, statCellsHtml } from "./statcolumns.js";
 
@@ -20,17 +20,31 @@ function gameLogTable(player) {
   return `<div class="table-wrap"><table>${top}${bottom}<tbody>${rows}</tbody></table></div>`;
 }
 
-function projectionTable(player) {
+// ESPN wk is a second, independent number shown alongside our own Proj/SD -
+// never blended into it (see engine/pipeline.py's espn_future_projections).
+// The current week's own ESPN number lives on the player record itself
+// (espn_projected_week, from get_teams()) rather than in weekly[].
+// espn_projected (only fetched for future weeks - see
+// EspnClient.get_future_espn_projections), so this falls back to that for
+// whichever row is the current week.
+function espnWeekProjection(player, w, currentWeek) {
+  return w.week === currentWeek ? player.espn_projected_week : w.espn_projected;
+}
+
+function projectionTable(player, currentWeek) {
   // opponentCellHtml already colors/labels the Opp cell by matchup rank
-  // (see colors.js) - a separate Matchup column repeated that.
+  // (see colors.js) - a separate Matchup column repeated that. Proj defers
+  // to ESPN for the current week (weeklyProjection, same rule Start/Sit and
+  // Schedule use) - SD is only ever ours (ESPN doesn't publish one), so it
+  // stays w.sd regardless of week.
   const rows = (player.weekly || [])
     .filter((w) => !w.actual)
-    .map((w) => `<tr><td>${w.week}</td><td>${opponentCellHtml(w)}</td><td>${fmt(w.projected, 1)}</td><td>${fmt(w.sd, 1)}</td></tr>`)
+    .map((w) => `<tr><td>${w.week}</td><td>${opponentCellHtml(w)}</td><td>${fmt(weeklyProjection(player, w.week, currentWeek), 1)}</td><td>${fmt(w.sd, 1)}</td><td>${fmt(espnWeekProjection(player, w, currentWeek), 1)}</td></tr>`)
     .join("");
   // Only a total-points projection is computed for future weeks (not a full
   // stat line), so this can't show the grouped stat columns the game log
   // does - just the scalar projection + uncertainty.
-  return `<table><thead><tr><th>Wk</th><th>Opp</th><th>Proj</th><th>SD</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table><thead><tr><th>Wk</th><th>Opp</th><th>Proj</th><th>SD</th><th>ESPN wk</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 // Three deliberately-explainable numbers (see engine/faab_estimate.py) -
@@ -123,7 +137,7 @@ export function openPlayerModal(player, data) {
     ${faabEstimateSection(player, data)}
     ${hasGameLog ? `<h3>Game log</h3>${gameLogTable(player)}` : ""}
     <h3>${hasGameLog ? "Remaining schedule" : "Weekly projections"}</h3>
-    <div class="table-wrap">${projectionTable(player)}</div>
+    <div class="table-wrap">${projectionTable(player, data.meta.current_week)}</div>
   `;
   openModal(html);
 }
