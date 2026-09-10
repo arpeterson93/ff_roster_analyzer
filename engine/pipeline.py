@@ -35,6 +35,7 @@ from engine.team_strength import (
     fa_values,
     lineup_total,
     optimal_lineup_for_week,
+    optimal_lineup_for_week_with_bye_fill,
     position_strength,
     rank_and_compare,
     slot_strength,
@@ -521,6 +522,10 @@ def run_league(cfg: dict) -> dict:
             p.setdefault("ros_overall_rank", None)
 
     players_by_id = {p["id"]: p for p in players_out}
+    # Which week (if any) each player is on bye - the trigger for
+    # optimal_lineup_for_week_with_bye_fill's streaming fill-in. Covers free
+    # agents too, not just rostered players (harmless/unused there).
+    bye_week_by_player: dict[str, int | None] = {pid: p["bye"] for pid, p in players_by_id.items()}
 
     # --- team strength ---
 
@@ -529,8 +534,13 @@ def run_league(cfg: dict) -> dict:
     slot_labels: list[str] = []
     for t in espn_teams:
         roster_ids = team_rosters[t.team_id]
-        team_ppw[t.team_id] = position_strength(roster_ids, players_ctx, weeks, settings.slots, settings.slot_eligibility, settings.positions)
-        team_slot_ppw[t.team_id], slot_labels = slot_strength(roster_ids, players_ctx, weeks, settings.slots, settings.slot_eligibility)
+        team_ppw[t.team_id] = position_strength(
+            roster_ids, players_ctx, weeks, settings.slots, settings.slot_eligibility, settings.positions,
+            free_agents_ctx, bye_week_by_player,
+        )
+        team_slot_ppw[t.team_id], slot_labels = slot_strength(
+            roster_ids, players_ctx, weeks, settings.slots, settings.slot_eligibility, free_agents_ctx, bye_week_by_player,
+        )
     strength_by_team = rank_and_compare(team_ppw, settings.positions)
     slot_strength_by_team = rank_and_compare(team_slot_ppw, slot_labels)
 
@@ -611,14 +621,26 @@ def run_league(cfg: dict) -> dict:
         roster_ids = team_rosters[t.team_id]
         weeks_out = {}
         for w in weeks:
-            total, assignment = optimal_lineup_for_week(roster_ids, players_ctx, w, settings.slots, settings.slot_eligibility)
+            # Only FUTURE weeks stream a bye-week fill-in - the current
+            # week's optimal lineup stays real-roster-only, since it's
+            # compared directly against your actual ESPN lineup just below
+            # (changes_vs_espn) and a free-agent suggestion there isn't
+            # necessarily actionable (waivers may already be locked/processed
+            # for a week already underway).
+            if w > current_week:
+                total, assignment, streamed = optimal_lineup_for_week_with_bye_fill(
+                    roster_ids, players_ctx, free_agents_ctx, w, settings.slots, settings.slot_eligibility, bye_week_by_player,
+                )
+            else:
+                total, assignment = optimal_lineup_for_week(roster_ids, players_ctx, w, settings.slots, settings.slot_eligibility)
+                streamed = set()
             all_week_lineups[(t.team_id, w)] = (total, assignment)
             started = set(assignment.values())
             bench = sorted(
                 (pid for pid in roster_ids if pid not in started),
                 key=lambda pid: players_by_id[pid]["espn_projected_week"] or 0, reverse=True,
             )
-            weeks_out[str(w)] = {"total": total, "slots": assignment, "bench": bench}
+            weeks_out[str(w)] = {"total": total, "slots": assignment, "bench": bench, "streamed": sorted(streamed)}
 
         # "Changes vs. your ESPN lineup" only makes sense for the current week
         # - ESPN's actual lineup submission is a live, current-state snapshot,

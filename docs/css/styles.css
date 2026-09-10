@@ -196,6 +196,13 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
    highlighted and a marker line at the (weighted-average) point estimate -
    the real spread of the comp-based method's own nearest neighbors, not a
    modeled confidence interval. */
+/* A free-agent bye-week fill-in (Start/Sit, Schedule's expanded lineup) -
+   deliberately loud, this player is NOT actually on your roster and the
+   whole point is making that obvious at a glance. */
+.streamed-row { background: color-mix(in srgb, var(--amber-500) 14%, transparent); }
+.streamed-row:hover { background: color-mix(in srgb, var(--amber-500) 22%, transparent); }
+.stream-badge { background: var(--amber-500); }
+
 .faab-dist { margin: 10px 0; }
 .faab-dist-track { position: relative; height: 10px; background: var(--border); border-radius: 5px; }
 .faab-dist-iqr { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 5px; }

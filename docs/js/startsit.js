@@ -35,16 +35,23 @@ function projValueFor(p, week, currentWeek) {
   return weekEntry ? weekEntry.projected : null;
 }
 
-function playerRow(p, week, currentWeek, slotLabel) {
+// isStreamed: this slot's occupant isn't actually on the roster - the real
+// starter was on bye, so the optimal-lineup calc pulled in the best
+// available free agent for that week instead (see
+// engine.team_strength.optimal_lineup_for_week_with_bye_fill). Flagged with
+// a visible badge + row tint so it reads as "not really yours yet",
+// distinct from every other row on the page.
+function playerRow(p, week, currentWeek, slotLabel, isStreamed) {
   const weekEntry = (p.weekly || []).find((w) => w.week === week) || {};
   const slotCell = slotLabel !== undefined ? `<td class="muted small">${slotLabel}</td>` : "";
   const kickoff = formatKickoff(weekEntry.kickoff);
   const oppAttrs = `data-opp-cell data-team="${escapeHtml(weekEntry.opponent || "")}" data-pos="${p.position}"`;
   const proj = projValueFor(p, week, currentWeek);
-  return `<tr data-player-id="${p.id}" class="clickable-row">
+  const streamBadge = isStreamed ? `<span class="pill small stream-badge" title="Your rostered starter is on bye - this is the best free agent available that week instead">FA fill-in</span>` : "";
+  return `<tr data-player-id="${p.id}" class="clickable-row ${isStreamed ? "streamed-row" : ""}">
     ${slotCell}
     <td>
-      <div>${posTag(p.position)} <strong>${escapeHtml(p.name)}</strong> ${healthBadge(p.injury_status)}</div>
+      <div>${posTag(p.position)} <strong>${escapeHtml(p.name)}</strong> ${healthBadge(p.injury_status)} ${streamBadge}</div>
       <div class="muted small row-meta">${playerMetaLine(p)}</div>
       <div class="muted small row-meta mobile-line" ${oppAttrs}>${kickoff ? escapeHtml(kickoff) + " " : ""}${opponentCellHtml(weekEntry)}</div>
     </td>
@@ -56,22 +63,26 @@ function playerRow(p, week, currentWeek, slotLabel) {
   </tr>`;
 }
 
-function lineupSection(roster, week, lineupWeek, currentWeek) {
+function lineupSection(roster, week, lineupWeek, currentWeek, allPlayersById) {
   const slots = lineupWeek.slots || {};
+  const streamed = new Set(lineupWeek.streamed || []);
   const bySlot = Object.entries(slots).sort(([a], [b]) => sortByPositionOrder(a, b, (s) => s.replace(/\d+$/, "")));
-  const playersById = new Map(roster.map((p) => [p.id, p]));
+  const rosterById = new Map(roster.map((p) => [p.id, p]));
+  // A streamed slot's occupant is a free agent, not on `roster` - fall back
+  // to the full player map (every fetched free agent is in there too).
+  const resolve = (pid) => rosterById.get(pid) || allPlayersById.get(pid);
   const rows = bySlot
     .map(([slotLabel, pid]) => {
-      const p = playersById.get(pid);
-      return p ? playerRow(p, week, currentWeek, slotLabel.replace(/\d+$/, "")) : "";
+      const p = resolve(pid);
+      return p ? playerRow(p, week, currentWeek, slotLabel.replace(/\d+$/, ""), streamed.has(pid)) : "";
     })
     .join("");
   const ourTotal = bySlot.reduce((acc, [, pid]) => {
-    const p = playersById.get(pid);
+    const p = resolve(pid);
     return acc + (p ? projValueFor(p, week, currentWeek) || 0 : 0);
   }, 0);
 
-  const bench = (lineupWeek.bench || []).map((id) => playersById.get(id)).filter(Boolean);
+  const bench = (lineupWeek.bench || []).map((id) => rosterById.get(id)).filter(Boolean);
   const benchRows = bench.map((p) => playerRow(p, week, currentWeek, "Bench")).join("");
   const benchTotal = bench.reduce((acc, p) => acc + (projValueFor(p, week, currentWeek) || 0), 0);
 
@@ -187,7 +198,7 @@ export function renderStartSit(container, data, slug) {
           <label>Team:</label><select id="startsit-team-select">${teamOptions}</select>
           <label>Week:</label><select id="startsit-week-select">${weekOptions.map((w) => `<option value="${w}" ${w === selectedWeek ? "selected" : ""}>${w}${w === data.meta.current_week ? " (cur)" : ""}</option>`).join("")}</select>
         </div>
-        ${lineupSection(roster, selectedWeek, lineupWeek, data.meta.current_week)}
+        ${lineupSection(roster, selectedWeek, lineupWeek, data.meta.current_week, data.playersById)}
         ${selectedWeek === data.meta.current_week
           ? `<h3>Changes vs. your ESPN lineup</h3><div class="table-wrap">${changesTable(lineupTeam.changes_vs_espn, data.playersById)}</div>`
           : ""}

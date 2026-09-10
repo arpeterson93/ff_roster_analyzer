@@ -19,12 +19,16 @@ function miniLineup(teamId, week, data) {
   const lineupWeek = lineupTeam ? lineupTeam.weeks[String(week)] : null;
   if (!lineupWeek) return `<p class="muted small">No projection for this week.</p>`;
 
+  const streamed = new Set(lineupWeek.streamed || []);
   const bySlot = Object.entries(lineupWeek.slots || {}).sort(([a], [b]) => sortByPositionOrder(a, b, (s) => s.replace(/\d+$/, "")));
   const rows = bySlot
     .map(([slot, pid]) => {
       const p = data.playersById.get(pid);
       if (!p) return "";
-      return `<tr><td class="muted small">${slot.replace(/\d+$/, "")}</td><td>${posTag(p.position)} ${escapeHtml(p.name)}</td><td>${fmt(pointsForWeek(p, week), 1)}</td></tr>`;
+      // A rostered starter was on bye - this is the best free agent
+      // available that week instead (see docs/js/startsit.js's same badge).
+      const badge = streamed.has(pid) ? ` <span class="pill small stream-badge" title="Free-agent bye-week fill-in, not on your roster">FA</span>` : "";
+      return `<tr class="${streamed.has(pid) ? "streamed-row" : ""}"><td class="muted small">${slot.replace(/\d+$/, "")}</td><td>${posTag(p.position)} ${escapeHtml(p.name)}${badge}</td><td>${fmt(pointsForWeek(p, week), 1)}</td></tr>`;
     })
     .join("");
   const bench = (lineupWeek.bench || [])

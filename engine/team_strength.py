@@ -96,6 +96,52 @@ def optimal_lineup_for_week(
     return optimal_lineup(entries, slots, eligibility)
 
 
+def optimal_lineup_for_week_with_bye_fill(
+    player_ids: list[str],
+    players: dict[str, PlayerCtx],
+    free_agents_by_pos: dict[str, list[PlayerCtx]],
+    week: int,
+    slots: dict[str, int],
+    eligibility: dict[str, set[str]],
+    bye_week_by_player: dict[str, int | None],
+) -> tuple[float, dict[str, str], set[str]]:
+    """Like optimal_lineup_for_week, but any starting slot whose optimal
+    ROSTERED occupant is on bye that specific week gets that slot replaced by
+    the single best-projected eligible free agent for that week instead -
+    picking up a real, displayable stream for an obvious bye gap. Narrower
+    than lineup_total_with_streaming (which fires whenever a position
+    aggregate is fully zeroed, for valuation purposes only): this only ever
+    displaces a player confirmed on bye that week, never a real non-bye
+    starter just because a free agent happens to project higher - streaming
+    is an opt-in suggestion here, not a silent "always take the best
+    available player" optimizer. Returns (total, assignment, streamed_ids) -
+    streamed_ids is the subset of assignment's values that are free-agent
+    fill-ins (not on the roster), for the frontend to flag distinctly."""
+    total, assignment = optimal_lineup_for_week(player_ids, players, week, slots, eligibility)
+    instance_to_base = dict(expand_slots(slots))
+    streamed: set[str] = set()
+    used_fa_ids: set[str] = set()
+    for slot_label, pid in list(assignment.items()):
+        if bye_week_by_player.get(pid) != week:
+            continue
+        base_label = instance_to_base[slot_label]
+        candidates = [
+            fa
+            for pos in eligibility[base_label]
+            for fa in free_agents_by_pos.get(pos, [])
+            if fa.id not in used_fa_ids
+        ]
+        best_fa = max(candidates, key=lambda f: f.weekly.get(week, 0.0), default=None)
+        best_fa_pts = best_fa.weekly.get(week, 0.0) if best_fa else 0.0
+        if best_fa is None or best_fa_pts <= 0:
+            continue
+        total += best_fa_pts  # the byed player already contributed ~0 to `total`
+        assignment[slot_label] = best_fa.id
+        streamed.add(best_fa.id)
+        used_fa_ids.add(best_fa.id)
+    return total, assignment, streamed
+
+
 def depth_values_by_week(
     team_player_ids: list[str],
     players: dict[str, PlayerCtx],
@@ -154,12 +200,20 @@ def position_strength(
     slots: dict[str, int],
     eligibility: dict[str, set[str]],
     positions: list[str],
+    free_agents_by_pos: dict[str, list[PlayerCtx]],
+    bye_week_by_player: dict[str, int | None],
 ) -> dict[str, float]:
     """Points/week contributed by each position in the optimal lineup, with
-    flex-slot points attributed to the assigned player's own position."""
+    flex-slot points attributed to the assigned player's own position. A
+    bye-week slot counts its streamed-in free agent's points (see
+    optimal_lineup_for_week_with_bye_fill) - the free agent is NOT added to
+    team_player_ids, so it never shows up as a roster/depth-chart entry
+    anywhere else, only in this points/week aggregate."""
     totals = {pos: 0.0 for pos in positions}
     for w in weeks:
-        _, assignment = optimal_lineup_for_week(team_player_ids, players, w, slots, eligibility)
+        _, assignment, _ = optimal_lineup_for_week_with_bye_fill(
+            team_player_ids, players, free_agents_by_pos, w, slots, eligibility, bye_week_by_player
+        )
         for pid in assignment.values():
             pos = players[pid].position
             totals[pos] = totals.get(pos, 0.0) + players[pid].weekly.get(w, 0.0)
@@ -173,6 +227,8 @@ def slot_strength(
     weeks: list[int],
     slots: dict[str, int],
     eligibility: dict[str, set[str]],
+    free_agents_by_pos: dict[str, list[PlayerCtx]],
+    bye_week_by_player: dict[str, int | None],
 ) -> tuple[dict[str, float], list[str]]:
     """Points/week per SPECIFIC starting slot (QB, RB, WR1, WR2, TE, FLEX1,
     FLEX2, K, ...) rather than aggregated by real position. For a multi-count
@@ -180,7 +236,8 @@ def slot_strength(
     re-ranked by that week's own points ("WR1" = whichever WR scored more
     that week) rather than trusting the optimizer's arbitrary column
     assignment, so the label consistently means "your stronger one" across
-    weeks. Returns (ppw_by_slot, ordered_slot_labels)."""
+    weeks. Bye-week slots stream a free agent in the same way
+    position_strength does. Returns (ppw_by_slot, ordered_slot_labels)."""
     slot_instances = expand_slots(slots)
     ordered_labels = [inst for inst, _ in slot_instances]
     groups: dict[str, list[str]] = {}
@@ -189,7 +246,9 @@ def slot_strength(
 
     totals = {inst: 0.0 for inst in ordered_labels}
     for w in weeks:
-        _, assignment = optimal_lineup_for_week(team_player_ids, players, w, slots, eligibility)
+        _, assignment, _ = optimal_lineup_for_week_with_bye_fill(
+            team_player_ids, players, free_agents_by_pos, w, slots, eligibility, bye_week_by_player
+        )
         for insts in groups.values():
             pts = sorted(
                 (players[assignment[inst]].weekly.get(w, 0.0) for inst in insts if assignment.get(inst) in players),

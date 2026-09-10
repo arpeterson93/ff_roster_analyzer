@@ -7,6 +7,7 @@ from engine.team_strength import (
     fa_values,
     lineup_total,
     lineup_total_with_streaming,
+    optimal_lineup_for_week_with_bye_fill,
     pickups,
     position_strength,
     rank_and_compare,
@@ -78,7 +79,7 @@ def test_position_strength_attributes_flex_to_real_position():
         "rb2": _player("rb2", "RB", 15.0),  # fills the FLEX slot
         "wr1": _player("wr1", "WR", 5.0),
     }
-    ppw = position_strength(["rb1", "rb2", "wr1"], players, WEEKS, slots, eligibility, ["RB", "WR"])
+    ppw = position_strength(["rb1", "rb2", "wr1"], players, WEEKS, slots, eligibility, ["RB", "WR"], {}, {})
     assert ppw["RB"] == pytest.approx(35.0)  # both RBs start (one via FLEX), attributed to RB
     assert ppw["WR"] == pytest.approx(0.0)
 
@@ -91,7 +92,7 @@ def test_slot_strength_reranks_by_that_weeks_points_not_optimizer_column():
         "wr_a": PlayerCtx(id="wr_a", position="WR", ros_total=25.0, weekly={1: 20.0, 2: 5.0}),
         "wr_b": PlayerCtx(id="wr_b", position="WR", ros_total=25.0, weekly={1: 10.0, 2: 15.0}),
     }
-    result, labels = slot_strength(["wr_a", "wr_b"], players, weeks, slots, eligibility)
+    result, labels = slot_strength(["wr_a", "wr_b"], players, weeks, slots, eligibility, {}, {})
     assert labels == ["WR1", "WR2"]
     # WR1 = the stronger performer each week (20, then 15) -> avg 17.5
     assert result["WR1"] == pytest.approx(17.5)
@@ -104,9 +105,65 @@ def test_slot_strength_unfilled_instance_contributes_zero():
     eligibility = {"WR": {"WR"}}
     weeks = [1]
     players = {"wr_a": PlayerCtx(id="wr_a", position="WR", ros_total=10.0, weekly={1: 10.0})}
-    result, labels = slot_strength(["wr_a"], players, weeks, slots, eligibility)
+    result, labels = slot_strength(["wr_a"], players, weeks, slots, eligibility, {}, {})
     assert result["WR1"] == pytest.approx(10.0)
     assert result["WR2"] == pytest.approx(0.0)
+
+
+def test_bye_fill_replaces_only_the_byed_slot():
+    slots = {"RB": 1}
+    eligibility = {"RB": {"RB"}}
+    week = 3
+    players = {
+        "rb1": PlayerCtx(id="rb1", position="RB", ros_total=20.0, weekly={3: 0.0}),  # on bye
+        "fa1": PlayerCtx(id="fa1", position="RB", ros_total=8.0, weekly={3: 6.0}),
+    }
+    free_agents = {"RB": [players["fa1"]]}
+    total, assignment, streamed = optimal_lineup_for_week_with_bye_fill(
+        ["rb1"], players, free_agents, week, slots, eligibility, {"rb1": 3}
+    )
+    assert assignment["RB"] == "fa1"
+    assert streamed == {"fa1"}
+    assert total == pytest.approx(6.0)
+
+
+def test_bye_fill_never_displaces_a_non_bye_starter():
+    # fa1 projects HIGHER than rb1, but rb1 isn't on bye - streaming is only
+    # a fill-in for a confirmed bye gap, never a "take the best player"
+    # optimizer that would bench a real, healthy starter.
+    slots = {"RB": 1}
+    eligibility = {"RB": {"RB"}}
+    week = 3
+    players = {
+        "rb1": PlayerCtx(id="rb1", position="RB", ros_total=20.0, weekly={3: 10.0}),
+        "fa1": PlayerCtx(id="fa1", position="RB", ros_total=25.0, weekly={3: 15.0}),
+    }
+    free_agents = {"RB": [players["fa1"]]}
+    total, assignment, streamed = optimal_lineup_for_week_with_bye_fill(
+        ["rb1"], players, free_agents, week, slots, eligibility, {}
+    )
+    assert assignment["RB"] == "rb1"
+    assert streamed == set()
+    assert total == pytest.approx(10.0)
+
+
+def test_bye_fill_does_not_double_book_the_same_free_agent():
+    slots = {"RB": 2}
+    eligibility = {"RB": {"RB"}}
+    week = 3
+    players = {
+        "rb1": PlayerCtx(id="rb1", position="RB", ros_total=20.0, weekly={3: 0.0}),
+        "rb2": PlayerCtx(id="rb2", position="RB", ros_total=18.0, weekly={3: 0.0}),
+        "fa1": PlayerCtx(id="fa1", position="RB", ros_total=10.0, weekly={3: 8.0}),
+        "fa2": PlayerCtx(id="fa2", position="RB", ros_total=6.0, weekly={3: 4.0}),
+    }
+    free_agents = {"RB": [players["fa1"], players["fa2"]]}
+    total, assignment, streamed = optimal_lineup_for_week_with_bye_fill(
+        ["rb1", "rb2"], players, free_agents, week, slots, eligibility, {"rb1": 3, "rb2": 3}
+    )
+    assert streamed == {"fa1", "fa2"}
+    assert set(assignment.values()) == {"fa1", "fa2"}
+    assert total == pytest.approx(12.0)
 
 
 def test_rank_and_compare():
