@@ -1,5 +1,5 @@
 import { fmt, escapeHtml, getYourTeam, setYourTeam } from "./state.js";
-import { POSITION_COLOR, INJURY_BADGE, opponentCellHtml, formatKickoff, sortByPositionOrder, teamLabel } from "./colors.js";
+import { POSITION_COLOR, INJURY_BADGE, opponentCellHtml, ratioForRank, colorForRatio, formatKickoff, sortByPositionOrder, teamLabel } from "./colors.js";
 import { openPlayerModal } from "./playermodal.js";
 import { openPointsAgainstModal } from "./pointsagainstmodal.js";
 
@@ -13,12 +13,10 @@ function healthBadge(status) {
   return letters ? `<span class="pill" style="background:var(--red-600)">${letters}</span>` : "";
 }
 
-// Desktop keeps the separate Slot/Player/Opp/Proj/ESPN-proj columns (marked
-// ".desktop-col" where they'd be redundant on mobile). On mobile (see the
-// ".desktop-col"/".mobile-line" media query in styles.css) those columns
-// collapse away and everything folds into two stacked blocks per row -
-// Player (name+badge, team/ownership, kickoff+opponent) and Score (our
-// projection, ESPN's beneath it) - matching a native app's compact list.
+// Desktop keeps a separate Opp column (marked ".desktop-col"). On mobile (see
+// the ".desktop-col"/".mobile-line" media query in styles.css) that column
+// collapses away and its info folds into the Player cell instead - matching
+// a native app's compact list.
 function playerMetaLine(p) {
   const parts = [];
   if (p.nfl_team) parts.push(escapeHtml(p.nfl_team));
@@ -27,11 +25,22 @@ function playerMetaLine(p) {
   return parts.join(" · ");
 }
 
-function playerRow(p, week, slotLabel) {
+// Current week already gets its "our" projection straight from ESPN (see
+// rankings.js), so there's no separate proprietary number to show alongside
+// it there - only future weeks have our own week-by-week projection
+// (p.weekly[].projected, the same field schedule.js reads).
+function projValueFor(p, week, currentWeek) {
+  if (week === currentWeek) return p.espn_projected_week;
+  const weekEntry = (p.weekly || []).find((w) => w.week === week);
+  return weekEntry ? weekEntry.projected : null;
+}
+
+function playerRow(p, week, currentWeek, slotLabel) {
   const weekEntry = (p.weekly || []).find((w) => w.week === week) || {};
   const slotCell = slotLabel !== undefined ? `<td class="muted small">${slotLabel}</td>` : "";
   const kickoff = formatKickoff(weekEntry.kickoff);
   const oppAttrs = `data-opp-cell data-team="${escapeHtml(weekEntry.opponent || "")}" data-pos="${p.position}"`;
+  const proj = projValueFor(p, week, currentWeek);
   return `<tr data-player-id="${p.id}" class="clickable-row">
     ${slotCell}
     <td>
@@ -43,44 +52,39 @@ function playerRow(p, week, slotLabel) {
       ${kickoff ? `<div class="muted small row-meta">${kickoff}</div>` : ""}
       <div>${opponentCellHtml(weekEntry)}</div>
     </td>
-    <td>
-      <div><strong>${fmt(p.this_week, 1)}</strong></div>
-      <div class="muted small row-meta mobile-line">ESPN ${fmt(p.espn_projected_week, 1)}</div>
-    </td>
-    <td class="desktop-col">${fmt(p.espn_projected_week, 1)}</td>
+    <td><strong>${fmt(proj, 1)}</strong></td>
   </tr>`;
 }
 
-function lineupSection(roster, week, lineupWeek) {
+function lineupSection(roster, week, lineupWeek, currentWeek) {
   const slots = lineupWeek.slots || {};
   const bySlot = Object.entries(slots).sort(([a], [b]) => sortByPositionOrder(a, b, (s) => s.replace(/\d+$/, "")));
   const playersById = new Map(roster.map((p) => [p.id, p]));
   const rows = bySlot
     .map(([slotLabel, pid]) => {
       const p = playersById.get(pid);
-      return p ? playerRow(p, week, slotLabel.replace(/\d+$/, "")) : "";
+      return p ? playerRow(p, week, currentWeek, slotLabel.replace(/\d+$/, "")) : "";
     })
     .join("");
-  const startedIds = new Set(Object.values(slots));
-  const ourTotal = bySlot.reduce((acc, [, pid]) => acc + ((playersById.get(pid) || {}).this_week || 0), 0);
-  const espnTotal = bySlot.reduce((acc, [, pid]) => acc + ((playersById.get(pid) || {}).espn_projected_week || 0), 0);
+  const ourTotal = bySlot.reduce((acc, [, pid]) => {
+    const p = playersById.get(pid);
+    return acc + (p ? projValueFor(p, week, currentWeek) || 0 : 0);
+  }, 0);
 
   const bench = (lineupWeek.bench || []).map((id) => playersById.get(id)).filter(Boolean);
-  const benchRows = bench.map((p) => playerRow(p, week)).join("");
-  const benchOurTotal = bench.reduce((acc, p) => acc + (p.this_week || 0), 0);
-  const benchEspnTotal = bench.reduce((acc, p) => acc + (p.espn_projected_week || 0), 0);
+  const benchRows = bench.map((p) => playerRow(p, week, currentWeek, "Bench")).join("");
+  const benchTotal = bench.reduce((acc, p) => acc + (projValueFor(p, week, currentWeek) || 0), 0);
 
   return `
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Slot</th><th>Player</th><th class="desktop-col">Opp</th><th>Score</th><th class="desktop-col">ESPN proj</th></tr></thead>
+        <thead><tr><th>Slot</th><th>Player</th><th class="desktop-col">Opp</th><th>Proj</th></tr></thead>
         <tbody>${rows}</tbody>
         <tfoot>
           <tr class="totals-row">
             <td colspan="2">Starters total</td>
             <td class="desktop-col"></td>
-            <td><strong>${fmt(ourTotal, 1)}</strong><div class="muted small mobile-line">ESPN ${fmt(espnTotal, 1)}</div></td>
-            <td class="desktop-col"><strong>${fmt(espnTotal, 1)}</strong></td>
+            <td><strong>${fmt(ourTotal, 1)}</strong></td>
           </tr>
         </tfoot>
       </table>
@@ -88,19 +92,34 @@ function lineupSection(roster, week, lineupWeek) {
     <h3>Bench <span class="muted small">(sorted by ESPN proj)</span></h3>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Player</th><th class="desktop-col">Opp</th><th>Score</th><th class="desktop-col">ESPN proj</th></tr></thead>
+        <thead><tr><th>Slot</th><th>Player</th><th class="desktop-col">Opp</th><th>Proj</th></tr></thead>
         <tbody>${benchRows}</tbody>
         <tfoot>
           <tr class="totals-row">
-            <td>Bench total</td>
+            <td colspan="2">Bench total</td>
             <td class="desktop-col"></td>
-            <td><strong>${fmt(benchOurTotal, 1)}</strong><div class="muted small mobile-line">ESPN ${fmt(benchEspnTotal, 1)}</div></td>
-            <td class="desktop-col"><strong>${fmt(benchEspnTotal, 1)}</strong></td>
+            <td><strong>${fmt(benchTotal, 1)}</strong></td>
           </tr>
         </tfoot>
       </table>
     </div>
   `;
+}
+
+// Full-cell color fill (not a pill) with the opponent centered above its
+// matchup rank, no parentheses - this grid is dense (one column per
+// remaining week) so every pixel of cell width matters more here than in a
+// single "Opp" column elsewhere.
+function rosCellHtml(weekEntry) {
+  if (!weekEntry || !weekEntry.opponent) return `<td class="heat-cell ros-cell muted">BYE</td>`;
+  const label = (weekEntry.home === false ? "@" : "") + weekEntry.opponent;
+  const hasRank = weekEntry.rank !== null && weekEntry.rank !== undefined;
+  const color = colorForRatio(ratioForRank(weekEntry.rank));
+  const rankTitle = hasRank ? `title="Matchup rank ${weekEntry.rank} of 32 (1 = best)"` : "";
+  return `<td class="heat-cell ros-cell" style="background:${color}" ${rankTitle}>
+    <div class="ros-opp">${label}</div>
+    ${hasRank ? `<div class="ros-rank">${weekEntry.rank}</div>` : ""}
+  </td>`;
 }
 
 function scheduleGrid(roster, currentWeek, finalWeek) {
@@ -112,11 +131,11 @@ function scheduleGrid(roster, currentWeek, finalWeek) {
   const rows = sorted
     .map((p) => {
       const byWeek = new Map((p.weekly || []).map((w) => [w.week, w]));
-      const cells = weeks.map((w) => `<td>${opponentCellHtml(byWeek.get(w))}</td>`).join("");
-      return `<tr data-player-id="${p.id}" class="clickable-row"><td>${posTag(p.position)} ${escapeHtml(p.name)}</td>${cells}</tr>`;
+      const cells = weeks.map((w) => rosCellHtml(byWeek.get(w))).join("");
+      return `<tr data-player-id="${p.id}" class="clickable-row"><td class="ros-name">${posTag(p.position)} ${escapeHtml(p.name)}</td>${cells}</tr>`;
     })
     .join("");
-  return `<table>${header}<tbody>${rows}</tbody></table>`;
+  return `<table class="ros-grid">${header}<tbody>${rows}</tbody></table>`;
 }
 
 function changesTable(changes, playersById) {
@@ -166,9 +185,9 @@ export function renderStartSit(container, data, slug) {
       <div class="card">
         <div class="select-row">
           <label>Team:</label><select id="startsit-team-select">${teamOptions}</select>
-          <label>Week:</label><select id="startsit-week-select">${weekOptions.map((w) => `<option value="${w}" ${w === selectedWeek ? "selected" : ""}>${w}${w === data.meta.current_week ? " (current)" : ""}</option>`).join("")}</select>
+          <label>Week:</label><select id="startsit-week-select">${weekOptions.map((w) => `<option value="${w}" ${w === selectedWeek ? "selected" : ""}>${w}${w === data.meta.current_week ? " (cur)" : ""}</option>`).join("")}</select>
         </div>
-        ${lineupSection(roster, selectedWeek, lineupWeek)}
+        ${lineupSection(roster, selectedWeek, lineupWeek, data.meta.current_week)}
         ${selectedWeek === data.meta.current_week
           ? `<h3>Changes vs. your ESPN lineup</h3><div class="table-wrap">${changesTable(lineupTeam.changes_vs_espn, data.playersById)}</div>`
           : ""}

@@ -40,6 +40,38 @@ def lineup_total(
     return sum(lineup_total_by_week(player_ids, players, weeks, slots, eligibility).values())
 
 
+def lineup_total_with_streaming_by_week(
+    player_ids: list[str],
+    players: dict[str, PlayerCtx],
+    free_agents_by_pos: dict[str, list[PlayerCtx]],
+    weeks: list[int],
+    slots: dict[str, int],
+    eligibility: dict[str, set[str]],
+) -> dict[int, float]:
+    """Per-week breakdown behind lineup_total_with_streaming (see there for
+    why bye-week free-agent streaming is modeled here). The replacement is
+    picked FRESH each week by that week's own projection, not by a single
+    free agent's season-long ros_total chosen once up front - a real manager
+    streams whoever has the best matchup that particular week, and the best
+    ros_total kicker/DST on the wire isn't necessarily the one projected
+    highest for any given week."""
+    result = {}
+    for w in weeks:
+        entries = [(pid, players[pid].position, players[pid].weekly.get(w, 0.0)) for pid in player_ids if pid in players]
+        rostered_by_pos: dict[str, float] = {}
+        for _, pos, pts in entries:
+            rostered_by_pos[pos] = max(rostered_by_pos.get(pos, 0.0), pts)
+        for pos, fas in free_agents_by_pos.items():
+            if rostered_by_pos.get(pos, 0.0) > 0:
+                continue
+            best_fa_week_pts = max((fa.weekly.get(w, 0.0) for fa in fas), default=0.0)
+            if best_fa_week_pts > 0:
+                entries.append((f"__stream_{pos}__", pos, best_fa_week_pts))
+        week_total, _ = optimal_lineup(entries, slots, eligibility)
+        result[w] = week_total
+    return result
+
+
 def lineup_total_with_streaming(
     player_ids: list[str],
     players: dict[str, PlayerCtx],
@@ -54,19 +86,7 @@ def lineup_total_with_streaming(
     start instead. Models the ordinary waiver-wire streaming any manager
     would do, so a "pickup" suggestion doesn't take credit for solving a gap
     that free-agent streaming already trivially covers."""
-    best_fa_by_pos = {pos: max(fas, key=lambda f: f.ros_total, default=None) for pos, fas in free_agents_by_pos.items()}
-    total = 0.0
-    for w in weeks:
-        entries = [(pid, players[pid].position, players[pid].weekly.get(w, 0.0)) for pid in player_ids if pid in players]
-        rostered_by_pos: dict[str, float] = {}
-        for _, pos, pts in entries:
-            rostered_by_pos[pos] = max(rostered_by_pos.get(pos, 0.0), pts)
-        for pos, fa in best_fa_by_pos.items():
-            if fa is not None and rostered_by_pos.get(pos, 0.0) <= 0:
-                entries.append((f"__stream_{pos}__", pos, fa.weekly.get(w, 0.0)))
-        week_total, _ = optimal_lineup(entries, slots, eligibility)
-        total += week_total
-    return total
+    return sum(lineup_total_with_streaming_by_week(player_ids, players, free_agents_by_pos, weeks, slots, eligibility).values())
 
 
 def optimal_lineup_for_week(
@@ -273,10 +293,11 @@ def trade_targets(
 ) -> list[dict]:
     """1-for-1 swaps with every other team (top `candidate_pool_size` by
     ros_total each side) plus 2-for-1 swaps (top `two_for_one_pool_size` each
-    side), scored by each side's real before/after lineup-total delta."""
-    from engine.trades import evaluate  # local import: trades.py also imports this module
-
-    base_total = lineup_total(team_player_ids, players, weeks, slots, eligibility)
+    side), scored by each side's real before/after lineup-total delta (with
+    waiver-wire streaming assumed for any position a trade leaves empty - see
+    evaluate_with_streaming - so a trade isn't flagged as a big loss for a
+    side that could trivially backfill the position on the wire instead)."""
+    from engine.trades import evaluate_with_streaming  # local import: trades.py also imports this module
 
     def top_n(pids: list[str], n: int) -> list[str]:
         return sorted((p for p in pids if p in players), key=lambda p: players[p].ros_total, reverse=True)[:n]
@@ -300,12 +321,13 @@ def trade_targets(
                     two_for_one.append(([give_a, give_b], [get]))
 
         for gives, gets in one_for_one + two_for_one:
-            result = evaluate(
+            result = evaluate_with_streaming(
                 gives_a=gives,
                 gives_b=gets,
                 roster_a=team_player_ids,
                 roster_b=partner_roster,
                 players=players,
+                free_agents_by_pos=free_agents_by_pos,
                 weeks=weeks,
                 slots=slots,
                 eligibility=eligibility,

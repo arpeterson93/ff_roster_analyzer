@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from engine.team_strength import PlayerCtx
-from engine.trades import evaluate
+from engine.team_strength import PlayerCtx, lineup_total_with_streaming_by_week
+from engine.trades import evaluate, evaluate_with_streaming
 
 SLOTS = {"QB": 1, "RB": 1}
 ELIGIBILITY = {"QB": {"QB"}, "RB": {"RB"}}
@@ -90,6 +90,54 @@ def test_raw_given_received_are_ros_totals():
     )
     assert result.side_a.raw_given == pytest.approx(15.0)  # rbA2 ros_total = 5*3
     assert result.side_a.raw_received == pytest.approx(66.0)  # rbB2 ros_total = 22*3
+
+
+def test_evaluate_with_streaming_discounts_a_trade_the_wire_could_replace():
+    # Team A's only kicker is on bye in week 2. Team B offers a kicker who
+    # doesn't help team A's own roster otherwise, but does fill that bye.
+    # A plain evaluate() gives full credit for filling the gap; the
+    # streaming-aware version should only credit the edge over what a free
+    # agent kicker already on the wire would have scored that same week.
+    slots = {"K": 1}
+    eligibility = {"K": {"K"}}
+    weeks = [1, 2]
+    players = {
+        "kA1": PlayerCtx(id="kA1", position="K", ros_total=10.0, weekly={1: 10.0, 2: 0.0}),
+        "kB1": PlayerCtx(id="kB1", position="K", ros_total=16.0, weekly={1: 8.0, 2: 8.0}),
+        "otherB": PlayerCtx(id="otherB", position="K", ros_total=2.0, weekly={1: 1.0, 2: 1.0}),
+    }
+    free_agents = {"K": [PlayerCtx(id="fa_k", position="K", ros_total=14.0, weekly={1: 7.0, 2: 7.0})]}
+    roster_a = ["kA1"]
+    roster_b = ["kB1", "otherB"]
+
+    plain = evaluate(
+        gives_a=[], gives_b=["kB1"], roster_a=roster_a, roster_b=roster_b,
+        players=players, weeks=weeks, slots=slots, eligibility=eligibility,
+    )
+    streamed = evaluate_with_streaming(
+        gives_a=[], gives_b=["kB1"], roster_a=roster_a, roster_b=roster_b,
+        players=players, free_agents_by_pos=free_agents, weeks=weeks, slots=slots, eligibility=eligibility,
+    )
+    assert plain.side_a.gain == pytest.approx(8.0)  # full week-2 swing: 0 -> 8
+    assert streamed.side_a.gain == pytest.approx(1.0)  # only kB1's edge over the week-2 FA (8 - 7)
+
+
+def test_streaming_replacement_is_picked_per_week_not_by_season_total():
+    # Free agent A has the higher ros_total overall but is worse in week 2
+    # specifically; free agent B is the opposite. A real manager streams
+    # whoever has the better matchup THAT week, so week 2's fill should come
+    # from FA B (5.0), not from FA A (1.0) just because its season total is
+    # bigger.
+    slots = {"K": 1}
+    eligibility = {"K": {"K"}}
+    weeks = [1, 2]
+    players = {"k1": PlayerCtx(id="k1", position="K", ros_total=10.0, weekly={1: 10.0, 2: 0.0})}
+    fa_high_total = PlayerCtx(id="fa_a", position="K", ros_total=20.0, weekly={1: 19.0, 2: 1.0})
+    fa_better_week2 = PlayerCtx(id="fa_b", position="K", ros_total=6.0, weekly={1: 1.0, 2: 5.0})
+    free_agents = {"K": [fa_high_total, fa_better_week2]}
+
+    by_week = lineup_total_with_streaming_by_week(["k1"], players, free_agents, weeks, slots, eligibility)
+    assert by_week[2] == pytest.approx(5.0)
 
 
 def test_fixture_matches_committed_json():

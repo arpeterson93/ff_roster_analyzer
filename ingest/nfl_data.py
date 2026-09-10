@@ -128,6 +128,24 @@ def team_stats(seasons: int | list[int], current_season: int | None = None) -> p
     return _normalize_team_columns(df, ["team", "opponent_team"])
 
 
+def snap_counts(seasons: int | list[int], current_season: int | None = None) -> pl.DataFrame:
+    """Weekly per-player offense/defense/special-teams snap counts (offense_pct
+    etc.) - used for the FAAB bid estimator's usage-trend features (see
+    engine/faab_estimate.py), joined by pfr_player_id (NOT name - see
+    tools/faab_history/build_training_table.py's notes on that)."""
+    seasons_list = [seasons] if isinstance(seasons, int) else list(seasons)
+    try:
+        df = _cached_load(
+            "snap_counts", seasons_list, lambda: nfl.load_snap_counts(seasons_list), current_season=current_season
+        )
+    except ConnectionError:
+        probe = _cached_load(
+            "snap_counts_schema_probe", [2023], lambda: nfl.load_snap_counts([2023]), current_season=None
+        )
+        return probe.clear()
+    return _normalize_team_columns(df, ["team", "opponent"])
+
+
 def playerids() -> pl.DataFrame:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     path = CACHE_DIR / "playerids.parquet"

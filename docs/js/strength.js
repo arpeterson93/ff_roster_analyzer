@@ -22,10 +22,10 @@ function slotBarSort(a, b) {
   return idx(a) - idx(b) || Number(a.match(/\d+$/) || 0) - Number(b.match(/\d+$/) || 0);
 }
 
-function positionBars(strength) {
+function positionBars(strength, total) {
   const positions = Object.keys(strength).sort(slotBarSort);
   const maxAbs = Math.max(1, ...positions.map((p) => Math.abs(strength[p].vs_avg)));
-  return positions
+  const bars = positions
     .map((pos) => {
       const s = strength[pos];
       const ratio = 0.5 + (s.vs_avg / maxAbs) * 0.5;
@@ -40,6 +40,33 @@ function positionBars(strength) {
       </div>`;
     })
     .join("");
+  if (!total) return bars;
+  const totalRatio = 0.5 + Math.max(-1, Math.min(1, total.vs_avg / maxAbs)) * 0.5;
+  const totalWidthPct = Math.min(100, Math.abs(total.vs_avg / maxAbs) * 50);
+  const totalSide = total.vs_avg >= 0 ? "right" : "left";
+  const totalBar = `<div class="bar-row bar-row-total">
+    <div class="bar-label"><strong>Total</strong> <span class="muted">#${total.rank}</span></div>
+    <div class="bar-track">
+      <div class="bar-fill" style="width:${totalWidthPct}%; background:${colorForRatio(totalRatio)}; margin-${totalSide === "right" ? "left" : "right"}:auto;"></div>
+    </div>
+    <div class="bar-value"><strong>${fmt(total.ppw, 1)}</strong> <span class="muted">(${total.vs_avg >= 0 ? "+" : ""}${fmt(total.vs_avg, 1)})</span></div>
+  </div>`;
+  return bars + totalBar;
+}
+
+// Total starting-lineup strength: the per-position vs_avg values are each
+// already (this team's ppw at that position) - (league-average ppw at that
+// position), so they sum linearly into one "whole lineup vs. a fully average
+// lineup" figure. Ranked against every other team's own sum of the same
+// per-position figures (not against slot_strength, which is finer-grained
+// than a real position and only computed for the currently selected team).
+function computeTotalStrength(data, team) {
+  const positions = data.meta.positions;
+  const totalFor = (t) => positions.reduce((acc, pos) => acc + (t.position_strength[pos]?.vs_avg || 0), 0);
+  const ordered = data.teams.map((t) => ({ team_id: t.team_id, total: totalFor(t) })).sort((a, b) => b.total - a.total);
+  const rank = ordered.findIndex((t) => t.team_id === team.team_id) + 1;
+  const ppw = positions.reduce((acc, pos) => acc + (team.position_strength[pos]?.ppw || 0), 0);
+  return { ppw, vs_avg: totalFor(team), rank };
 }
 
 function trendSparkline(weekly) {
@@ -95,19 +122,38 @@ function tradeTargetsTable(targets, playersById, teamsById) {
 
 function leagueWideTable(data, yourTeamId) {
   const positions = data.meta.positions;
-  const header = `<tr><th>Team</th>${positions.map((p) => `<th>${p}</th>`).join("")}</tr>`;
+  // Color relative to the SPREAD WITHIN EACH POSITION'S OWN COLUMN (highest
+  // ppw in that column = green, lowest = red, middle = yellow) rather than a
+  // fixed points/week scale shared across every column - positions with a
+  // wide gap between the best and worst team (e.g. RB) and positions with a
+  // narrow one (e.g. K) would otherwise all get squeezed onto the same ruler,
+  // making two very different RB values look like the same shade.
+  const ranges = {};
+  positions.forEach((pos) => {
+    const vals = data.teams.map((t) => t.position_strength[pos]?.ppw).filter((v) => v !== undefined && v !== null);
+    ranges[pos] = { min: Math.min(...vals), max: Math.max(...vals) };
+  });
+  const totalFor = (t) => positions.reduce((acc, pos) => acc + (t.position_strength[pos]?.ppw || 0), 0);
+  const totals = data.teams.map(totalFor);
+  const totalRange = { min: Math.min(...totals), max: Math.max(...totals) };
+
+  const header = `<tr><th>Team</th>${positions.map((p) => `<th>${p}</th>`).join("")}<th>Total</th></tr>`;
   const rows = data.teams
     .map((t) => {
       const cells = positions
         .map((pos) => {
           const s = t.position_strength[pos];
           if (!s) return "<td>–</td>";
-          const ratio = 0.5 + Math.max(-1, Math.min(1, s.vs_avg / 5)) * 0.5;
+          const { min, max } = ranges[pos];
+          const ratio = max > min ? (s.ppw - min) / (max - min) : 0.5;
           return `<td class="heat-cell" style="background:${colorForRatio(ratio)}">${fmt(s.ppw, 1)}</td>`;
         })
         .join("");
+      const total = totalFor(t);
+      const totalRatio = totalRange.max > totalRange.min ? (total - totalRange.min) / (totalRange.max - totalRange.min) : 0.5;
+      const totalCell = `<td class="heat-cell" style="background:${colorForRatio(totalRatio)}"><strong>${fmt(total, 1)}</strong></td>`;
       const isYours = t.team_id === yourTeamId;
-      return `<tr class="${isYours ? "your-team-row" : ""}"><td>${isYours ? "<strong>" : ""}${escapeHtml(teamLabel(t))}${isYours ? "</strong>" : ""}</td>${cells}</tr>`;
+      return `<tr class="${isYours ? "your-team-row" : ""}"><td>${isYours ? "<strong>" : ""}${escapeHtml(teamLabel(t))}${isYours ? "</strong>" : ""}</td>${cells}${totalCell}</tr>`;
     })
     .join("");
   return `<table>${header}${rows}</table>`;
@@ -129,8 +175,8 @@ export function renderStrength(container, data, slug) {
   container.innerHTML = `
     <div class="card">
       <div class="select-row"><label>Your team:</label> ${teamSelect(data, slug, team.team_id)}</div>
-      <h2>${escapeHtml(teamLabel(team))} - starting lineup strength vs. league average</h2>
-      ${positionBars(team.slot_strength)}
+      <h2>Starting Lineup vs. League Avg</h2>
+      ${positionBars(team.slot_strength, computeTotalStrength(data, team))}
       <h3>Depth (next-man-down value)</h3>
       <div class="table-wrap"><table><thead><tr><th>Slot</th><th>Player</th><th>Value</th><th>Value (w/ waivers)</th><th>Weekly trend</th></tr></thead><tbody>${depthTable(team.depth, data.playersById)}</tbody></table></div>
       <h3>Suggested pickups</h3>
@@ -139,7 +185,7 @@ export function renderStrength(container, data, slug) {
       <div class="table-wrap">${tradeTargetsTable(team.trade_targets, data.playersById, data.teamsById)}</div>
     </div>
     <div class="card">
-      <h2>League-wide position strength (points/week)</h2>
+      <h2>ROS Projected Points/Week</h2>
       <div class="table-wrap">${leagueWideTable(data, Number(team.team_id))}</div>
     </div>
   `;

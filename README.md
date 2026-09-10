@@ -109,6 +109,35 @@ editing the sheet directly. Either way, a change takes effect on the next
 pipeline run (daily cron, or trigger the `build` workflow manually), not
 instantly - the site doesn't recompute live in the browser.
 
+## Watch list sheet (synced Rankings watch list)
+
+The Rankings tab's ★ watch-list column works out of the box with no setup -
+it just saves to `localStorage` in that one browser. To make it follow you
+across devices/browsers, sync it through a Google Sheet the same way the
+Settings sheet works, with one difference: the site reads this sheet
+**live** from the browser (not once a day at pipeline build time), since a
+watch-list toggle should show up elsewhere right away.
+
+**One-time setup (optional):**
+
+1. Create a Google Sheet with a tab named exactly `Watchlist` and header row
+   `league_slug | team_id | player_id`. One row per watched player per team;
+   leave it empty otherwise, the site creates rows as you click ★.
+2. Share it as "Anyone with the link can view" (read unauthenticated via the
+   public CSV export endpoint, same as the Settings sheet).
+3. Put the sheet's id (the long string in its URL between `/d/` and `/edit`)
+   into `WATCHLIST_SHEET_ID` in `docs/js/watchlistConfig.js`.
+4. To let the site write back: open the sheet's Extensions → Apps Script,
+   paste in `tools/apps-script/watchlist_sync.gs`, then Deploy → New
+   deployment → type "Web app" → Execute as "Me" → Who has access "Anyone" →
+   Deploy. Copy the resulting Web App URL into `WATCHLIST_WEBAPP_URL` in
+   `docs/js/watchlistConfig.js`.
+
+There's no login, so "your team" (the same per-browser pick used everywhere
+else on the site) is what a watch list is keyed on - pick the same team on
+each device/browser to see the same list. Without steps 3-4, the ★ column
+still works, just local to that one browser.
+
 **Not yet built:** custom tiebreaker chains (head-to-head, points against,
 etc.) beyond ESPN's own `playoff_seed_tie_rule` - `engine/standings.py`
 currently only supports the single tiebreak ESPN reports

@@ -2,6 +2,7 @@ import { fmt, escapeHtml, getYourTeam } from "./state.js";
 import { POSITION_COLOR, INJURY_BADGE, opponentCellHtml, sortByPositionOrder, teamLabel } from "./colors.js";
 import { openPlayerModal } from "./playermodal.js";
 import { openPointsAgainstModal } from "./pointsagainstmodal.js";
+import { loadWatchlist, setWatched } from "./watchlist.js";
 
 const FLEX_POSITIONS = ["RB", "WR", "TE"];
 
@@ -19,9 +20,18 @@ function thisWeekEntry(p, currentWeek) {
   return (p.weekly || []).find((w) => w.week === currentWeek) || {};
 }
 
-function columns(data) {
+function columns(data, watched) {
   const yourTeamId = getYourTeam(data.meta.slug);
   return [
+    ...(yourTeamId !== null
+      ? [{
+          key: "_watch", label: "★", sortable: false,
+          fmt: (_v, p) => {
+            const isWatched = watched.has(p.id);
+            return `<span class="watch-star ${isWatched ? "watched" : ""}" data-watch-toggle data-player-id="${p.id}" title="${isWatched ? "Remove from watch list" : "Add to watch list"}">${isWatched ? "★" : "☆"}</span>`;
+          },
+        }]
+      : []),
     {
       key: "ros_overall_rank", label: "Rank",
       fmt: (v, p) => (v === null ? "–" : `${v} <span class="muted small">(${p.position}${p.ros_pos_rank ?? "–"})</span>`),
@@ -35,7 +45,6 @@ function columns(data) {
       key: "_opp", label: "Opp", sortable: false,
       fmt: (_v, p) => `<span data-opp-cell data-team="${escapeHtml(thisWeekEntry(p, data.meta.current_week).opponent || "")}" data-pos="${p.position}">${opponentCellHtml(thisWeekEntry(p, data.meta.current_week))}</span>`,
     },
-    { key: "this_week", label: "This wk", fmt: (v) => fmt(v, 1) },
     { key: "espn_projected_week", label: "ESPN wk", fmt: (v) => fmt(v, 1) },
     { key: "fp_week_projected_pts", label: "FP wk", fmt: (v) => (v === null || v === undefined ? "–" : fmt(v, 1)) },
     { key: "baseline_ppg", label: "Baseline", fmt: (v) => fmt(v, 1) },
@@ -47,9 +56,20 @@ function columns(data) {
       fmt: (v) => (v === null || v === undefined ? "–" : `${v >= 0 ? "+" : ""}${fmt(v, 1)}`),
     },
     { key: "owner", label: "Owner", fmt: (v) => escapeHtml(v) },
+    {
+      key: "_faab_est", label: "FAAB Est.", sortable: false,
+      fmt: (_v, p) => {
+        const est = (data.faabEstimates || {})[p.id];
+        if (!est) return "–";
+        const d = est.distribution;
+        return d
+          ? `$${fmt(est.comp_based, 0)} <span class="muted small">($${fmt(d.p25, 0)}–$${fmt(d.p75, 0)})</span>`
+          : `$${fmt(est.comp_based, 0)}`;
+      },
+    },
     ...(yourTeamId !== null
       ? [{
-          key: "_fa_value", label: "Value to you",
+          key: "_fa_value", label: "NMD",
           fmt: (_v, p) => {
             if (p.fantasy_team_id !== null) return "–";
             const teamValues = (data.faValues || {})[String(yourTeamId)] || {};
@@ -74,9 +94,10 @@ function sortValue(p, key, data) {
   return p[key];
 }
 
-function render(container, data, filters) {
-  const cols = columns(data);
+function render(container, data, filters, watched) {
+  const cols = columns(data, watched);
   let rows = data.players.filter((p) => {
+    if (filters.watchedOnly && !watched.has(p.id)) return false;
     if (filters.faOnly && p.fantasy_team_id !== null) return false;
     if (filters.team !== "ALL" && p.nfl_team !== filters.team) return false;
     if (filters.position === "ALL") return true;
@@ -111,14 +132,26 @@ function render(container, data, filters) {
     th.addEventListener("click", () => {
       const key = th.dataset.key;
       sortState = { key, dir: sortState.key === key ? -sortState.dir : key === "ros_overall_rank" ? 1 : -1 };
-      render(container, data, filters);
+      render(container, data, filters, watched);
     });
   });
   wrap.querySelectorAll("tr[data-player-id]").forEach((row) => {
     row.addEventListener("click", (e) => {
-      if (e.target.closest("[data-opp-cell]")) return;
+      if (e.target.closest("[data-opp-cell]") || e.target.closest("[data-watch-toggle]")) return;
       const p = data.playersById.get(row.dataset.playerId);
       if (p) openPlayerModal(p, data);
+    });
+  });
+  wrap.querySelectorAll("[data-watch-toggle]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const pid = el.dataset.playerId;
+      const yourTeamId = getYourTeam(data.meta.slug);
+      const nowWatched = !watched.has(pid);
+      if (nowWatched) watched.add(pid);
+      else watched.delete(pid);
+      setWatched(data.meta.slug, yourTeamId, pid, nowWatched);
+      render(container, data, filters, watched);
     });
   });
   wrap.querySelectorAll("[data-opp-cell]").forEach((cell) => {
@@ -131,6 +164,7 @@ function render(container, data, filters) {
 }
 
 export function renderRankings(container, data, slug) {
+  const yourTeamId = getYourTeam(slug);
   const positions = ["ALL", ...[...data.meta.positions].sort((a, b) => sortByPositionOrder(a, b)), "FLEX"];
   const nflTeams = ["ALL", ...new Set(data.players.map((p) => p.nfl_team).filter(Boolean))].sort();
   container.innerHTML = `
@@ -139,24 +173,37 @@ export function renderRankings(container, data, slug) {
         <select id="rankings-pos-filter">${positions.map((p) => `<option value="${p}">${p}</option>`).join("")}</select>
         <select id="rankings-team-filter">${nflTeams.map((t) => `<option value="${t}">${t === "ALL" ? "All NFL teams" : t}</option>`).join("")}</select>
         <label><input type="checkbox" id="rankings-fa-only" /> Free agents only</label>
+        ${yourTeamId !== null ? `<label><input type="checkbox" id="rankings-watched-only" /> Watch list only</label>` : ""}
       </div>
       <div class="table-wrap" id="rankings-table-wrap"></div>
     </div>
   `;
 
-  const filters = { position: "ALL", faOnly: false, team: "ALL" };
-  render(container, data, filters);
+  const filters = { position: "ALL", faOnly: false, team: "ALL", watchedOnly: false };
+  let watched = new Set();
+  render(container, data, filters, watched);
+
+  if (yourTeamId !== null) {
+    loadWatchlist(slug, yourTeamId).then((set) => {
+      watched = set;
+      render(container, data, filters, watched);
+    });
+  }
 
   container.querySelector("#rankings-pos-filter").addEventListener("change", (e) => {
     filters.position = e.target.value;
-    render(container, data, filters);
+    render(container, data, filters, watched);
   });
   container.querySelector("#rankings-team-filter").addEventListener("change", (e) => {
     filters.team = e.target.value;
-    render(container, data, filters);
+    render(container, data, filters, watched);
   });
   container.querySelector("#rankings-fa-only").addEventListener("change", (e) => {
     filters.faOnly = e.target.checked;
-    render(container, data, filters);
+    render(container, data, filters, watched);
+  });
+  container.querySelector("#rankings-watched-only")?.addEventListener("change", (e) => {
+    filters.watchedOnly = e.target.checked;
+    render(container, data, filters, watched);
   });
 }

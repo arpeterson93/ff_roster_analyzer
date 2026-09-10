@@ -147,6 +147,20 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
    anything that doesn't fit even wrapped (e.g. a very long player name). */
 #tab-startsit td { white-space: normal; }
 
+/* The Rest-of-season grid needs more room than the site-wide 1100px tabpanel
+   cap allows once every remaining week gets its own column - widen just this
+   tab so a widescreen viewport doesn't have to scroll to see it. */
+#tab-startsit.tabpanel { max-width: 1400px; }
+
+/* Rest-of-season opponent grid: full-cell color fill (via .heat-cell) with
+   the opponent centered above its rank, and the player-name column pinned to
+   one line (overriding the general Start/Sit white-space:normal above, which
+   is only meant for the multi-line stacked Starters/Bench rows). */
+.ros-cell { padding: 4px 3px; min-width: 40px; }
+.ros-opp { font-weight: 700; font-size: 11px; }
+.ros-rank { font-size: 10px; opacity: 0.85; }
+.ros-name { white-space: nowrap; }
+
 /* Settings' field rows used a fixed 220px label + inline range/select/checkbox
    in one unbroken flex row - on a narrow phone that's simply wider than the
    screen, with nothing to scroll (it's not a table). Letting the row wrap
@@ -176,6 +190,17 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 }
 
 .bar-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 12px; }
+.bar-row-total { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+
+/* FAAB estimate distribution: a min-max track with the p25-p75 box
+   highlighted and a marker line at the (weighted-average) point estimate -
+   the real spread of the comp-based method's own nearest neighbors, not a
+   modeled confidence interval. */
+.faab-dist { margin: 10px 0; }
+.faab-dist-track { position: relative; height: 10px; background: var(--border); border-radius: 5px; }
+.faab-dist-iqr { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 5px; }
+.faab-dist-marker { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--accent); transform: translateX(-1px); }
+.faab-dist-labels { display: flex; justify-content: space-between; font-size: 11px; color: var(--ink-500); margin-top: 4px; font-variant-numeric: tabular-nums; }
 .bar-label { width: 90px; flex-shrink: 0; color: var(--ink-700); }
 .bar-track { flex: 1; height: 14px; background: var(--border); border-radius: 4px; overflow: hidden; position: relative; }
 .bar-fill { height: 100%; background: var(--accent); }
@@ -218,6 +243,9 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 }
 
 .clickable-row { cursor: pointer; }
+
+.watch-star { cursor: pointer; font-size: 15px; color: var(--ink-500); }
+.watch-star.watched { color: #d6a000; }
 
 .your-team-row { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .your-team-row:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
@@ -292,6 +320,16 @@ details[open] summary { margin-bottom: 8px; }
   .bar-value { width: 46px; }
   .player-picker { gap: 4px; }
   .desktop-col { display: none; }
+
+  /* Start/Sit's Team/Week row: drop the label text (the selects' own values
+     are self-explanatory - a manager name, a week number) and let the team
+     select's owner name truncate with an ellipsis instead of pushing the
+     Week select onto its own line, so both stay on one row. */
+  #tab-startsit .select-row { flex-wrap: nowrap; }
+  #tab-startsit .select-row label { display: none; }
+  #tab-startsit .select-row select { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #tab-startsit #startsit-team-select { flex: 3 1 0; }
+  #tab-startsit #startsit-week-select { flex: 1 1 0; min-width: 64px; }
   .mobile-line { display: block; }
 }
 

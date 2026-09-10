@@ -10,6 +10,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from engine.curve import Curve, blend_current, build_curve, build_dst_curve
+from engine.faab_estimate import (
+    FANTASY_RELEVANT_SNAP_PCT,
+    NO_BID_MIN_PRIOR_POINTS,
+    NO_BID_MIN_SNAP_PCT,
+    TEAMMATE_INJURY_FLAG_STATUSES,
+    FaabModel,
+    build_gsis_to_pfr_map,
+    recent_snap_pct,
+)
 from engine.matchups import (
     allowed_by_team_week_pos,
     compute_matchup_index,
@@ -76,6 +85,105 @@ def _id_lookup(ranks_df, id_map: ids_mod.IdMap) -> dict[str, dict]:
         res = id_map.resolve(fp_id=row.get("fp_id"), name=row["name"], pos=row["pos"], team=row.get("team"))
         lookup[res.id] = row
     return lookup
+
+
+def _compute_faab_estimates(cfg: dict, client: EspnClient, players_out: list[dict], season: int, current_week: int) -> dict[str, dict]:
+    """FAAB bid estimates for currently-unrostered players on ESPN "WAIVERS"
+    status (need a real bid, unlike an instant-add "FREEAGENT") - see
+    engine/faab_estimate.py for the three estimation methods and
+    tools/faab_history/ for how the historical training data was built.
+    Opt-in per league via faab_model.enabled in config/leagues/<slug>.yml -
+    the historical dataset only exists for The O League.
+
+    Week 1 is a hard cutoff, not just a quiet edge case: there is no PRIOR
+    completed week yet (the lookback window is always current_week - 1, by
+    design - real FAAB claims process the Tuesday after a week wraps, using
+    that week's now-final results, matching how the training data itself is
+    shaped - see build_training_table.py). The historical dataset has no
+    no-bid rows for week 1 either, for the same reason. Computing anything
+    here in week 1 would only ever match real historical BID comps (nothing
+    to represent "nobody wanted this guy" exists yet for week 1), silently
+    inflating every single estimate - so don't."""
+    if current_week <= 1:
+        return {}
+    if not cfg.get("faab_model", {}).get("enabled"):
+        return {}
+    try:
+        waiver_espn_ids = client.get_waiver_status_espn_ids()
+    except Exception as exc:
+        logger.warning("faab_model: failed to fetch waiver-status players: %s", exc)
+        return {}
+    if not waiver_espn_ids:
+        return {}
+
+    by_espn_id = {p["espn_id"]: p for p in players_out}
+    candidates = [by_espn_id[eid] for eid in waiver_espn_ids if eid in by_espn_id and by_espn_id[eid]["position"] in {"QB", "RB", "WR", "TE", "K"}]
+    if not candidates:
+        return {}
+
+    snaps_df = nd.snap_counts([season], current_season=season)
+    gsis_to_pfr = build_gsis_to_pfr_map(nd.playerids())
+
+    by_team_pos: dict[tuple[str, str], list[dict]] = {}
+    for p in players_out:
+        by_team_pos.setdefault((p["nfl_team"], p["position"]), []).append(p)
+
+    def prior_week_actual(p: dict) -> dict | None:
+        entry = next((w for w in p["weekly"] if w["week"] == current_week - 1), None)
+        return entry["actual"] if entry else None
+
+    model = FaabModel()
+    estimates: dict[str, dict] = {}
+    for p in candidates:
+        prior_actual = prior_week_actual(p)
+        pfr_id = gsis_to_pfr.get(p["id"])
+
+        teammate_flag = False
+        for mate in by_team_pos.get((p["nfl_team"], p["position"]), []):
+            if mate["id"] == p["id"] or mate.get("injury_status") not in TEAMMATE_INJURY_FLAG_STATUSES:
+                continue
+            mate_snap_pct = recent_snap_pct(gsis_to_pfr.get(mate["id"]), current_week, snaps_df)
+            if mate_snap_pct is not None and mate_snap_pct >= FANTASY_RELEVANT_SNAP_PCT:
+                teammate_flag = True
+                break
+
+        prior_points = prior_actual["points"] if prior_actual else None
+        snap_pct = recent_snap_pct(pfr_id, current_week, snaps_df)
+
+        # Same relevance bar the historical no_bid rows had to clear to even
+        # be included as training data (see engine.faab_estimate's
+        # NO_BID_MIN_* constants). A player below both isn't represented by
+        # any comparable "genuinely uninteresting" comp in the training set
+        # either - running them through the model would just extrapolate
+        # from whatever's nearest and silently inflate a should-be-$0 case.
+        is_relevant = (prior_points is not None and prior_points >= NO_BID_MIN_PRIOR_POINTS) or (
+            snap_pct is not None and snap_pct >= NO_BID_MIN_SNAP_PCT
+        )
+        if not is_relevant:
+            estimates[p["id"]] = {
+                "comp_based": 0.0, "simple_baseline": 0.0, "regression": 0.0, "comps": [], "distribution": None,
+                "below_relevance_threshold": True,
+                "inputs": {
+                    "position": p["position"], "week": current_week,
+                    "prior_week_actual_points": prior_points, "prior_week_had_stat_row": prior_actual is not None,
+                    "own_injury_flag": p.get("injury_status") not in (None, "ACTIVE"),
+                    "teammate_position_injury_flag": teammate_flag, "snap_pct_prior_week": snap_pct,
+                },
+            }
+            continue
+
+        query = {
+            "position": p["position"],
+            "week": current_week,
+            "prior_week_actual_points": prior_points,
+            "prior_week_had_stat_row": prior_actual is not None,
+            "own_injury_status": p.get("injury_status") if p.get("injury_status") not in (None, "ACTIVE") else None,
+            "teammate_position_injury_flag": teammate_flag,
+            "snap_pct_prior_week": snap_pct,
+        }
+        estimates[p["id"]] = model.estimate(query)
+
+    return estimates
 
 
 def _build_curve_for_league(cfg: dict, offense_positions: list[str], player_rules: ScoringRules, weeks_played: int, season: int) -> Curve:
@@ -638,6 +746,12 @@ def run_league(cfg: dict) -> dict:
         "settings_overrides_applied": settings_overrides,
     }
 
+    try:
+        faab_estimates_out = _compute_faab_estimates(cfg, client, players_out, season, current_week)
+    except Exception as exc:
+        logger.warning("faab_model: estimate computation failed, writing empty faab_estimates.json: %s", exc)
+        faab_estimates_out = {}
+
     return {
         "meta.json": meta,
         "players.json": players_out,
@@ -650,6 +764,7 @@ def run_league(cfg: dict) -> dict:
         "schedule.json": schedule_out,
         "fa_values.json": fa_values_out,
         "unmapped.json": unmapped,
+        "faab_estimates.json": faab_estimates_out,
     }
 
 

@@ -176,3 +176,25 @@ class EspnClient:
         size = size or _FA_SIZE_BY_POS.get(position, 50)
         players = self._league.free_agents(size=size, position=espn_pos)
         return [self._roster_player(p, None) for p in players]
+
+    def get_waiver_status_espn_ids(self) -> set[int]:
+        """ESPN ids of players currently on waivers (need a FAAB claim to
+        add) rather than true free agents (instant, no-bid add). The status
+        this actually needs lives on the raw player-list ROW returned by
+        kona_player_info, not on the nested "player" object (espn_api's own
+        wrappers don't expose it at all) - verified live 2026-09-10: 280
+        FREEAGENT / 20 WAIVERS out of the first 300 by %owned."""
+        filters = {
+            "players": {
+                "filterStatus": {"value": ["FREEAGENT", "WAIVERS"]},
+                "filterSlotIds": {"value": []},
+                "limit": 3000,
+                "sortPercOwned": {"sortPriority": 1, "sortAsc": False},
+                "sortDraftRanks": {"sortPriority": 100, "sortAsc": True, "value": "STANDARD"},
+            }
+        }
+        headers = {"x-fantasy-filter": json.dumps(filters)}
+        data = self._league.espn_request.league_get(
+            params={"view": "kona_player_info", "scoringPeriodId": self._league.current_week}, headers=headers
+        )
+        return {row["player"]["id"] for row in data.get("players", []) if row.get("status") == "WAIVERS"}
