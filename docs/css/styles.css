@@ -46,6 +46,7 @@
 * { box-sizing: border-box; }
 
 body {
+  margin: 0;
   background: var(--paper);
   color: var(--ink-900);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -137,16 +138,18 @@ nav.tabs button.active {
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   padding: 14px;
-  margin-bottom: 16px;
+  margin: 0 auto 16px;
 }
 
 .card h2 { font-size: 14px; margin: 0 0 10px; }
 .card h3 { font-size: 12px; color: var(--ink-500); margin: 12px 0 6px; text-transform: uppercase; letter-spacing: 0.04em; }
 
 /* Some cards (Team Strength's viz/depth/pickups/targets, Start/Sit's lineup)
-   read better narrower than the wide grid views next to them - capped
-   independently rather than shrinking the whole tabpanel. */
+   read better narrower than the wide grid views next to them - capped and
+   centered (via .card's own margin: 0 auto) independently of the whole
+   tabpanel's width. */
 .card-compact { max-width: 720px; }
+.card-medium { max-width: 900px; }
 
 .table-wrap { overflow-x: auto; }
 
@@ -207,6 +210,12 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
   color: #fff;
 }
 
+/* Opponent(+matchup rank) pills (colors.js's opponentCellHtml, used on
+   Start/Sit and Rankings) - a fixed width regardless of team-code/rank
+   length, with the text centered inside it, so a column of them lines up
+   instead of each pill hugging its own text width. */
+.opp-pill { min-width: 64px; text-align: center; }
+
 .bar-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 12px; }
 .bar-row-total { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
 
@@ -233,6 +242,11 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 
 .select-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
 .select-row select { padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--ink-900); }
+
+/* Start/Sit's Team/Week row is much narrower than the (now centered,
+   still fairly wide) card it sits in - center the controls within that
+   width rather than leaving them flush left. */
+#tab-startsit .select-row { justify-content: center; }
 
 .player-picker { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
 .player-chip {
@@ -298,6 +312,21 @@ details[open] summary { margin-bottom: 8px; }
 .schedule-table { table-layout: fixed; width: 100%; }
 .schedule-cell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; font-variant-numeric: tabular-nums; }
 .week-divider td { background: color-mix(in srgb, var(--ink-500) 10%, transparent); font-weight: 600; font-size: 12px; text-align: left; }
+
+/* Schedule's expanded matchup: one shared table mirrored around a single
+   center "slot" column, home outside-left and away outside-right (players
+   hugging the outer edges, scores hugging the middle), rather than two
+   independent side-by-side tables. */
+.lineup-symmetric-heading { display: flex; justify-content: space-between; gap: 8px; }
+.lineup-symmetric-heading h3 { margin: 0 0 6px; }
+.lineup-symmetric { width: 100%; table-layout: fixed; }
+.lineup-player-home { text-align: right; }
+.lineup-player-away { text-align: left; }
+.lineup-score { text-align: center; font-variant-numeric: tabular-nums; }
+.lineup-slot { text-align: center; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+.lineup-bench-cols { display: flex; justify-content: space-between; gap: 16px; margin-top: 8px; }
+.lineup-bench-cols > div { flex: 1; }
+.lineup-bench-cols > div:last-child { text-align: right; }
 
 /* :not([hidden]) matters here - a bare .modal-overlay{display:flex} rule
    ties in specificity with the UA's [hidden]{display:none} and, as the
@@ -377,6 +406,13 @@ details[open] summary { margin-bottom: 8px; }
   padding: 6px 0;
   margin: 0 0 12px;
 }
+/* position:sticky on a <th> is unreliable under border-collapse:collapse
+   (the site-wide table default) in every major engine - separate borders
+   (with 0 spacing, so it still looks identical to collapsed ones, since
+   only border-bottom is ever set) is what makes the sticky header actually
+   stick instead of rendering wherever the table's internal layout pass
+   happens to leave it. */
+#rankings-table-wrap table { border-collapse: separate; border-spacing: 0; }
 #rankings-table-wrap thead th {
   position: sticky;
   top: calc(var(--sticky-top, 0px) + var(--rankings-filters-h, 0px));

@@ -47,7 +47,7 @@ function playerRow(p, week, currentWeek, slotLabel, isStreamed) {
   const kickoff = formatKickoff(weekEntry.kickoff);
   const oppAttrs = `data-opp-cell data-team="${escapeHtml(weekEntry.opponent || "")}" data-pos="${p.position}"`;
   const proj = projValueFor(p, week, currentWeek);
-  const streamBadge = isStreamed ? `<span class="pill small stream-badge" title="Your rostered starter is on bye - this is the best free agent available that week instead">FA fill-in</span>` : "";
+  const streamBadge = isStreamed ? `<span class="pill small stream-badge" title="Your rostered starter is on bye - this is the best free agent available that week instead">FA</span>` : "";
   return `<tr data-player-id="${p.id}" class="clickable-row ${isStreamed ? "streamed-row" : ""}">
     ${slotCell}
     <td>
@@ -82,8 +82,14 @@ function lineupSection(roster, week, lineupWeek, currentWeek, allPlayersById) {
     return acc + (p ? projValueFor(p, week, currentWeek) || 0 : 0);
   }, 0);
 
-  const bench = (lineupWeek.bench || []).map((id) => rosterById.get(id)).filter(Boolean);
-  const benchRows = bench.map((p) => playerRow(p, week, currentWeek, "Bench")).join("");
+  // Sorted by THIS week's own displayed Proj value (not the backend's fixed
+  // espn_projected_week ordering, which doesn't vary week to week and can
+  // disagree with what's actually shown in the Proj column here).
+  const bench = (lineupWeek.bench || [])
+    .map((id) => rosterById.get(id))
+    .filter(Boolean)
+    .sort((a, b) => (projValueFor(b, week, currentWeek) || 0) - (projValueFor(a, week, currentWeek) || 0));
+  const benchRows = bench.map((p) => playerRow(p, week, currentWeek, p.lineup_slot === "IR" ? "IR" : "Bench")).join("");
   const benchTotal = bench.reduce((acc, p) => acc + (projValueFor(p, week, currentWeek) || 0), 0);
 
   return `
@@ -100,7 +106,7 @@ function lineupSection(roster, week, lineupWeek, currentWeek, allPlayersById) {
         </tfoot>
       </table>
     </div>
-    <h3>Bench <span class="muted small">(sorted by ESPN proj)</span></h3>
+    <h3>Bench</h3>
     <div class="table-wrap">
       <table>
         <thead><tr><th>Slot</th><th>Player</th><th class="desktop-col">Opp</th><th>Proj</th></tr></thead>
@@ -121,13 +127,13 @@ function lineupSection(roster, week, lineupWeek, currentWeek, allPlayersById) {
 // matchup rank, no parentheses - this grid is dense (one column per
 // remaining week) so every pixel of cell width matters more here than in a
 // single "Opp" column elsewhere.
-function rosCellHtml(weekEntry) {
+function rosCellHtml(weekEntry, position) {
   if (!weekEntry || !weekEntry.opponent) return `<td class="heat-cell ros-cell muted">BYE</td>`;
   const label = (weekEntry.home === false ? "@" : "") + weekEntry.opponent;
   const hasRank = weekEntry.rank !== null && weekEntry.rank !== undefined;
   const color = colorForRatio(ratioForRank(weekEntry.rank));
   const rankTitle = hasRank ? `title="Matchup rank ${weekEntry.rank} of 32 (1 = best)"` : "";
-  return `<td class="heat-cell ros-cell" style="background:${color}" ${rankTitle}>
+  return `<td class="heat-cell ros-cell" style="background:${color}" ${rankTitle} data-opp-cell data-team="${escapeHtml(weekEntry.opponent)}" data-pos="${position}">
     <div class="ros-opp">${label}</div>
     ${hasRank ? `<div class="ros-rank">${weekEntry.rank}</div>` : ""}
   </td>`;
@@ -142,7 +148,7 @@ function scheduleGrid(roster, currentWeek, finalWeek) {
   const rows = sorted
     .map((p) => {
       const byWeek = new Map((p.weekly || []).map((w) => [w.week, w]));
-      const cells = weeks.map((w) => rosCellHtml(byWeek.get(w))).join("");
+      const cells = weeks.map((w) => rosCellHtml(byWeek.get(w), p.position)).join("");
       return `<tr data-player-id="${p.id}" class="clickable-row"><td class="ros-name">${posTag(p.position)} ${escapeHtml(p.name)}</td>${cells}</tr>`;
     })
     .join("");

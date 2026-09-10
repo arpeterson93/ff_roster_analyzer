@@ -14,36 +14,124 @@ function pointsForWeek(p, week) {
   return w.actual ? w.actual.points : w.projected;
 }
 
-function miniLineup(teamId, week, data) {
+// ESPN's raw lineupSlot strings -> the same base labels engine/lineup.py's
+// display_label uses for its own computed-lineup slot keys (D/ST -> DST,
+// the three flex-eligible composites -> FLEX) - so a real ESPN slot and a
+// computed-optimal slot instance line up under one label space below.
+function slotBase(rawSlot) {
+  if (rawSlot === "D/ST") return "DST";
+  if (rawSlot === "RB/WR/TE" || rawSlot === "RB/WR" || rawSlot === "WR/TE") return "FLEX";
+  if (rawSlot === "TQB") return "QB";
+  return rawSlot;
+}
+
+function actualStarters(teamId, data) {
+  return data.players.filter((p) => p.fantasy_team_id === teamId && p.lineup_slot && p.lineup_slot !== "BE" && p.lineup_slot !== "IR");
+}
+
+// The real, ESPN-set lineup for the CURRENT week - not our optimal computed
+// one - since that's the lineup that's actually live for a week already
+// underway. Past/future weeks have no such "actual" lineup to pull (ESPN
+// doesn't retain history here and obviously can't know a future week's
+// lineup), so those keep using the computed optimal lineup below. Shaped
+// like a computed week's {slots, bench} so both paths render identically.
+function actualLineupWeek(teamId, data) {
+  const roster = data.players.filter((p) => p.fantasy_team_id === teamId);
+  const byBase = new Map();
+  actualStarters(teamId, data)
+    .slice()
+    .sort((a, b) => (b.espn_projected_week || 0) - (a.espn_projected_week || 0))
+    .forEach((p) => {
+      const base = slotBase(p.lineup_slot);
+      if (!byBase.has(base)) byBase.set(base, []);
+      byBase.get(base).push(p.id);
+    });
+  const slots = {};
+  byBase.forEach((ids, base) => {
+    ids.forEach((id, i) => {
+      slots[ids.length > 1 ? `${base}${i + 1}` : base] = id;
+    });
+  });
+  const bench = roster.filter((p) => !p.lineup_slot || p.lineup_slot === "BE" || p.lineup_slot === "IR").map((p) => p.id);
+  return { slots, bench };
+}
+
+function lineupWeekFor(teamId, week, data) {
+  if (week === data.meta.current_week) return actualLineupWeek(teamId, data);
   const lineupTeam = data.lineups[String(teamId)];
-  const lineupWeek = lineupTeam ? lineupTeam.weeks[String(week)] : null;
-  if (!lineupWeek) return `<p class="muted small">No projection for this week.</p>`;
-
-  const streamed = new Set(lineupWeek.streamed || []);
-  const bySlot = Object.entries(lineupWeek.slots || {}).sort(([a], [b]) => sortByPositionOrder(a, b, (s) => s.replace(/\d+$/, "")));
-  const rows = bySlot
-    .map(([slot, pid]) => {
-      const p = data.playersById.get(pid);
-      if (!p) return "";
-      // A rostered starter was on bye - this is the best free agent
-      // available that week instead (see docs/js/startsit.js's same badge).
-      const badge = streamed.has(pid) ? ` <span class="pill small stream-badge" title="Free-agent bye-week fill-in, not on your roster">FA</span>` : "";
-      return `<tr class="${streamed.has(pid) ? "streamed-row" : ""}"><td class="muted small">${slot.replace(/\d+$/, "")}</td><td>${posTag(p.position)} ${escapeHtml(p.name)}${badge}</td><td>${fmt(pointsForWeek(p, week), 1)}</td></tr>`;
-    })
-    .join("");
-  const bench = (lineupWeek.bench || [])
-    .map((pid) => data.playersById.get(pid))
-    .filter(Boolean)
-    .map((p) => `<tr class="muted small"><td></td><td>${posTag(p.position)} ${escapeHtml(p.name)}</td><td>${fmt(pointsForWeek(p, week), 1)}</td></tr>`)
-    .join("");
-
-  return `<table><tbody>${rows}${bench}</tbody></table>`;
+  return lineupTeam ? lineupTeam.weeks[String(week)] : null;
 }
 
 function scoreOf(m, side, data) {
   if (m.played) return side === "home" ? m.home_score : m.away_score;
   const teamId = side === "home" ? m.home_team_id : m.away_team_id;
+  if (m.week === data.meta.current_week) {
+    return actualStarters(teamId, data).reduce((acc, p) => acc + (pointsForWeek(p, m.week) || 0), 0);
+  }
   return (data.lineups[String(teamId)]?.weeks[String(m.week)] || {}).total ?? null;
+}
+
+// One shared table, home team's players/scores on the outside-left and away
+// team's on the outside-right, mirrored around a single center "slot" column
+// - rather than two separate side-by-side tables - so the two lineups read
+// as one symmetric comparison instead of two unrelated lists.
+function symmetricLineupHtml(homeTeamId, awayTeamId, week, data) {
+  const home = lineupWeekFor(homeTeamId, week, data);
+  const away = lineupWeekFor(awayTeamId, week, data);
+  if (!home || !away) return `<p class="muted small">No projection for this week.</p>`;
+
+  const streamed = new Set([...(home.streamed || []), ...(away.streamed || [])]);
+  const keys = [...new Set([...Object.keys(home.slots || {}), ...Object.keys(away.slots || {})])].sort(
+    (a, b) => sortByPositionOrder(a, b, (s) => s.replace(/\d+$/, "")) || a.localeCompare(b)
+  );
+
+  const playerCell = (pid) => {
+    if (!pid) return "";
+    const p = data.playersById.get(pid);
+    if (!p) return "";
+    const badge = streamed.has(pid) ? ` <span class="pill small stream-badge" title="Free-agent bye-week fill-in, not on your roster">FA</span>` : "";
+    return `${posTag(p.position)} ${escapeHtml(p.name)}${badge}`;
+  };
+  const scoreCell = (pid) => {
+    const p = pid && data.playersById.get(pid);
+    return p ? fmt(pointsForWeek(p, week), 1) : "–";
+  };
+
+  const rows = keys
+    .map((key) => {
+      const hPid = (home.slots || {})[key];
+      const aPid = (away.slots || {})[key];
+      const rowClass = streamed.has(hPid) || streamed.has(aPid) ? "streamed-row" : "";
+      return `<tr class="${rowClass}">
+        <td class="lineup-player lineup-player-home">${playerCell(hPid)}</td>
+        <td class="lineup-score">${scoreCell(hPid)}</td>
+        <td class="lineup-slot muted small">${key.replace(/\d+$/, "")}</td>
+        <td class="lineup-score">${scoreCell(aPid)}</td>
+        <td class="lineup-player lineup-player-away">${playerCell(aPid)}</td>
+      </tr>`;
+    })
+    .join("");
+
+  // Bench sizes/order between the two teams have no natural row-for-row
+  // pairing the way starting slots do, so these stay two independent lists
+  // rather than forced into the symmetric grid above.
+  const benchList = (ids) =>
+    (ids || [])
+      .map((id) => data.playersById.get(id))
+      .filter(Boolean)
+      .map((p) => `<div>${posTag(p.position)} ${escapeHtml(p.name)}${p.lineup_slot === "IR" ? ` <span class="muted small">(IR)</span>` : ""} <span class="value-readout">${fmt(pointsForWeek(p, week), 1)}</span></div>`)
+      .join("");
+
+  return `
+    <table class="lineup-symmetric">
+      <colgroup><col style="width:36%"><col style="width:9%"><col style="width:10%"><col style="width:9%"><col style="width:36%"></colgroup>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="lineup-bench-cols muted small">
+      <div>${benchList(home.bench)}</div>
+      <div>${benchList(away.bench)}</div>
+    </div>
+  `;
 }
 
 function matchupRow(m, data, expandedKey, yourTeamId, avg, spread) {
@@ -70,10 +158,11 @@ function matchupRow(m, data, expandedKey, yourTeamId, avg, spread) {
     </tr>
     ${expanded
       ? `<tr><td colspan="4">
-          <div class="trade-result">
-            <div class="trade-side"><h3 class="small">${escapeHtml(teamLabel(home))}</h3>${miniLineup(m.home_team_id, m.week, data)}</div>
-            <div class="trade-side"><h3 class="small">${escapeHtml(teamLabel(away))}</h3>${miniLineup(m.away_team_id, m.week, data)}</div>
+          <div class="lineup-symmetric-heading">
+            <h3 class="small">${escapeHtml(teamLabel(home))}</h3>
+            <h3 class="small">${escapeHtml(teamLabel(away))}</h3>
           </div>
+          ${symmetricLineupHtml(m.home_team_id, m.away_team_id, m.week, data)}
         </td></tr>`
       : ""}
   `;
@@ -113,7 +202,7 @@ export function renderSchedule(container, data, slug) {
     container.innerHTML = `
       <div class="card">
         <h2>Schedule</h2>
-        <p class="muted small">Click a matchup to see each team's optimal lineup that week.</p>
+        <p class="muted small">Click a matchup to see each team's lineup that week - your actual ESPN-set starters for the current week, optimal projected lineups otherwise.</p>
         <div class="table-wrap">
           <table class="schedule-table">
             <colgroup><col style="width:32%"><col style="width:18%"><col style="width:18%"><col style="width:32%"></colgroup>

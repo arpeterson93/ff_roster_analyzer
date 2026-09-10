@@ -78,7 +78,7 @@ export function opponentCellHtml(weekEntry) {
   const hasRank = weekEntry.rank !== null && weekEntry.rank !== undefined;
   const color = colorForRatio(ratioForRank(weekEntry.rank));
   const rankTitle = hasRank ? `title="Matchup rank ${weekEntry.rank} of 32 (1 = best)"` : "";
-  return `<span class="pill" style="background:${color}" ${rankTitle}>${label}${hasRank ? ` (${weekEntry.rank})` : ""}</span>`;
+  return `<span class="pill opp-pill" style="background:${color}" ${rankTitle}>${label}${hasRank ? ` (${weekEntry.rank})` : ""}</span>`;
 }
 
 // "Sun 3:25 PM" in the VIEWER's own local time zone - the pipeline only ever

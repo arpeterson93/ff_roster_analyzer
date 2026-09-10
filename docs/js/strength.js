@@ -184,7 +184,7 @@ export function renderStrength(container, data, slug) {
       <h3>Trade targets</h3>
       <div class="table-wrap">${tradeTargetsTable(team.trade_targets, data.playersById, data.teamsById)}</div>
     </div>
-    <div class="card">
+    <div class="card card-medium">
       <h2>ROS Projected Points/Week</h2>
       <div class="table-wrap">${leagueWideTable(data, Number(team.team_id))}</div>
     </div>
