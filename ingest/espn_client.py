@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 
 from espn_api.football import League as EspnLeague
 from espn_api.football import Player as EspnPlayer
@@ -12,6 +13,13 @@ from ingest import nfl_data as nd
 from ingest.base import FantasyTeam, LeagueSettings, Matchup, PastLineupEntry, RosterPlayer, sort_positions
 
 logger = logging.getLogger(__name__)
+
+# get_past_lineups/get_future_espn_projections can each fire dozens of
+# requests in a tight loop (one-two per remaining/past week) - a short
+# pause between them avoids looking like burst/bot traffic to whatever
+# WAF sits in front of espn.com, which a 2026-09-10 live run showed can
+# soft-block a request (HTTP 202, empty body) after enough of a burst.
+_REQUEST_PACING_SEC = 0.4
 
 _NON_STARTING_SLOTS = {"BE", "IR", "", "IR", "Rookie"}
 
@@ -165,6 +173,7 @@ class EspnClient:
         settings = self.get_settings()
         matchups: list[Matchup] = []
         for week in range(1, settings.final_week + 1):
+            time.sleep(_REQUEST_PACING_SEC)
             for m in self._league.scoreboard(week=week):
                 if m.home_team is None or m.away_team is None:
                     continue  # bye in an odd-team playoff bracket
@@ -198,6 +207,7 @@ class EspnClient:
         for week in weeks:
             if week >= self._league.current_week:
                 continue
+            time.sleep(_REQUEST_PACING_SEC)
             for box in self._league.box_scores(week=week, player_team_cache=player_team_cache):
                 for team_id, lineup in ((box.home_team, box.home_lineup), (box.away_team, box.away_lineup)):
                     if team_id is None:
@@ -275,6 +285,7 @@ class EspnClient:
             except Exception:
                 logger.warning("get_future_espn_projections: week %s rostered-roster fetch failed", week, exc_info=True)
 
+            time.sleep(_REQUEST_PACING_SEC)
             try:
                 fa_found = 0
                 for p in self._league.free_agents(week=week, size=_FUTURE_PROJECTIONS_FA_SIZE):
@@ -287,6 +298,7 @@ class EspnClient:
                 logger.warning("get_future_espn_projections: week %s free-agent fetch failed", week, exc_info=True)
 
             logger.info("get_future_espn_projections: week %s - %s players with a projection", week, found_this_week)
+            time.sleep(_REQUEST_PACING_SEC)
         return result
 
     def get_waiver_status_espn_ids(self) -> set[int]:
