@@ -1,5 +1,5 @@
 import { fmt, escapeHtml, getYourTeam, setYourTeam } from "./state.js";
-import { POSITION_COLOR, INJURY_BADGE, opponentCellHtml, ratioForRank, colorForRatio, formatKickoff, sortByPositionOrder, teamLabel } from "./colors.js";
+import { POSITION_COLOR, INJURY_BADGE, opponentCellHtml, ratioForRank, colorForRatio, formatKickoff, sortByPositionOrder, teamLabel, playerPhotoHtml } from "./colors.js";
 import { openPlayerModal } from "./playermodal.js";
 import { openPointsAgainstModal } from "./pointsagainstmodal.js";
 
@@ -11,23 +11,6 @@ function posTag(pos) {
 function healthBadge(status) {
   const letters = INJURY_BADGE[status];
   return letters ? `<span class="pill" style="background:var(--red-600)">${letters}</span>` : "";
-}
-
-// ESPN's own CDN, keyed off the espn_id every player already carries - a
-// D/ST "player" has no individual headshot, so it gets its team's logo
-// instead (keyed off nfl_team; ESPN's logo path accepts both "was" and
-// "wsh" for Washington, so no per-team alias table is needed). A handful of
-// deep-roster/practice-squad ids 404 rather than falling back to a generic
-// silhouette - onerror just removes the broken <img> instead of showing a
-// broken-image icon.
-function playerPhotoUrl(p) {
-  if (p.position === "DST") return p.nfl_team ? `https://a.espncdn.com/i/teamlogos/nfl/500/${p.nfl_team.toLowerCase()}.png` : null;
-  return p.espn_id ? `https://a.espncdn.com/i/headshots/nfl/players/full/${p.espn_id}.png` : null;
-}
-
-function playerPhotoHtml(p) {
-  const url = playerPhotoUrl(p);
-  return url ? `<img class="player-photo" src="${url}" alt="" loading="lazy" onerror="this.remove()" />` : "";
 }
 
 // Desktop keeps a separate Opp column (marked ".desktop-col"). On mobile (see

@@ -162,6 +162,13 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 .player-cell { display: flex; align-items: center; gap: 8px; }
 .player-photo { width: 34px; height: 34px; min-width: 34px; border-radius: 50%; object-fit: cover; background: color-mix(in srgb, var(--ink-500) 12%, transparent); }
 
+/* Player modal header: the same photo, a little bigger, next to the
+   name/rank line instead of inline within it. */
+.player-modal-header { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+.player-modal-header h2 { margin: 0; }
+.player-modal-header p { margin: 2px 0 0; }
+.player-photo-lg { width: 56px; height: 56px; min-width: 56px; border-radius: 50%; object-fit: cover; background: color-mix(in srgb, var(--ink-500) 12%, transparent); }
+
 /* Start/Sit's Player/Score cells hold multi-line stacked content (name,
    team/ownership, kickoff+opponent) - letting that text wrap instead of
    forcing the site-wide "th, td { white-space: nowrap }" default is what

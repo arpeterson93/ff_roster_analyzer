@@ -1,5 +1,5 @@
 import { fmt, escapeHtml } from "./state.js";
-import { POSITION_COLOR, opponentCellHtml, teamLabel } from "./colors.js";
+import { POSITION_COLOR, opponentCellHtml, teamLabel, playerPhotoHtml } from "./colors.js";
 import { openModal } from "./modal.js";
 import { groupedHeaderHtml, statCellsHtml } from "./statcolumns.js";
 
@@ -107,8 +107,13 @@ export function openPlayerModal(player, data) {
   const hasGameLog = (player.weekly || []).some((w) => w.actual);
 
   const html = `
-    <h2><span class="pos-tag" style="background:${color}">${player.position}</span> ${escapeHtml(player.name)} <span class="muted small">${escapeHtml(player.nfl_team || "")}</span></h2>
-    <p class="muted small">${team ? escapeHtml(teamLabel(team)) : "Free agent"} · ROS rank ${player.ros_pos_rank ?? "–"} · Bye ${player.bye ?? "–"}</p>
+    <div class="player-modal-header">
+      ${playerPhotoHtml(player, "player-photo-lg")}
+      <div>
+        <h2><span class="pos-tag" style="background:${color}">${player.position}</span> ${escapeHtml(player.name)} <span class="muted small">${escapeHtml(player.nfl_team || "")}</span></h2>
+        <p class="muted small">${team ? escapeHtml(teamLabel(team)) : "Free agent"} · ROS rank ${player.ros_pos_rank ?? "–"} · Bye ${player.bye ?? "–"}</p>
+      </div>
+    </div>
     <div class="player-stat-grid">
       <div class="stat-tile"><div class="stat-label">Baseline</div><div class="stat-value">${fmt(player.baseline_ppg, 1)} ppg</div></div>
       <div class="stat-tile"><div class="stat-label">ROS total</div><div class="stat-value">${fmt(player.ros_total, 1)}</div></div>

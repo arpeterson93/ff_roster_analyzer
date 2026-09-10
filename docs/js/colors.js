@@ -69,6 +69,25 @@ export function teamLabel(team) {
   return team.manager || team.name || "";
 }
 
+// ESPN's own CDN, keyed off the espn_id every player already carries - a
+// D/ST "player" has no individual headshot, so it gets its team's logo
+// instead (keyed off nfl_team; ESPN's logo path accepts both "was" and
+// "wsh" for Washington, so no per-team alias table is needed).
+export function playerPhotoUrl(p) {
+  if (p.position === "DST") return p.nfl_team ? `https://a.espncdn.com/i/teamlogos/nfl/500/${p.nfl_team.toLowerCase()}.png` : null;
+  return p.espn_id ? `https://a.espncdn.com/i/headshots/nfl/players/full/${p.espn_id}.png` : null;
+}
+
+// sizeClass picks the CSS class (see styles.css) - "player-photo" for
+// Start/Sit's compact rows, "player-photo-lg" for the modal's header. A
+// handful of deep-roster/practice-squad ids 404 rather than falling back to
+// a generic silhouette - onerror just removes the broken <img> instead of
+// showing a broken-image icon.
+export function playerPhotoHtml(p, sizeClass = "player-photo") {
+  const url = playerPhotoUrl(p);
+  return url ? `<img class="${sizeClass}" src="${url}" alt="" loading="lazy" onerror="this.remove()" />` : "";
+}
+
 // Combined "Opp" + "Matchup" cell: @ prefix on the road, colored by the
 // matchup RANK (always a full 0-1 spread within that position's own 32
 // teams - see ratioForRank).
