@@ -47,6 +47,7 @@ from ingest import nfl_data as nd
 from ingest import rankings as rk
 from ingest.config import load_all_league_configs
 from ingest.espn_client import EspnClient
+from ingest.espn_injuries import fetch_ir_return_weeks
 from ingest.settings_sheet import SettingsSheetError, apply_remote_settings, fetch_remote_settings
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -310,6 +311,17 @@ def run_league(cfg: dict) -> dict:
     prior_season = season - 1
     weeks = list(range(current_week, final_week + 1))
 
+    # Best-effort: espn.com/nfl/injuries' own return-date estimates, used
+    # below to zero an IR player's proprietary projection for the weeks
+    # before they're expected back (see engine.valuation.project_player's
+    # ir_return_week param) rather than just the current week. None (not {})
+    # means the fetch/parse itself failed - surfaced as a warning since
+    # every IR player then silently falls back to current-week-only zeroing.
+    ir_return_weeks_by_espn_id = fetch_ir_return_weeks(season, schedules_current)
+    if ir_return_weeks_by_espn_id is None:
+        warnings.append("espn.com/nfl/injuries fetch failed; IR players only zeroed for the current week")
+        ir_return_weeks_by_espn_id = {}
+
     # --- curves ---
     curve = _build_curve_for_league(cfg, offense_positions, player_rules, weeks_played, season)
     if has_dst:
@@ -445,13 +457,18 @@ def run_league(cfg: dict) -> dict:
         weekly_row = weekly_lookup.get(res.id)
         ros_pos_rank = ros_row["ros_pos_rank"] if ros_row else None
         week_pos_rank = weekly_row["week_pos_rank"] if weekly_row else None
+        # Only for a player actually on a fantasy roster's IR slot - the NFL
+        # injury report's own Out/Doubtful/Questionable guys shouldn't have
+        # their whole ROS projection reshaped off a single scraped estimate,
+        # only someone whose owner has actually committed them to IR.
+        ir_return_week = ir_return_weeks_by_espn_id.get(p.espn_id) if p.lineup_slot in _IR_SLOTS else None
 
         proj = project_player(
             position=p.position, nfl_team=p.nfl_team, ros_pos_rank=ros_pos_rank,
             injury_status=p.injury_status, week_pos_rank=week_pos_rank,
             curve=curve, matchup_index=matchup_index, current_week=current_week, final_week=final_week,
             reg_season_count=reg_season_count, opponent=opponent, cfg=val_cfg,
-            espn_week_projection=p.espn_projected_week,
+            espn_week_projection=p.espn_projected_week, ir_return_week=ir_return_week,
         )
 
         players_ctx[res.id] = PlayerCtx(

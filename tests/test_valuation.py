@@ -136,6 +136,36 @@ def test_unranked_player_gets_zero_projection():
     assert all(w.projected == 0.0 for w in proj.weekly)
 
 
+def test_ir_return_week_zeroes_weeks_before_it_and_rescales():
+    # Bye week 3 already contributes 0 on its own; return_week=3 means only
+    # weeks 1-2 actually get newly zeroed, with week 4 absorbing all 30 ROS
+    # points instead of splitting them across weeks 1/2/4.
+    proj = _project(ir_return_week=3)
+    weekly = {w.week: w.projected for w in proj.weekly}
+    assert weekly[1] == pytest.approx(0.0)
+    assert weekly[2] == pytest.approx(0.0)
+    assert weekly[3] == pytest.approx(0.0)  # bye
+    assert weekly[4] == pytest.approx(30.0)
+    assert proj.zeroed_this_week is True
+    assert proj.zero_reason == "ir_return_week:3"
+    assert proj.ros_total == pytest.approx(30.0)  # ROS total itself is unaffected
+    assert sum(weekly.values()) == pytest.approx(proj.ros_total)
+
+
+def test_ir_return_week_in_the_past_is_a_no_op():
+    proj = _project(current_week=2, ir_return_week=1)
+    baseline = _project(current_week=2, ir_return_week=None)
+    weekly = {w.week: w.projected for w in proj.weekly}
+    baseline_weekly = {w.week: w.projected for w in baseline.weekly}
+    assert weekly == baseline_weekly  # an already-elapsed return week changes nothing
+    assert proj.zeroed_this_week is False
+
+
+def test_ir_return_week_does_not_override_an_existing_injury_zero_reason():
+    proj = _project(injury_status="OUT", ir_return_week=3)
+    assert proj.zero_reason == "injury:OUT"  # first-set reason wins, not overwritten
+
+
 def test_reg_and_playoff_split():
     proj = _project(current_week=1, final_week=4, reg_season_count=2)
     weekly = {w.week: w.projected for w in proj.weekly}

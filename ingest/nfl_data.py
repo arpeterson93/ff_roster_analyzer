@@ -9,7 +9,7 @@ equivalent).
 from __future__ import annotations
 
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -251,3 +251,30 @@ def nfl_week_context(
             opponent.setdefault((team, w), None if w == bye_weeks.get(team) else opponent.get((team, w)))
 
     return weeks_played, bye_weeks, opponent
+
+
+def week_for_date(target: date, schedules_df: pl.DataFrame, season: int) -> int | None:
+    """Which REG-season week a calendar date falls in, by each week's
+    earliest game day (weeks run roughly Thu/Sun-Mon; a week's games start
+    on that earliest day and run until the next week's earliest day).
+    Used to turn an external "expected date" (e.g. an injury return
+    estimate) into a week number. None if `target` is before the season's
+    first game."""
+    reg = schedules_df.filter(pl.col("season") == season, pl.col("game_type") == "REG")
+    week_start: dict[int, date] = {}
+    for row in reg.iter_rows(named=True):
+        gameday = row.get("gameday")
+        if not gameday:
+            continue
+        d = date.fromisoformat(gameday)
+        w = row["week"]
+        if w not in week_start or d < week_start[w]:
+            week_start[w] = d
+
+    result = None
+    for w, start in sorted(week_start.items()):
+        if start <= target:
+            result = w
+        else:
+            break
+    return result

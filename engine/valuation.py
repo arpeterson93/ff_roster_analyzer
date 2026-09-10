@@ -50,6 +50,7 @@ def project_player(
     opponent: dict[tuple[str, int], str | None],
     cfg: dict,
     espn_week_projection: float | None = None,
+    ir_return_week: int | None = None,
 ) -> Projection:
     ranked = ros_pos_rank is not None
     baseline = curve.ppg_at(position, ros_pos_rank) if ranked else 0.0
@@ -108,6 +109,23 @@ def project_player(
             zeroed, zero_reason = True, f"injury:{injury_status}"
             raw[current_week] = 0.0
             mult_for_week[current_week] = 0.0
+
+    # A known IR return week (see ingest/espn_injuries.py) extends the zero
+    # past just the current week - every week strictly before it gets zeroed
+    # here too, BEFORE the raw -> ros_total rescale below, so those points
+    # get redistributed onto the weeks they're actually expected to play
+    # instead of just vanishing. A no-op if they're already projected to be
+    # back by/before the current week.
+    if ir_return_week is not None:
+        for w in weeks:
+            if w >= ir_return_week:
+                break
+            if opp_for_week.get(w) is None:
+                continue  # bye - already 0
+            raw[w] = 0.0
+            mult_for_week[w] = 0.0
+            if w == current_week and not zeroed:
+                zeroed, zero_reason = True, f"ir_return_week:{ir_return_week}"
 
     total_raw = sum(raw.values())
     scale = (ros_total / total_raw) if total_raw > 0 else 0.0

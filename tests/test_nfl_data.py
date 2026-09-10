@@ -1,6 +1,33 @@
+from datetime import date
+
 import polars as pl
 
-from ingest.nfl_data import kickoff_utc_from_schedule
+from ingest.nfl_data import kickoff_utc_from_schedule, week_for_date
+
+_WEEK_SCHEDULE = pl.DataFrame(
+    [
+        {"season": 2025, "game_type": "REG", "week": 1, "gameday": "2025-09-04", "home_team": "KC", "away_team": "BAL"},
+        {"season": 2025, "game_type": "REG", "week": 1, "gameday": "2025-09-07", "home_team": "DAL", "away_team": "NYG"},
+        {"season": 2025, "game_type": "REG", "week": 2, "gameday": "2025-09-11", "home_team": "KC", "away_team": "CIN"},
+        {"season": 2025, "game_type": "REG", "week": 2, "gameday": "2025-09-14", "home_team": "DAL", "away_team": "WAS"},
+        {"season": 2025, "game_type": "REG", "week": 3, "gameday": "2025-09-18", "home_team": "KC", "away_team": "NYG"},
+        {"season": 2025, "game_type": "REG", "week": 3, "gameday": "2025-09-21", "home_team": "DAL", "away_team": "BAL"},
+    ]
+)
+
+
+def test_week_for_date_maps_a_date_to_the_week_it_falls_within():
+    assert week_for_date(date(2025, 9, 7), _WEEK_SCHEDULE, 2025) == 1  # the Sunday of week 1
+    assert week_for_date(date(2025, 9, 10), _WEEK_SCHEDULE, 2025) == 1  # between week 1's Sun and week 2's Thu
+    assert week_for_date(date(2025, 9, 11), _WEEK_SCHEDULE, 2025) == 2  # week 2's own Thursday
+
+
+def test_week_for_date_before_the_season_starts_is_none():
+    assert week_for_date(date(2025, 8, 1), _WEEK_SCHEDULE, 2025) is None
+
+
+def test_week_for_date_after_the_last_known_week_clamps_to_it():
+    assert week_for_date(date(2025, 12, 1), _WEEK_SCHEDULE, 2025) == 3
 
 
 def test_kickoff_converts_eastern_to_utc_for_both_teams():
