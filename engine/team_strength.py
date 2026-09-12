@@ -149,40 +149,81 @@ def depth_values_by_week(
     weeks: list[int],
     slots: dict[str, int],
     eligibility: dict[str, set[str]],
-) -> dict[str, dict[str, dict[int, float]]]:
+) -> dict[str, dict]:
     """Per-player, per-week lineup-delta value: {player_id: {"value_delta":
-    {week: delta}, "value_delta_ww": {week: delta}, "ww_replacement_id":
-    fa_id or None}}. depth_values() is just this summed across weeks; this
-    is the finer-grained view for charting how a player's marginal value
-    moves week to week (bye weeks, tough matchups elsewhere on the roster
-    creating temporary scarcity, etc), and for naming WHICH free agent
-    value_delta_ww is actually computed against (a single best-by-ros_total
-    pick for the whole series, not re-chosen week to week - see
-    lineup_total_with_streaming_by_week's own docstring for why fa_values()
-    picks differently; this mirrors depth_values_by_week's original
-    behavior, unchanged)."""
-    base_by_week = lineup_total_by_week(team_player_ids, players, weeks, slots, eligibility)
-    result: dict[str, dict[str, dict[int, float] | str | None]] = {}
+    {week: delta}, "replacement_id": {week: teammate_id or None},
+    "value_delta_ww": {week: delta}, "ww_replacement_id": {week: fa_id or
+    None}}}. depth_values() is just this summed/collapsed across weeks;
+    this is the finer-grained view for charting how a player's marginal
+    value moves week to week (bye weeks, tough matchups elsewhere on the
+    roster creating temporary scarcity, etc).
+
+    BOTH replacements are picked FRESH each week, not once for the whole
+    season - a real bench player who'd actually step in depends on THAT
+    week's own matchups/byes, and the best streaming free agent depends on
+    THAT week's own projection, the same "pick fresh each week" philosophy
+    lineup_total_with_streaming_by_week already applies to the aggregate
+    roster-total calc (see that function's docstring) - just applied here
+    to a single player's own marginal value instead. This can genuinely
+    name a DIFFERENT specific replacement in different weeks for the exact
+    same rostered player - a real reflection of how bench/waiver decisions
+    actually work, not an inconsistency.
+
+    replacement_id is found by diffing optimal_lineup's own slot
+    assignment for the full roster against the reduced (pid dropped)
+    roster, THAT SAME WEEK - whichever bench player newly starts a slot
+    they weren't starting before is the real teammate who absorbs the
+    vacated production. None when the roster was deep enough that dropping
+    pid doesn't change who starts at all. Prefers a same-position
+    newly-started player when the optimizer's reshuffle touched more than
+    one slot (a chain reaction, e.g. dropping a flex-eligible player) -
+    same "same position first" preference fa_values() uses when picking
+    which player TO drop, just applied to who fills back in instead."""
+    base_by_week: dict[int, float] = {}
+    base_assignment_by_week: dict[int, dict[str, str]] = {}
+    for w in weeks:
+        entries = [(pid, players[pid].position, players[pid].weekly.get(w, 0.0)) for pid in team_player_ids if pid in players]
+        total, assignment = optimal_lineup(entries, slots, eligibility)
+        base_by_week[w] = total
+        base_assignment_by_week[w] = assignment
+
+    result: dict[str, dict] = {}
     for pid in team_player_ids:
         if pid not in players:
             continue
         reduced = [p for p in team_player_ids if p != pid]
-        reduced_by_week = lineup_total_by_week(reduced, players, weeks, slots, eligibility)
-        value_delta = {w: base_by_week[w] - reduced_by_week[w] for w in weeks}
-
         pos = players[pid].position
         fa_pool = free_agents_by_pos.get(pos, [])
-        best_fa = max(fa_pool, key=lambda f: f.ros_total, default=None)
-        if best_fa is not None:
-            ww_players = dict(players)
-            ww_players[best_fa.id] = best_fa
-            ww_by_week = lineup_total_by_week(reduced + [best_fa.id], ww_players, weeks, slots, eligibility)
-            value_delta_ww = {w: base_by_week[w] - ww_by_week[w] for w in weeks}
-        else:
-            value_delta_ww = dict(value_delta)
+
+        value_delta: dict[int, float] = {}
+        replacement_id: dict[int, str | None] = {}
+        value_delta_ww: dict[int, float] = {}
+        ww_replacement_id: dict[int, str | None] = {}
+
+        for w in weeks:
+            reduced_entries = [(rpid, players[rpid].position, players[rpid].weekly.get(w, 0.0)) for rpid in reduced if rpid in players]
+            reduced_total, reduced_assignment = optimal_lineup(reduced_entries, slots, eligibility)
+            value_delta[w] = base_by_week[w] - reduced_total
+            newly_started = set(reduced_assignment.values()) - set(base_assignment_by_week[w].values())
+            same_pos_replacement = next((npid for npid in newly_started if players[npid].position == pos), None)
+            replacement_id[w] = same_pos_replacement or next(iter(newly_started), None)
+
+            best_fa = max(fa_pool, key=lambda f: f.weekly.get(w, 0.0), default=None)
+            if best_fa is not None and best_fa.weekly.get(w, 0.0) > 0:
+                ww_players = dict(players)
+                ww_players[best_fa.id] = best_fa
+                ww_total, _ = optimal_lineup(
+                    reduced_entries + [(best_fa.id, best_fa.position, best_fa.weekly.get(w, 0.0))], slots, eligibility
+                )
+                value_delta_ww[w] = base_by_week[w] - ww_total
+                ww_replacement_id[w] = best_fa.id
+            else:
+                value_delta_ww[w] = value_delta[w]
+                ww_replacement_id[w] = None
+
         result[pid] = {
-            "value_delta": value_delta, "value_delta_ww": value_delta_ww,
-            "ww_replacement_id": best_fa.id if best_fa is not None else None,
+            "value_delta": value_delta, "replacement_id": replacement_id,
+            "value_delta_ww": value_delta_ww, "ww_replacement_id": ww_replacement_id,
         }
     return result
 
@@ -197,10 +238,12 @@ def depth_values(
 ) -> dict[str, dict[str, float]]:
     by_week = depth_values_by_week(team_player_ids, players, free_agents_by_pos, weeks, slots, eligibility)
     return {
-        pid: {
-            "value_delta": sum(v["value_delta"].values()), "value_delta_ww": sum(v["value_delta_ww"].values()),
-            "ww_replacement_id": v["ww_replacement_id"],
-        }
+        # replacement_id/ww_replacement_id are now per-week (see
+        # depth_values_by_week) - the season-long aggregate has no single
+        # "the" replacement to report, so it's dropped here rather than
+        # picking one week arbitrarily. Callers that want to know who
+        # filled in should use depth_values_by_week directly.
+        pid: {"value_delta": sum(v["value_delta"].values()), "value_delta_ww": sum(v["value_delta_ww"].values())}
         for pid, v in by_week.items()
     }
 

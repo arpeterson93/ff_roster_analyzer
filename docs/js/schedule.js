@@ -179,16 +179,26 @@ function matchupRow(m, data, expandedKey, yourTeamId, avg, spread) {
   // (the real score already answers the question).
   const winPct = (pct) => (pct === null || pct === undefined ? "" : `<div class="muted small">${fmt(pct * 100, 0)}% to win</div>`);
 
-  // A single two-segment bar rather than two separate numbers, so the
-  // matchup reads as one comparison at a glance - home's share on the left,
-  // away's on the right, in the same left-right order as the two name
-  // columns it sits between.
+  // A sliding indicator rather than a proportional stacked bar: the
+  // colored bar is ALWAYS exactly half the track's width - at 50/50 it
+  // sits centered on the track's midpoint (25%-75%); the more lopsided the
+  // matchup, the further it slides toward the favored side (fully flush
+  // left at 100% home, fully flush right at 100% away), while staying the
+  // same length throughout. The home/away color split inside that sliding
+  // bar always lands exactly on the track's fixed 50% mark regardless of
+  // where the bar itself has slid to, so the boundary between the two
+  // colors doubles as the "dead center" reference point (also marked with
+  // its own tick, visible whenever the bar doesn't cover it - i.e.
+  // whenever either side is a sure thing).
   const winProbBar = (homePct, awayPct) =>
     homePct === null || homePct === undefined
       ? ""
       : `<div class="winprob-bar" title="${fmt(homePct * 100, 0)}% / ${fmt(awayPct * 100, 0)}%">
-          <div class="winprob-seg winprob-home" style="width:${homePct * 100}%"></div>
-          <div class="winprob-seg winprob-away" style="width:${awayPct * 100}%"></div>
+          <div class="winprob-center-line"></div>
+          <div class="winprob-slider" style="left:${50 - 50 * homePct}%;">
+            <div class="winprob-seg winprob-home" style="width:${homePct * 100}%"></div>
+            <div class="winprob-seg winprob-away" style="width:${awayPct * 100}%"></div>
+          </div>
         </div>`;
 
   const expanded = expandedKey === key;

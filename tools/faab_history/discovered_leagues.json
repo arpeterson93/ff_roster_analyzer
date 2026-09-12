@@ -8718,5 +8718,941 @@
     "uses_faab": false,
     "acquisition_budget": 100,
     "matchup_period_count": 15
+  },
+  {
+    "league_id": 158988,
+    "name": "Football Knowledge",
+    "size": 14,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 13
+  },
+  {
+    "league_id": 158994,
+    "name": "Blood, Sweat and Beers",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 159014,
+    "name": "Gridiron Kingdom",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 159021,
+    "name": "Best Dynasty League Ever Est.'07",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 159031,
+    "name": "Unnecessary Roughness League",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 159233,
+    "name": "B612",
+    "size": 10,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 11
+  },
+  {
+    "league_id": 159316,
+    "name": "Kisker Fantasy League (KFL)",
+    "size": 12,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 159434,
+    "name": "Mile High",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 200,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 159445,
+    "name": "NEGA League",
+    "size": 10,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 159538,
+    "name": "Smackdown Poker 619",
+    "size": 12,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 159556,
+    "name": "The League",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 159639,
+    "name": "silly nanys",
+    "size": 10,
+    "uses_faab": true,
+    "acquisition_budget": 1000,
+    "matchup_period_count": 15
+  },
+  {
+    "league_id": 159694,
+    "name": "Mooseyard Challenge",
+    "size": 16,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 159738,
+    "name": "FF 2026",
+    "size": 10,
+    "uses_faab": true,
+    "acquisition_budget": 150,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 159779,
+    "name": "East Coast Football League",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 250,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 159819,
+    "name": "Hawkeye state of mind",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 159826,
+    "name": "Battle for Delta Place Dominance",
+    "size": 8,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 159828,
+    "name": "The League",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 159858,
+    "name": "League of Ordinary Gentlemen",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 159882,
+    "name": "$100 PPR Keeper League",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 15
+  },
+  {
+    "league_id": 159909,
+    "name": "WFFL 2K6",
+    "size": 16,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 159941,
+    "name": "Midwest Fantasy",
+    "size": 16,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 160022,
+    "name": "Daddy's Funky Fudge Factory",
+    "size": 14,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 160074,
+    "name": "Trick Bowl XVIII",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 160088,
+    "name": "Blue Lives Matter",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 15
+  },
+  {
+    "league_id": 160110,
+    "name": "Game of Throws",
+    "size": 8,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 11
+  },
+  {
+    "league_id": 160131,
+    "name": "CrashOverride",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 15
+  },
+  {
+    "league_id": 160156,
+    "name": "Motor Boating",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 160194,
+    "name": "Trading Floor Football",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 160197,
+    "name": "BnP_FFL",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 200,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 160270,
+    "name": "BamaPo-Po's",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 160295,
+    "name": "League of Extraordinary jackass'",
+    "size": 12,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 160485,
+    "name": "The league of ordinary gentlemen",
+    "size": 12,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 13
+  },
+  {
+    "league_id": 160509,
+    "name": "Hardworking Stiffs",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 160513,
+    "name": "The Lemmon Bowl XIX",
+    "size": 12,
+    "uses_faab": false,
+    "acquisition_budget": 1000,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 160530,
+    "name": "RMYT V",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 13
+  },
+  {
+    "league_id": 160568,
+    "name": "MKVH",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 160700,
+    "name": "Abandon All Hope",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 160753,
+    "name": "The Brotherhood",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 160778,
+    "name": "Hurricane Alley Football",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 160783,
+    "name": "The Bad Boys FFL",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 160914,
+    "name": "Go to Hell Goodell",
+    "size": 12,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 160944,
+    "name": "The People's Fantasy",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 161071,
+    "name": "The Hendrix League",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 15
+  },
+  {
+    "league_id": 161112,
+    "name": "Jersey boys NFL Fantasy League",
+    "size": 7,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 161191,
+    "name": "The OCHO Fantasy Football League",
+    "size": 12,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 161255,
+    "name": "Mville Football",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 161299,
+    "name": "Ultimate Discord Fantasy League",
+    "size": 12,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 161363,
+    "name": "Almond Brains",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 161368,
+    "name": "pay up.",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 13
+  },
+  {
+    "league_id": 161462,
+    "name": "In God We Trust",
+    "size": 12,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 13
+  },
+  {
+    "league_id": 161474,
+    "name": "The Wheelchair Mafia",
+    "size": 12,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 161553,
+    "name": "Smack Down Society",
+    "size": 8,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 161577,
+    "name": "Dynasty Football GM League",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 200,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 161757,
+    "name": "VT Fantasy Football League",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 1000,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 161823,
+    "name": "Acacia 21's",
+    "size": 12,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 161832,
+    "name": "Knights of the OliveGarden Table",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 161842,
+    "name": "The League of Our Own",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 250,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 161879,
+    "name": "2024 ITRAD Fantasy",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 200,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 161893,
+    "name": "League of Ten",
+    "size": 12,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 161923,
+    "name": "TD's and Beer",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 15
+  },
+  {
+    "league_id": 161935,
+    "name": "LeagueOfScum",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 161937,
+    "name": "Ballers Inc.",
+    "size": 12,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 11
+  },
+  {
+    "league_id": 162021,
+    "name": "GiselesGroupies",
+    "size": 10,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 162028,
+    "name": "Infamous Players",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 1000,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 162036,
+    "name": "Mr. Belvedere's Fan Club",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 162070,
+    "name": "GRIDIRON GUILD",
+    "size": 6,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 162129,
+    "name": "Blakely Bowl",
+    "size": 12,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 162168,
+    "name": "Show Me The Money",
+    "size": 12,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 162341,
+    "name": "The League",
+    "size": 12,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 162352,
+    "name": "WUSFL",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 162362,
+    "name": "Section 116",
+    "size": 10,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 162384,
+    "name": "ESPN League",
+    "size": 8,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 162413,
+    "name": "DON'T EAT KIKA SUSHI",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 162422,
+    "name": "The CoMO Auction League",
+    "size": 6,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 162424,
+    "name": "Big Boy League",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 162441,
+    "name": "Guys With Average C*cks",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 162466,
+    "name": "STC Fantasy Football",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 162501,
+    "name": "Cigar Night Fantasy League",
+    "size": 8,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 15
+  },
+  {
+    "league_id": 162512,
+    "name": "The Auction League",
+    "size": 10,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 13
+  },
+  {
+    "league_id": 162522,
+    "name": "National Fantasy League ATX",
+    "size": 12,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 162580,
+    "name": "The Round Table",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 1000,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 162597,
+    "name": "The Playaz Club",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 162667,
+    "name": "Tuscany 12",
+    "size": 12,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 162752,
+    "name": "CMW Fantasy Football",
+    "size": 10,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 162775,
+    "name": "League 407 est. 2018",
+    "size": 14,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 162795,
+    "name": "lomBEERdi League",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 162800,
+    "name": "The Family",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 162840,
+    "name": "Pi-Zeta Fantasy Football",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 200,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 162989,
+    "name": "The Expansion League",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 162996,
+    "name": "THE INFAMOUS FAMILY",
+    "size": 12,
+    "uses_faab": false,
+    "acquisition_budget": 1000,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 163022,
+    "name": "Buckeye Bonanza",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 15
+  },
+  {
+    "league_id": 163029,
+    "name": "Deflated Footballs",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 163057,
+    "name": "RIP Banana Joes",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 50,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 163070,
+    "name": "SFL",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 13
+  },
+  {
+    "league_id": 163099,
+    "name": "Sunday Funday",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 13
+  },
+  {
+    "league_id": 163159,
+    "name": "nohelmets",
+    "size": 12,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 163161,
+    "name": "huck it, chuck it, football",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 1000,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 163228,
+    "name": "Yay! Football?",
+    "size": 12,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 163276,
+    "name": "Memphis Mosh Pit",
+    "size": 12,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 163392,
+    "name": "Drunkin Sundays",
+    "size": 12,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 163395,
+    "name": "The Dynasty League",
+    "size": 10,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 163421,
+    "name": "2024 Keeper ",
+    "size": 4,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 163443,
+    "name": "14th Annual Player Hater's Ball",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 163455,
+    "name": "NFL",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 163476,
+    "name": "You Play To Win The Game",
+    "size": 10,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 15
+  },
+  {
+    "league_id": 163586,
+    "name": "Pandas of America",
+    "size": 14,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 163653,
+    "name": "P4PFFL",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 15
+  },
+  {
+    "league_id": 163694,
+    "name": "Any Given Sunday: New Blood ",
+    "size": 14,
+    "uses_faab": true,
+    "acquisition_budget": 200,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 163731,
+    "name": "PCWVH Family Football Fanatics",
+    "size": 12,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 163739,
+    "name": "American Firefighters Plus",
+    "size": 12,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 15
+  },
+  {
+    "league_id": 163779,
+    "name": "E-Blocc",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 163864,
+    "name": "Show Me Your TD's",
+    "size": 8,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 12
+  },
+  {
+    "league_id": 163968,
+    "name": "The Uncle Ricos",
+    "size": 12,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 164011,
+    "name": "PRI League",
+    "size": 12,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 164036,
+    "name": "Beer and (.Y.)'s",
+    "size": 10,
+    "uses_faab": true,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
+  },
+  {
+    "league_id": 164186,
+    "name": "The Shrimp Dick League",
+    "size": 10,
+    "uses_faab": false,
+    "acquisition_budget": 100,
+    "matchup_period_count": 14
   }
 ]

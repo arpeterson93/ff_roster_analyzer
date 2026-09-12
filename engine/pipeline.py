@@ -760,19 +760,24 @@ def run_league(cfg: dict) -> dict:
         depth_table: dict[str, list[dict]] = {pos: [] for pos in settings.positions}
         for pid in roster_ids:
             pos = players_by_id[pid]["position"]
-            vals = depth_by_week.get(pid, {"value_delta": {}, "value_delta_ww": {}, "ww_replacement_id": None})
+            vals = depth_by_week.get(pid, {"value_delta": {}, "replacement_id": {}, "value_delta_ww": {}, "ww_replacement_id": {}})
             depth_table.setdefault(pos, []).append(
                 {
                     "id": pid,
                     "value_delta": sum(vals["value_delta"].values()),
                     "value_delta_ww": sum(vals["value_delta_ww"].values()),
-                    # The single free agent value_delta_ww is actually computed
-                    # against (see depth_values_by_week) - a player modal
-                    # showing this week-by-week needs to name it, not just
-                    # show the number.
-                    "ww_replacement_id": vals.get("ww_replacement_id"),
+                    # Both replacements are picked FRESH each week (see
+                    # depth_values_by_week) - a real teammate who'd start in
+                    # pid's place, and the best streaming free agent, can
+                    # each be a different specific player week to week, so
+                    # both live in the per-week list below, not as one
+                    # season-long name at the top level.
                     "weekly": [
-                        {"week": w, "value_delta": vals["value_delta"].get(w, 0.0), "value_delta_ww": vals["value_delta_ww"].get(w, 0.0)}
+                        {
+                            "week": w,
+                            "value_delta": vals["value_delta"].get(w, 0.0), "replacement_id": vals["replacement_id"].get(w),
+                            "value_delta_ww": vals["value_delta_ww"].get(w, 0.0), "ww_replacement_id": vals["ww_replacement_id"].get(w),
+                        }
                         for w in weeks
                     ],
                 }

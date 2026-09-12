@@ -311,18 +311,39 @@ function nmdDetailSection(player, data) {
     const team = data.teamsById.get(player.fantasy_team_id);
     const entry = (team?.depth?.[player.position] || []).find((d) => d.id === player.id);
     if (!entry) return "";
-    const replacement = entry.ww_replacement_id ? data.playersById.get(entry.ww_replacement_id) : null;
+    const currentWeek = data.meta.current_week;
+    // BOTH replacements are picked fresh every week (see engine/
+    // team_strength.py's depth_values_by_week) - a real bench teammate can
+    // be a different specific player week to week (byes/matchups), and so
+    // can the best available free agent, so this shows the actual name
+    // AND the two raw point values behind each week's delta, not just the
+    // resulting number.
+    const replacementCell = (pid, week) => {
+      if (!pid) return `<span class="muted small">&ndash;</span>`;
+      const p = data.playersById.get(pid);
+      if (!p) return `<span class="muted small">${escapeHtml(pid)}</span>`;
+      return `${escapeHtml(p.name)} <span class="muted small">(${fmt(weeklyProjection(p, week, currentWeek), 1)})</span>`;
+    };
     const rows = entry.weekly
-      .map((w) => `<tr><td>Wk ${w.week}</td><td>${fmt(w.value_delta, 1)}</td><td>${fmt(w.value_delta_ww, 1)}</td></tr>`)
+      .map((w) => {
+        const ownPts = fmt(weeklyProjection(player, w.week, currentWeek), 1);
+        return `<tr>
+          <td>Wk ${w.week}</td>
+          <td>${fmt(w.value_delta, 1)}</td>
+          <td>${ownPts} vs ${replacementCell(w.replacement_id, w.week)}</td>
+          <td>${fmt(w.value_delta_ww, 1)}</td>
+          <td>${ownPts} vs ${replacementCell(w.ww_replacement_id, w.week)}</td>
+        </tr>`;
+      })
       .join("");
     return `
       <h3>NMD week-by-week</h3>
-      <p class="muted small">"Value" is the lineup points your team loses if he's dropped outright, week by week. "Value (w/ waivers)" is the same drop, but immediately backfilled by ${replacement ? `<b>${escapeHtml(replacement.name)}</b>` : "the best available free agent at his position"} - the same single replacement the whole season through, not re-picked week to week.</p>
+      <p class="muted small">"Value" is the lineup points your team loses if he's dropped outright that week - "Replaced by" names whichever teammate's own promotion into his slot produces that number, straight from your own roster's real depth that week. "Value (w/ waivers)" is the same drop, backfilled instead by whichever free agent projects best at his position THAT SPECIFIC WEEK. Both replacements are re-picked every week, not fixed for the season - a real reflection of how byes, matchups, and the waiver wire actually shift week to week, so don't be surprised if the name changes row to row.</p>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Week</th><th>Value</th><th>Value (w/ waivers)</th></tr></thead>
+          <thead><tr><th>Week</th><th>Value</th><th>Replaced by (own roster)</th><th>Value (w/ waivers)</th><th>Replaced by (FA)</th></tr></thead>
           <tbody>${rows}</tbody>
-          <tfoot><tr class="totals-row"><td>Total</td><td>${fmt(entry.value_delta, 1)}</td><td>${fmt(entry.value_delta_ww, 1)}</td></tr></tfoot>
+          <tfoot><tr class="totals-row"><td>Total</td><td>${fmt(entry.value_delta, 1)}</td><td></td><td>${fmt(entry.value_delta_ww, 1)}</td><td></td></tr></tfoot>
         </table>
       </div>
     `;
@@ -349,18 +370,18 @@ function nmdDetailSection(player, data) {
   `;
 }
 
-// The single-player modal's full inner HTML (header + Overview/FAAB tabs,
-// or just a flat Overview when there's no FAAB tab to show) - factored out
-// of openPlayerModal so openComparePlayerModal can render the exact same
-// content twice, side by side, rather than reimplementing it.
+// The single-player modal's full inner HTML: header/stat-grid, then always
+// two tabs (Weekly projections, Week-to-week NMD) plus a third (FAAB Bid)
+// only for players on ESPN "WAIVERS" status this week (see engine/
+// pipeline.py's _compute_faab_estimates) - everyone else just doesn't get
+// a third tab, rather than an empty one. Factored out of openPlayerModal
+// so openComparePlayerModal can render the exact same content twice, side
+// by side, rather than reimplementing it.
 function playerModalContentHtml(player, data) {
   const color = POSITION_COLOR[player.position] || "#888";
   const team = player.fantasy_team_id !== null ? data.teamsById.get(player.fantasy_team_id) : null;
-  // A FAAB tab only exists at all for players on ESPN "WAIVERS" status this
-  // week (see engine/pipeline.py's _compute_faab_estimates) - everyone else
-  // (the vast majority of players opened from Rankings/rosters) keeps the
-  // exact same single flat view this modal always had, no empty tab bar.
   const faabHtml = faabEstimateSection(player, data);
+  const nmdHtml = nmdDetailSection(player, data);
 
   const header = `
     <div class="player-modal-header">
@@ -376,21 +397,20 @@ function playerModalContentHtml(player, data) {
       <div class="stat-tile"><div class="stat-label">Reg / Playoff</div><div class="stat-value">${fmt(player.reg_total, 1)} / ${fmt(player.playoff_total, 1)}</div></div>
       <div class="stat-tile"><div class="stat-label">Value (w/ waivers)</div><div class="stat-value">${player.value_delta_ww !== null ? fmt(player.value_delta_ww, 1) : "–"}</div></div>
     </div>
-    ${nmdDetailSection(player, data)}
   `;
 
-  if (!faabHtml) {
-    return `${header}${overviewTabHtml(player, data)}`;
-  }
+  const tabs = [
+    { key: "projections", label: "Weekly Projections", html: overviewTabHtml(player, data) },
+    { key: "nmd", label: "Week-to-Week NMD", html: nmdHtml || `<p class="muted small">No roster-value context available for this player.</p>` },
+    ...(faabHtml ? [{ key: "faab", label: "FAAB Bid", html: faabHtml }] : []),
+  ];
 
   return `
     ${header}
     <div class="modal-tabs">
-      <button class="modal-tab-btn active" data-modal-tab="overview">Overview</button>
-      <button class="modal-tab-btn" data-modal-tab="faab">FAAB Bid</button>
+      ${tabs.map((t, i) => `<button class="modal-tab-btn${i === 0 ? " active" : ""}" data-modal-tab="${t.key}">${t.label}</button>`).join("")}
     </div>
-    <div class="modal-tabpanel active" data-modal-panel="overview">${overviewTabHtml(player, data)}</div>
-    <div class="modal-tabpanel" data-modal-panel="faab">${faabHtml}</div>
+    ${tabs.map((t, i) => `<div class="modal-tabpanel${i === 0 ? " active" : ""}" data-modal-panel="${t.key}">${t.html}</div>`).join("")}
   `;
 }
 

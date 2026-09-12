@@ -59,6 +59,14 @@ function clearSelection() {
   syncCheckboxesInDom();
 }
 
+// Called by app.js on every tab switch - a compare selection only makes
+// sense while you're on the tab you were picking from, so it shouldn't
+// linger once you've navigated to unrelated work (Trade, Schedule,
+// Settings, etc.) and come back to it stale later.
+export function clearCompareSelection() {
+  clearSelection();
+}
+
 export function compareCheckboxHtml(player) {
   const checked = selected.some((s) => s.player.id === player.id);
   return `<input type="checkbox" class="compare-checkbox" data-compare-id="${player.id}" ${checked ? "checked" : ""} title="Add to compare" onclick="event.stopPropagation()">`;

@@ -71,6 +71,50 @@ def test_depth_values_waiver_backfill_reduces_value_delta():
     assert values["rb1"]["value_delta_ww"] < values["rb1"]["value_delta"]
 
 
+def test_depth_values_by_week_names_a_replacement_that_can_change_weekly():
+    # Two free agents whose better week flips: FA-A the better play in
+    # week 1, FA-B in week 2 - the NAMED replacement must flip with it,
+    # not stay pinned to whichever one wins by season-long ros_total.
+    slots = {"RB": 1}
+    eligibility = {"RB": {"RB"}}
+    weeks = [1, 2]
+    players = {
+        "rb1": PlayerCtx(id="rb1", position="RB", ros_total=40.0, weekly={1: 20.0, 2: 20.0}),
+        "rb2": PlayerCtx(id="rb2", position="RB", ros_total=13.0, weekly={1: 5.0, 2: 8.0}),
+    }
+    free_agents = {
+        "RB": [
+            PlayerCtx(id="fa_a", position="RB", ros_total=10.0, weekly={1: 9.0, 2: 1.0}),
+            PlayerCtx(id="fa_b", position="RB", ros_total=8.0, weekly={1: 2.0, 2: 9.0}),
+        ]
+    }
+    by_week = depth_values_by_week(["rb1", "rb2"], players, free_agents, weeks, slots, eligibility)
+    rb1 = by_week["rb1"]
+    # The bench teammate (rb2) absorbs rb1's vacated slot both weeks - the
+    # roster's only other RB, so no ambiguity there.
+    assert rb1["replacement_id"] == {1: "rb2", 2: "rb2"}
+    assert rb1["value_delta"][1] == pytest.approx(15.0)  # 20 - rb2's wk1 5
+    assert rb1["value_delta"][2] == pytest.approx(12.0)  # 20 - rb2's wk2 8
+    # The waiver replacement DOES flip week to week, picked fresh each time.
+    assert rb1["ww_replacement_id"] == {1: "fa_a", 2: "fa_b"}
+    assert rb1["value_delta_ww"][1] == pytest.approx(11.0)  # 20 - fa_a's wk1 9
+    assert rb1["value_delta_ww"][2] == pytest.approx(11.0)  # 20 - fa_b's wk2 9
+
+
+def test_depth_values_by_week_replacement_id_none_when_bench_too_thin():
+    # No bench RB at all - dropping the only RB starter changes nothing
+    # about who else starts (nobody else is even RB-eligible).
+    slots = {"RB": 1, "WR": 1}
+    eligibility = {"RB": {"RB"}, "WR": {"WR"}}
+    weeks = [1]
+    players = {
+        "rb1": PlayerCtx(id="rb1", position="RB", ros_total=20.0, weekly={1: 20.0}),
+        "wr1": PlayerCtx(id="wr1", position="WR", ros_total=10.0, weekly={1: 10.0}),
+    }
+    by_week = depth_values_by_week(["rb1", "wr1"], players, {}, weeks, slots, eligibility)
+    assert by_week["rb1"]["replacement_id"][1] is None
+
+
 def test_position_strength_attributes_flex_to_real_position():
     slots = {"RB": 1, "FLEX": 1}
     eligibility = {"RB": {"RB"}, "FLEX": {"RB", "WR"}}

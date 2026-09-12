@@ -295,7 +295,7 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 .trade-side { flex: 1; min-width: 220px; }
 .trade-verdict { font-size: 16px; font-weight: 700; margin: 10px 0; }
 
-.heat-cell { text-align: center; font-variant-numeric: tabular-nums; color: #111; }
+.heat-cell { text-align: center; font-variant-numeric: tabular-nums; color: #111; border-radius: 4px; }
 
 .muted { color: var(--ink-500); }
 .small { font-size: 12px; }
@@ -349,9 +349,17 @@ details[open] summary { margin-bottom: 8px; }
    Its own row, not squeezed into the existing name cells, so it reads as
    one bar spanning the whole matchup rather than two disconnected slivers. */
 .winprob-row td { padding: 0 8px 8px; border-bottom: 1px solid var(--border); }
-.winprob-bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--border); }
+.winprob-bar { position: relative; height: 8px; border-radius: 4px; background: var(--paper); }
+/* Always exactly half the track's width - see schedule.js's winProbBar for
+   the geometry (a fixed-length indicator that SLIDES along the track,
+   rather than a proportional two-color fill). */
+.winprob-slider { position: absolute; top: 0; bottom: 0; width: 50%; display: flex; border-radius: 4px; overflow: hidden; }
 .winprob-seg.winprob-home { background: var(--accent); }
 .winprob-seg.winprob-away { background: color-mix(in srgb, var(--ink-500) 55%, transparent); }
+/* Dead-center (50/50) reference tick - taller than the bar itself so it
+   still reads as a landmark even when the slider fully covers the track
+   (which it does whenever both teams have some real chance). */
+.winprob-center-line { position: absolute; top: -2px; bottom: -2px; left: 50%; width: 1px; background: var(--ink-500); opacity: 0.6; }
 
 /* Schedule's expanded matchup: one shared table mirrored around a single
    center "slot" column, home outside-left and away outside-right (players
