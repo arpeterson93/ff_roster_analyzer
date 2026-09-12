@@ -1,0 +1,2638 @@
+[
+  {
+    "league_id": 100387,
+    "name": "Tru Playaz",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 100594,
+    "name": "2026 High Rollers League",
+    "year_status": {
+      "2019": "accessible",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 100827,
+    "name": "Andrew Marchese Invitational",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 100863,
+    "name": "THE NEW ENGLAND GUMBAS",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 100954,
+    "name": "Roughrider Fantasy League",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 101203,
+    "name": "Deuces Wild Members Only",
+    "year_status": {
+      "2019": "accessible",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 101429,
+    "name": "Preferred Select Rounds ReDrafts",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 101439,
+    "name": "The BOLD divas",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 101450,
+    "name": "Romosexuals",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2025
+    ]
+  },
+  {
+    "league_id": 101858,
+    "name": "THE_GENTLEMENS CLUB",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2025
+    ]
+  },
+  {
+    "league_id": 101896,
+    "name": "The Dynasty",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 102106,
+    "name": "FFCS 1",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 102326,
+    "name": "Spankers On Top",
+    "year_status": {
+      "2019": "accessible",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 102363,
+    "name": "Will Ferrell League",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 102575,
+    "name": "The League",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 102597,
+    "name": "Delta Gamma Sigma",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "private(401)"
+    },
+    "accessible_years": []
+  },
+  {
+    "league_id": 102608,
+    "name": "The Pro Bowl",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 102620,
+    "name": "Ball-So-Hard",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 103201,
+    "name": "Radisson Rough Brothers",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 103329,
+    "name": "Le GROS POOL",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 103483,
+    "name": "The Lambda League",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 103653,
+    "name": "Vesty League",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2025
+    ]
+  },
+  {
+    "league_id": 103777,
+    "name": "SAE PC15' Fantasy",
+    "year_status": {
+      "2019": "accessible",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 104035,
+    "name": "Woodcliff Lake Wolfpack",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2025
+    ]
+  },
+  {
+    "league_id": 104038,
+    "name": "McAllister Part VI",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 104163,
+    "name": "The Chulent Bowl",
+    "year_status": {
+      "2019": "accessible",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 104412,
+    "name": "San Fran Slap",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "ok_but_unexpected_shape"
+    },
+    "accessible_years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024
+    ]
+  },
+  {
+    "league_id": 104472,
+    "name": "The Expansion League",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2025
+    ]
+  },
+  {
+    "league_id": 104497,
+    "name": "Two QB Dynasty League",
+    "year_status": {
+      "2019": "accessible",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 104755,
+    "name": "League of Extraordinary Popes",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 105018,
+    "name": "WOC Fantasy Football 2025",
+    "year_status": {
+      "2019": "accessible",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 105145,
+    "name": "All in a Huddle",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 105491,
+    "name": "Shady J Football League",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 105652,
+    "name": "The Gentlemen's League",
+    "year_status": {
+      "2019": "accessible",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 105705,
+    "name": "Fantasy Football 2010",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "ok_but_unexpected_shape"
+    },
+    "accessible_years": [
+      2022,
+      2023,
+      2024
+    ]
+  },
+  {
+    "league_id": 105912,
+    "name": "You Win or You Die",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 106059,
+    "name": "BEFIT Fantasy Football",
+    "year_status": {
+      "2019": "accessible",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 106857,
+    "name": "Stankonia",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "private(401)"
+    },
+    "accessible_years": []
+  },
+  {
+    "league_id": 106917,
+    "name": "Fantasy Football",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 107395,
+    "name": "UCGA",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "private(401)"
+    },
+    "accessible_years": []
+  },
+  {
+    "league_id": 107467,
+    "name": "Little Lebowski Urban Achievers",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 107521,
+    "name": "Down-ing Syndrome",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "private(401)"
+    },
+    "accessible_years": [
+      2022,
+      2023,
+      2024
+    ]
+  },
+  {
+    "league_id": 107647,
+    "name": "Crazy Sister XV",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 107993,
+    "name": "Any Given Sunday FFL",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 108064,
+    "name": "Long Island FFL",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "private(401)"
+    },
+    "accessible_years": []
+  },
+  {
+    "league_id": 108268,
+    "name": "Effingham",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 108367,
+    "name": "Man's League",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 108383,
+    "name": "The Bastards Of Babylon",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "private(401)"
+    },
+    "accessible_years": []
+  },
+  {
+    "league_id": 108466,
+    "name": "Worth the Trip",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "private(401)"
+    },
+    "accessible_years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024
+    ]
+  },
+  {
+    "league_id": 108505,
+    "name": "EFL",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 108531,
+    "name": "DHS Alumni League",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 108673,
+    "name": "Blitz 2026",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "private(401)"
+    },
+    "accessible_years": []
+  },
+  {
+    "league_id": 108763,
+    "name": "The Big League",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 108880,
+    "name": "Degenerates cove",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 108916,
+    "name": "Three yards and a cloud of Doug",
+    "year_status": {
+      "2019": "accessible",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 108920,
+    "name": "Biloxi High Alumni",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "private(401)"
+    },
+    "accessible_years": []
+  },
+  {
+    "league_id": 109123,
+    "name": "The Year Of The Shiva",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 109192,
+    "name": "We Only Draft Asians",
+    "year_status": {
+      "2019": "accessible",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 109297,
+    "name": "Bringing Delilah Home",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 109367,
+    "name": "BDFF 16",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 109453,
+    "name": "Poolesville FFL",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "private(401)"
+    },
+    "accessible_years": []
+  },
+  {
+    "league_id": 109976,
+    "name": "Delta Force",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 110683,
+    "name": "B1G TEN",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 110701,
+    "name": "C Diddy's 23rd Annual FFL",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "private(401)"
+    },
+    "accessible_years": []
+  },
+  {
+    "league_id": 110800,
+    "name": "The League 2024",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "ok_but_unexpected_shape"
+    },
+    "accessible_years": []
+  },
+  {
+    "league_id": 111119,
+    "name": "The League of Extra-ordinary Men",
+    "year_status": {
+      "2019": "accessible",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 111209,
+    "name": "Sofa Football League",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 111318,
+    "name": "Fat Fantasy Football League",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 111717,
+    "name": "Ex-Dillon Fantasy Football",
+    "year_status": {
+      "2019": "accessible",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 111763,
+    "name": "Chesco Royalty",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 112132,
+    "name": "CFL",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 112388,
+    "name": "Gridiron Gang",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 112689,
+    "name": "Heath Miller Debacle",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2025
+    ]
+  },
+  {
+    "league_id": 112954,
+    "name": "Long Hill Based",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 113307,
+    "name": "THE LEAGUE",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 113332,
+    "name": "DCO",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2025
+    ]
+  },
+  {
+    "league_id": 113414,
+    "name": "We love Boobie\u2019s! ",
+    "year_status": {
+      "2019": "accessible",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 113756,
+    "name": "Chris Benoit Memorial League",
+    "year_status": {
+      "2019": "accessible",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 113938,
+    "name": "LEAGUE OF INTEGRITY",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 114032,
+    "name": "a little five forks trickum",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2025
+    ]
+  },
+  {
+    "league_id": 114052,
+    "name": "UNC Grudge Match",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "private(401)"
+    },
+    "accessible_years": []
+  },
+  {
+    "league_id": 114353,
+    "name": "LJ8 is Bewrow's Daddy ",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 114430,
+    "name": "Durham Football League",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 114533,
+    "name": "Skip Bayless Haters",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 114650,
+    "name": "CCFFL",
+    "year_status": {
+      "2019": "accessible",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 115046,
+    "name": "Misfits XVIII",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 115409,
+    "name": "Wholistic Fantasy Management",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 115842,
+    "name": "Football Royale",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 115848,
+    "name": "the 302 league",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 116058,
+    "name": "LM Eagles",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 116252,
+    "name": "Auctane East",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 116294,
+    "name": "Trasha Fantasy League II",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 116339,
+    "name": "Bluefield's Exclusive FFL",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 116437,
+    "name": "The Player Haters Bowl",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "private(401)"
+    },
+    "accessible_years": []
+  },
+  {
+    "league_id": 117249,
+    "name": "FANTASY FOOTBALL FANATICS",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "private(401)"
+    },
+    "accessible_years": []
+  },
+  {
+    "league_id": 117297,
+    "name": "HFL- Hooterville Football League",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "accessible",
+      "2024": "ok_but_unexpected_shape",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2023,
+      2025
+    ]
+  },
+  {
+    "league_id": 117524,
+    "name": "Fuck Austin ",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 117560,
+    "name": "Wisconsin Beer League",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 117606,
+    "name": "\ud83c\udfc1\ud83c\udfc1\ud83c\udfc1",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 117696,
+    "name": "CPCC Legends",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 117770,
+    "name": "SouthEast Side Fantasy Football",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "private(401)"
+    },
+    "accessible_years": []
+  },
+  {
+    "league_id": 117867,
+    "name": "Angelina's Finest",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2025
+    ]
+  },
+  {
+    "league_id": 118110,
+    "name": "It's a Trap",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "private(401)"
+    },
+    "accessible_years": []
+  },
+  {
+    "league_id": 119089,
+    "name": "The League",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 119564,
+    "name": "League SBS",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "private(401)"
+    },
+    "accessible_years": []
+  },
+  {
+    "league_id": 120152,
+    "name": "Mexbowl",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 120183,
+    "name": "The Elisha Manning Championship",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 120185,
+    "name": "Hungover Sundays",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2025
+    ]
+  },
+  {
+    "league_id": 120421,
+    "name": "Tallent's OASIS",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "ok_but_unexpected_shape"
+    },
+    "accessible_years": [
+      2021,
+      2022,
+      2023,
+      2024
+    ]
+  },
+  {
+    "league_id": 120450,
+    "name": "Petrides FFB",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 120975,
+    "name": "NJIT FFL",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 120983,
+    "name": "Pete's Little Tiny Erect Dick",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 121039,
+    "name": "The League of Diversity",
+    "year_status": {
+      "2019": "accessible",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 121070,
+    "name": "We Dem Boyz",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2025
+    ]
+  },
+  {
+    "league_id": 121269,
+    "name": "Downriver Fantasy Football 2025",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 121454,
+    "name": "502 CREW",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 121562,
+    "name": "Stillwater Football League",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 121736,
+    "name": "Any Day But Sunday",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "ok_but_unexpected_shape"
+    },
+    "accessible_years": [
+      2023,
+      2024
+    ]
+  },
+  {
+    "league_id": 121861,
+    "name": "KIS Fantasy Football 12",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "private(401)"
+    },
+    "accessible_years": []
+  },
+  {
+    "league_id": 121931,
+    "name": "The Man FFL",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "private(401)"
+    },
+    "accessible_years": []
+  },
+  {
+    "league_id": 122004,
+    "name": "Warnell II",
+    "year_status": {
+      "2019": "accessible",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 122228,
+    "name": "Knights of the Gridiron",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 122302,
+    "name": "FFL",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "private(401)"
+    },
+    "accessible_years": []
+  },
+  {
+    "league_id": 122356,
+    "name": "Wagner fantasy league",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 122578,
+    "name": "Football and Beer",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 122620,
+    "name": "Another Fantasy League",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 122736,
+    "name": "Pizza Lovers",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 122905,
+    "name": "The Dirty Dozen",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 123308,
+    "name": "Mark's Fake Football League",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2025
+    ]
+  },
+  {
+    "league_id": 123959,
+    "name": "Sheddies",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 123974,
+    "name": "Terrible People",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2025
+    ]
+  },
+  {
+    "league_id": 124050,
+    "name": "Bears and Enemies",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "ok_but_unexpected_shape",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2020,
+      2021,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 124143,
+    "name": "NPR Superstars 2026",
+    "year_status": {
+      "2019": "accessible",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 124224,
+    "name": "T an A Football",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 124247,
+    "name": "Port Fantasy League",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 124296,
+    "name": "MSPFFL 2026",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2025
+    ]
+  },
+  {
+    "league_id": 124679,
+    "name": "Guys Being Dudes",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "accessible",
+      "2021": "accessible",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 124749,
+    "name": "Texas",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "private(401)"
+    },
+    "accessible_years": []
+  },
+  {
+    "league_id": 124956,
+    "name": "Jock Strap Football",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 125028,
+    "name": "Alaska Connection",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2025
+    ]
+  },
+  {
+    "league_id": 125242,
+    "name": "The Sac Shaft Challenge",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2025
+    ]
+  },
+  {
+    "league_id": 125703,
+    "name": "League of Addicts",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "accessible",
+      "2023": "accessible",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2022,
+      2023,
+      2024,
+      2025
+    ]
+  },
+  {
+    "league_id": 125715,
+    "name": "Andrew High Pimps",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "private(401)",
+      "2025": "private(401)"
+    },
+    "accessible_years": []
+  },
+  {
+    "league_id": 125750,
+    "name": "Bay Area Fantasy Football League",
+    "year_status": {
+      "2019": "private(401)",
+      "2020": "private(401)",
+      "2021": "private(401)",
+      "2022": "private(401)",
+      "2023": "private(401)",
+      "2024": "accessible",
+      "2025": "accessible"
+    },
+    "accessible_years": [
+      2024,
+      2025
+    ]
+  }
+]

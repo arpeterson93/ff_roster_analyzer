@@ -3,6 +3,7 @@ writes docs/data/<slug>/*.json plus the top-level docs/data/leagues.json."""
 from __future__ import annotations
 
 import argparse
+import bisect
 import json
 import logging
 import sys
@@ -14,6 +15,7 @@ from engine.faab_estimate import (
     FANTASY_RELEVANT_SNAP_PCT,
     NO_BID_MIN_PRIOR_POINTS,
     NO_BID_MIN_SNAP_PCT,
+    POOLED_TRAINING_TABLE_PATH,
     TEAMMATE_INJURY_FLAG_STATUSES,
     FaabModel,
     build_gsis_to_pfr_map,
@@ -106,13 +108,24 @@ def _id_lookup(ranks_df, id_map: ids_mod.IdMap) -> dict[str, dict]:
     return lookup
 
 
-def _compute_faab_estimates(cfg: dict, client: EspnClient, players_out: list[dict], season: int, current_week: int) -> dict[str, dict]:
+def _compute_faab_estimates(
+    cfg: dict, client: EspnClient, players_out: list[dict], season: int, current_week: int,
+    team_rosters: dict[int, list[str]], fa_values_out: dict[str, dict[str, float]],
+) -> dict[str, dict]:
     """FAAB bid estimates for currently-unrostered players on ESPN "WAIVERS"
     status (need a real bid, unlike an instant-add "FREEAGENT") - see
     engine/faab_estimate.py for the three estimation methods and
     tools/faab_history/ for how the historical training data was built.
     Opt-in per league via faab_model.enabled in config/leagues/<slug>.yml -
     the historical dataset only exists for The O League.
+
+    Also attaches team_interest (see below) per candidate - team_rosters
+    (team_id -> that team's own player ids, already built earlier in
+    run_league for the standings/lineup passes) and fa_values_out (team_id
+    str -> {player_id: lineup-point gain if added, from
+    engine.team_strength.fa_values - already computed per team for the
+    Rankings NMD column) are both already sitting in run_league's scope by
+    the time this is called, at no extra computation cost here.
 
     Week 1 is a hard cutoff, not just a quiet edge case: there is no PRIOR
     completed week yet (the lookback window is always current_week - 1, by
@@ -151,23 +164,59 @@ def _compute_faab_estimates(cfg: dict, client: EspnClient, players_out: list[dic
         entry = next((w for w in p["weekly"] if w["week"] == current_week - 1), None)
         return entry["actual"] if entry else None
 
-    model = FaabModel()
-    estimates: dict[str, dict] = {}
+    def points_by_week(p: dict) -> dict[int, float]:
+        """This player's real points for every week he's already played -
+        mirrors tools/faab_history/build_training_table.py's
+        _points_by_week, same source (weekly actuals), so the live
+        trailing_2_3_avg_points/season_avg_points features are computed
+        identically to the historical training data."""
+        return {w["week"]: w["actual"]["points"] for w in p["weekly"] if w["actual"] is not None}
+
+    def recent_form(p: dict) -> tuple[float | None, float | None]:
+        """(trailing_2_3_avg_points, season_avg_points) - same disjoint-
+        window definitions as build_training_table.py: weeks (t-2, t-3)
+        only for the trailing window, all weeks before t-1 (cumulative) for
+        the season average."""
+        pts = points_by_week(p)
+        trailing_weeks = [wk for wk in (current_week - 2, current_week - 3) if wk >= 1 and wk in pts]
+        trailing_2_3_avg_points = (sum(pts[wk] for wk in trailing_weeks) / len(trailing_weeks)) if trailing_weeks else None
+        season_weeks = [wk for wk in pts if wk < current_week]
+        season_avg_points = (sum(pts[wk] for wk in season_weeks) / len(season_weeks)) if season_weeks else None
+        return trailing_2_3_avg_points, season_avg_points
+
+    # The pooled, scoring-ledger-filtered multi-league table, not just The O
+    # League's own history - confirmed in backtesting to lower held-out
+    # error 45-52% over the O-League-only table (see the conversation this
+    # was built from), and the only way any league OTHER than The O League
+    # gets real comps at all, since none of them have their own FAAB
+    # history to train on.
+    model = FaabModel(POOLED_TRAINING_TABLE_PATH)
+
+    # First pass: compute every candidate's own inputs, INCLUDING relevance,
+    # before any per-player estimate - best_position_competitor_ros_rank
+    # (below) needs the full relevant-candidate pool up front, not just the
+    # one player currently being scored.
+    per_player: dict[str, dict] = {}
     for p in candidates:
         prior_actual = prior_week_actual(p)
         pfr_id = gsis_to_pfr.get(p["id"])
 
-        teammate_flag = False
+        # Every OTHER same-team/same-position player with a real injury and
+        # relevant recent snap share - both the market-wide teammate_flag
+        # feature (below) and the per-team handcuff attribution (team_
+        # interest, further down) are keyed off this SAME qualifying set, so
+        # it's computed once here instead of twice (once per purpose).
+        qualifying_mates = []
         for mate in by_team_pos.get((p["nfl_team"], p["position"]), []):
             if mate["id"] == p["id"] or mate.get("injury_status") not in TEAMMATE_INJURY_FLAG_STATUSES:
                 continue
             mate_snap_pct = recent_snap_pct(gsis_to_pfr.get(mate["id"]), current_week, snaps_df)
             if mate_snap_pct is not None and mate_snap_pct >= FANTASY_RELEVANT_SNAP_PCT:
-                teammate_flag = True
-                break
+                qualifying_mates.append(mate)
 
         prior_points = prior_actual["points"] if prior_actual else None
         snap_pct = recent_snap_pct(pfr_id, current_week, snaps_df)
+        trailing_2_3_avg_points, season_avg_points = recent_form(p)
 
         # Same relevance bar the historical no_bid rows had to clear to even
         # be included as training data (see engine.faab_estimate's
@@ -178,15 +227,104 @@ def _compute_faab_estimates(cfg: dict, client: EspnClient, players_out: list[dic
         is_relevant = (prior_points is not None and prior_points >= NO_BID_MIN_PRIOR_POINTS) or (
             snap_pct is not None and snap_pct >= NO_BID_MIN_SNAP_PCT
         )
-        if not is_relevant:
-            estimates[p["id"]] = {
-                "comp_based": 0.0, "simple_baseline": 0.0, "regression": 0.0, "comps": [], "distribution": None,
+        per_player[p["id"]] = {
+            "player": p, "prior_actual": prior_actual, "prior_points": prior_points,
+            "snap_pct": snap_pct, "teammate_flag": bool(qualifying_mates), "qualifying_mates": qualifying_mates,
+            "trailing_2_3_avg_points": trailing_2_3_avg_points, "season_avg_points": season_avg_points,
+            "is_relevant": is_relevant,
+        }
+
+    # best_position_competitor_ros_rank / had_position_competitor_rank - the
+    # live analog of engine.faab_estimate.annotate_position_competition's
+    # historical feature: how good is the BEST other free agent at this
+    # position right now, among every OTHER candidate that clears the same
+    # relevance bar (matching the historical feature, which is built from
+    # the training table's no_bid rows - themselves already relevance-
+    # filtered at build time, see build_training_table.py - not the
+    # unfiltered waiver wire). A real elite name on the wire should pull
+    # attention away from everyone else at that position this week.
+    relevant_ros_ranks_by_position: dict[str, list[tuple[str, float]]] = {}
+    for pid, info in per_player.items():
+        if not info["is_relevant"]:
+            continue
+        rank = info["player"].get("ros_pos_rank")
+        if rank is None:
+            continue
+        relevant_ros_ranks_by_position.setdefault(info["player"]["position"], []).append((pid, rank))
+
+    def best_competitor_rank(p: dict) -> tuple[float | None, bool]:
+        others = [rank for pid, rank in relevant_ros_ranks_by_position.get(p["position"], []) if pid != p["id"]]
+        return (min(others), True) if others else (None, False)
+
+    # team_interest: "which of the OTHER owners in the league would actually
+    # want this guy, and why" - the two things a single market-wide FAAB
+    # estimate can't tell you (see the conversation this was built from). A
+    # Low/Med/High bucket rather than a raw number on purpose - fa_values'
+    # gain is real lineup points, but "is 3.2 points a lot" only means
+    # anything relative to this week's actual spread of add-value across the
+    # league, which varies by scoring format/roster construction - so bucket
+    # by PERCENTILE of this week's own real gain distribution instead of a
+    # fixed constant that would drift out of calibration league to league.
+    all_positive_gains = sorted(v for gains in fa_values_out.values() for v in gains.values() if v is not None and v > 0)
+
+    def gain_level(gain: float | None) -> str | None:
+        if not all_positive_gains or gain is None or gain <= 0:
+            return None
+        pct = bisect.bisect_right(all_positive_gains, gain) / len(all_positive_gains)
+        if pct >= 0.85:
+            return "high"
+        if pct >= 0.5:
+            return "medium"
+        return "low"
+
+    def team_interest_for(p: dict, qualifying_mates: list[dict]) -> list[dict]:
+        # Handcuff attribution reads straight off each qualifying mate's own
+        # fantasy_team_id (already resolved onto every players_out record) -
+        # team_rosters is only used here for the canonical set of team ids
+        # to evaluate (including ones with no roster-tie to this player at
+        # all, who still get a gain-only row below).
+        handcuff_owner_ids = {mate.get("fantasy_team_id") for mate in qualifying_mates if mate.get("fantasy_team_id") is not None}
+        rows = []
+        for team_id in team_rosters:
+            gain = fa_values_out.get(str(team_id), {}).get(p["id"])
+            is_handcuff = team_id in handcuff_owner_ids
+            level = "high" if is_handcuff else gain_level(gain)
+            if level is None:
+                continue
+            handcuff_name = next((m["name"] for m in qualifying_mates if m.get("fantasy_team_id") == team_id), None)
+            rows.append({"team_id": team_id, "level": level, "nmd_gain": gain, "handcuff_of": handcuff_name})
+        level_rank = {"high": 0, "medium": 1, "low": 2}
+        rows.sort(key=lambda r: (level_rank[r["level"]], -(r["nmd_gain"] or 0)))
+        return rows
+
+    estimates: dict[str, dict] = {}
+    for pid, info in per_player.items():
+        p = info["player"]
+        prior_actual, prior_points, snap_pct = info["prior_actual"], info["prior_points"], info["snap_pct"]
+        teammate_flag = info["teammate_flag"]
+        trailing_2_3_avg_points, season_avg_points = info["trailing_2_3_avg_points"], info["season_avg_points"]
+        best_rank, had_competitor_rank = best_competitor_rank(p)
+        # Roster-fit context is orthogonal to whether the broader MARKET
+        # should bid - a below-threshold player can still be a real personal
+        # handcuff stash for one specific owner, so this is computed and
+        # attached regardless of is_relevant below.
+        team_interest = team_interest_for(p, info["qualifying_mates"])
+
+        if not info["is_relevant"]:
+            estimates[pid] = {
+                "bid_probability": {"comp_based": 0.0, "simple_baseline": 0.0, "regression": 0.0},
+                "conditional_price": {"comp_based": 0.0, "simple_baseline": 0.0, "regression": 0.0},
+                "comps": [], "interest_comps": [], "distribution": None,
                 "below_relevance_threshold": True,
+                "team_interest": team_interest,
                 "inputs": {
                     "position": p["position"], "week": current_week,
                     "prior_week_actual_points": prior_points, "prior_week_had_stat_row": prior_actual is not None,
                     "own_injury_flag": p.get("injury_status") not in (None, "ACTIVE"),
                     "teammate_position_injury_flag": teammate_flag, "snap_pct_prior_week": snap_pct,
+                    "trailing_2_3_avg_points": trailing_2_3_avg_points, "season_avg_points": season_avg_points,
+                    "weekly_rank": p.get("week_pos_rank"), "ros_rank": p.get("ros_pos_rank"),
+                    "best_position_competitor_ros_rank": best_rank, "had_position_competitor_rank": had_competitor_rank,
                 },
             }
             continue
@@ -199,8 +337,20 @@ def _compute_faab_estimates(cfg: dict, client: EspnClient, players_out: list[dic
             "own_injury_status": p.get("injury_status") if p.get("injury_status") not in (None, "ACTIVE") else None,
             "teammate_position_injury_flag": teammate_flag,
             "snap_pct_prior_week": snap_pct,
+            "trailing_2_3_avg_points": trailing_2_3_avg_points,
+            "season_avg_points": season_avg_points,
+            # Live FantasyPros positional ranks - already fetched for the
+            # whole roster/free-agent pool earlier in this pipeline run (see
+            # ros_lookup/weekly_lookup above), same ECR-style rank number as
+            # tools/faab_history/build_training_table.py's forward_rank_
+            # features computes historically (lower = better; None if
+            # FantasyPros doesn't rank this player at all this week).
+            "weekly_rank": p.get("week_pos_rank"),
+            "ros_rank": p.get("ros_pos_rank"),
+            "best_position_competitor_ros_rank": best_rank,
+            "had_position_competitor_rank": had_competitor_rank,
         }
-        estimates[p["id"]] = model.estimate(query)
+        estimates[pid] = model.estimate(query) | {"team_interest": team_interest}
 
     return estimates
 
@@ -599,6 +749,7 @@ def run_league(cfg: dict) -> dict:
 
     teams_out = []
     fa_values_out: dict[str, dict[str, float]] = {}
+    fa_values_detail_out: dict[str, dict[str, dict]] = {}
     for t in espn_teams:
         roster_ids = team_rosters[t.team_id]
         depth_by_week = depth_values_by_week(roster_ids, players_ctx, free_agents_ctx, weeks, settings.slots, settings.slot_eligibility)
@@ -609,12 +760,17 @@ def run_league(cfg: dict) -> dict:
         depth_table: dict[str, list[dict]] = {pos: [] for pos in settings.positions}
         for pid in roster_ids:
             pos = players_by_id[pid]["position"]
-            vals = depth_by_week.get(pid, {"value_delta": {}, "value_delta_ww": {}})
+            vals = depth_by_week.get(pid, {"value_delta": {}, "value_delta_ww": {}, "ww_replacement_id": None})
             depth_table.setdefault(pos, []).append(
                 {
                     "id": pid,
                     "value_delta": sum(vals["value_delta"].values()),
                     "value_delta_ww": sum(vals["value_delta_ww"].values()),
+                    # The single free agent value_delta_ww is actually computed
+                    # against (see depth_values_by_week) - a player modal
+                    # showing this week-by-week needs to name it, not just
+                    # show the number.
+                    "ww_replacement_id": vals.get("ww_replacement_id"),
                     "weekly": [
                         {"week": w, "value_delta": vals["value_delta"].get(w, 0.0), "value_delta_ww": vals["value_delta_ww"].get(w, 0.0)}
                         for w in weeks
@@ -640,6 +796,17 @@ def run_league(cfg: dict) -> dict:
             key=lambda c: c["gain"], reverse=True,
         )[: strength_cfg["max_pickups"]]
         fa_values_out[str(t.team_id)] = {fa_id: v["gain"] for fa_id, v in team_fa_values.items()}
+        # Week-by-week detail (drop identity + per-week swing) behind the FAAB
+        # modal's NMD breakdown - only kept for candidates that actually beat
+        # this team's worst droppable player (gain > 0, same bar pickups()
+        # already uses), since a negative-gain add's per-week detail isn't
+        # something a manager would ever want to inspect, and every team's
+        # full pool of considered free agents would otherwise multiply this
+        # file's size by roughly the number of weeks left in the season for
+        # no real benefit.
+        fa_values_detail_out[str(t.team_id)] = {
+            fa_id: {"drop": v["drop"], "weekly": v["weekly"]} for fa_id, v in team_fa_values.items() if v["gain"] > 0
+        }
 
         other_rosters = {ot.team_id: team_rosters[ot.team_id] for ot in espn_teams if ot.team_id != t.team_id}
         targets = trade_targets(
@@ -805,14 +972,36 @@ def run_league(cfg: dict) -> dict:
         RemainingMatchup(week=m.week, home_team_id=m.home_team_id, away_team_id=m.away_team_id)
         for m in espn_matchups if not m.played and m.week <= reg_season_count
     ]
-    # --- live win probability (current week's real matchups only) ---
+
+    # Per-team, per-week projected total mean/SD - used below as the win-
+    # probability input for every not-yet-current, not-yet-played matchup
+    # (the current week gets a more precise LIVE version instead, see
+    # team_live_mean_sd just below), and again further down as
+    # simulate_playoffs' own per-week input - computed once, shared by both.
+    team_week_mean: dict[tuple[int, int], float] = {}
+    team_week_sd: dict[tuple[int, int], float] = {}
+    for t in espn_teams:
+        for w in weeks:
+            wtotal, wassign = all_week_lineups[(t.team_id, w)]
+            team_week_mean[(t.team_id, w)] = wtotal
+            # sum of starters' weekly variance -> sqrt for the team's weekly SD
+            sd_sq = sum(
+                (next((wp["sd"] for wp in players_by_id[pid]["weekly"] if wp["week"] == w), 0.0)) ** 2
+                for pid in wassign.values()
+            )
+            team_week_sd[(t.team_id, w)] = sd_sq ** 0.5
+
+    # --- live win probability (current week only) ---
     # Each starter's (mean, sd) collapses to (actual points, 0) once their
     # game is done (per ESPN's own game_played heuristic - no live polling
     # needed, this just reads whatever's true as of this build), otherwise
     # stays at their full projected week + sd. Summed per team into one
     # Normal(mean, sd), then engine.standings.matchup_win_probability turns
     # the two teams' distributions into a single win% for the matchup -
-    # accurate as of the last site build, not truly real-time in-game.
+    # accurate as of the last site build, not truly real-time in-game. Every
+    # OTHER not-yet-played week (no live status to blend in yet regardless)
+    # uses the plain projected team_week_mean/team_week_sd instead - see
+    # _win_pcts below.
     live_status_by_espn_id = client.get_live_week_player_status(current_week)
     team_live_mean_sd: dict[int, tuple[float, float]] = {}
     for team_id, starters in espn_started_by_team.items():
@@ -830,9 +1019,23 @@ def run_league(cfg: dict) -> dict:
         team_live_mean_sd[team_id] = (mean_total, var_total**0.5)
 
     def _win_pcts(m: Matchup) -> tuple[float | None, float | None]:
-        if m.week != current_week or m.home_team_id not in team_live_mean_sd or m.away_team_id not in team_live_mean_sd:
+        # Decided games don't need a win% (the real score already says who
+        # won). The current week gets the more precise LIVE version (real
+        # points for finished player-games, sd collapsed to 0 for those) -
+        # every other not-yet-played week falls back to the plain pre-game
+        # projected mean/SD (team_week_mean/team_week_sd, above) as its best
+        # available estimate, rather than showing nothing at all just
+        # because the game hasn't started yet.
+        if m.played:
             return None, None
-        home_win_pct = matchup_win_probability(*team_live_mean_sd[m.home_team_id], *team_live_mean_sd[m.away_team_id])
+        if m.week == current_week and m.home_team_id in team_live_mean_sd and m.away_team_id in team_live_mean_sd:
+            home_mean_sd, away_mean_sd = team_live_mean_sd[m.home_team_id], team_live_mean_sd[m.away_team_id]
+        elif (m.home_team_id, m.week) in team_week_mean and (m.away_team_id, m.week) in team_week_mean:
+            home_mean_sd = (team_week_mean[(m.home_team_id, m.week)], team_week_sd[(m.home_team_id, m.week)])
+            away_mean_sd = (team_week_mean[(m.away_team_id, m.week)], team_week_sd[(m.away_team_id, m.week)])
+        else:
+            return None, None
+        home_win_pct = matchup_win_probability(*home_mean_sd, *away_mean_sd)
         return home_win_pct, 1.0 - home_win_pct
 
     schedule_out = []
@@ -845,18 +1048,6 @@ def run_league(cfg: dict) -> dict:
                 "home_win_pct": home_win_pct, "away_win_pct": away_win_pct,
             }
         )
-    team_week_mean: dict[tuple[int, int], float] = {}
-    team_week_sd: dict[tuple[int, int], float] = {}
-    for t in espn_teams:
-        for w in weeks:
-            wtotal, wassign = all_week_lineups[(t.team_id, w)]
-            team_week_mean[(t.team_id, w)] = wtotal
-            # sum of starters' weekly variance -> sqrt for the team's weekly SD
-            sd_sq = sum(
-                (next((wp["sd"] for wp in players_by_id[pid]["weekly"] if wp["week"] == w), 0.0)) ** 2
-                for pid in wassign.values()
-            )
-            team_week_sd[(t.team_id, w)] = sd_sq ** 0.5
 
     team_states = [
         TeamState(team_id=t.team_id, division_id=t.division_id, wins=t.wins, losses=t.losses, ties=t.ties, points_for=t.points_for)
@@ -947,7 +1138,7 @@ def run_league(cfg: dict) -> dict:
     }
 
     try:
-        faab_estimates_out = _compute_faab_estimates(cfg, client, players_out, season, current_week)
+        faab_estimates_out = _compute_faab_estimates(cfg, client, players_out, season, current_week, team_rosters, fa_values_out)
     except Exception as exc:
         logger.warning("faab_model: estimate computation failed, writing empty faab_estimates.json: %s", exc)
         faab_estimates_out = {}
@@ -963,6 +1154,7 @@ def run_league(cfg: dict) -> dict:
         "points_against.json": points_against,
         "schedule.json": schedule_out,
         "fa_values.json": fa_values_out,
+        "fa_values_detail.json": fa_values_detail_out,
         "unmapped.json": unmapped,
         "faab_estimates.json": faab_estimates_out,
     }

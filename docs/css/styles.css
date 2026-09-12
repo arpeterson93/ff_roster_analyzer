@@ -257,6 +257,15 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 .faab-dist-iqr { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 5px; }
 .faab-dist-marker { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--accent); transform: translateX(-1px); }
 .faab-dist-labels { display: flex; justify-content: space-between; font-size: 11px; color: var(--ink-500); margin-top: 4px; font-variant-numeric: tabular-nums; }
+
+/* Confidence-to-win slider - a second marker (blue, distinct from the
+   accent-colored conditional_price marker) on the SAME track, moved live
+   by the range input below it rather than a separately-scaled widget. */
+.faab-dist-marker-confidence { background: var(--blue-500); }
+.faab-confidence { margin-top: 12px; }
+.faab-confidence-row { display: flex; justify-content: space-between; align-items: baseline; font-size: 12.5px; margin-bottom: 4px; }
+.faab-confidence-bid { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--blue-500); }
+.faab-confidence-slider { width: 100%; accent-color: var(--blue-500); }
 .bar-label { width: 90px; flex-shrink: 0; color: var(--ink-700); }
 .bar-track { flex: 1; height: 14px; background: var(--border); border-radius: 4px; overflow: hidden; position: relative; }
 .bar-fill { height: 100%; background: var(--accent); }
@@ -334,6 +343,15 @@ details[open] summary { margin-bottom: 8px; }
 .schedule-table { table-layout: fixed; width: 100%; }
 .schedule-cell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; font-variant-numeric: tabular-nums; }
 .week-divider td { background: color-mix(in srgb, var(--ink-500) 10%, transparent); font-weight: 600; font-size: 12px; text-align: left; }
+
+/* Win-probability bar under an unplayed matchup's home/away row - home's
+   share on the left, away's on the right (see schedule.js's winProbBar).
+   Its own row, not squeezed into the existing name cells, so it reads as
+   one bar spanning the whole matchup rather than two disconnected slivers. */
+.winprob-row td { padding: 0 8px 8px; border-bottom: 1px solid var(--border); }
+.winprob-bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--border); }
+.winprob-seg.winprob-home { background: var(--accent); }
+.winprob-seg.winprob-away { background: color-mix(in srgb, var(--ink-500) 55%, transparent); }
 
 /* Schedule's expanded matchup: one shared table mirrored around a single
    center "slot" column, home outside-left and away outside-right (players
@@ -478,3 +496,103 @@ details[open] summary { margin-bottom: 8px; }
 }
 .stat-tile .stat-label { font-size: 11px; color: var(--ink-500); text-transform: uppercase; letter-spacing: 0.03em; }
 .stat-tile .stat-value { font-size: 17px; font-weight: 600; margin-top: 2px; }
+
+/* Player modal's own small tab bar (Overview / FAAB Bid) - visually related
+   to the page-level nav.tabs but deliberately a separate, smaller class:
+   this one lives inside a fixed-width .modal-box rather than a full-width
+   sticky header, and only ever has 1-2 tabs. Only rendered at all when a
+   FAAB estimate exists for the player (most players aren't on waivers) -
+   otherwise the modal stays the single flat view it always was. */
+.modal-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 14px 0 12px; }
+.modal-tab-btn {
+  border: none; background: transparent; color: var(--ink-500);
+  padding: 8px 14px; font-size: 13px; font-weight: 500; cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+.modal-tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.modal-tabpanel { display: none; }
+.modal-tabpanel.active { display: block; }
+
+/* FAAB signal chips - won/outbid/other_failure/no_bid, reusing the site's
+   existing semantic colors (accent=good/won, amber=contested, red=failed,
+   muted=no interest) rather than inventing a parallel palette. */
+.sig-chip {
+  display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 10px;
+  font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; white-space: nowrap;
+}
+.sig-chip.sig-won { background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent); }
+.sig-chip.sig-outbid { background: color-mix(in srgb, var(--amber-500) 22%, transparent); color: var(--amber-500); }
+.sig-chip.sig-other_failure { background: color-mix(in srgb, var(--red-600) 18%, transparent); color: var(--red-600); }
+.sig-chip.sig-no_bid { background: color-mix(in srgb, var(--ink-500) 16%, transparent); color: var(--ink-500); }
+
+/* Comp tables' rank/flags cells stack two related numbers/badges on top of
+   each other rather than adding two more columns - keeps the table from
+   growing wider than a phone screen can show without scrolling for
+   information that reads fine stacked. */
+.comp-rank-cell, .comp-recent-cell { line-height: 1.3; }
+.comp-rank-cell .sub, .comp-recent-cell .sub { display: block; font-size: 10.5px; color: var(--ink-500); }
+.comp-flag { display: inline-block; font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: 4px; margin-right: 3px; background: color-mix(in srgb, var(--red-600) 16%, transparent); color: var(--red-600); }
+.comp-flag.tm { background: color-mix(in srgb, var(--amber-500) 18%, transparent); color: var(--amber-500); }
+
+/* Per-owner FAAB interest levels (Low/Med/High) - a deliberately coarse
+   bucket rather than a number: fa_values' real point-gain is only
+   meaningful relative to this week's own gain distribution (see
+   engine/pipeline.py's gain_level), so a raw figure would read as more
+   precise than it actually is. High reuses the accent (a real, positive
+   "this owner should want him" signal, not a warning), medium is amber,
+   low fades to muted - a soft traffic-light read without literally using
+   red for anything here (nothing in this list is bad news). */
+.interest-chip { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
+.interest-chip.high { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); }
+.interest-chip.medium { background: color-mix(in srgb, var(--amber-500) 22%, transparent); color: var(--amber-500); }
+.interest-chip.low { background: color-mix(in srgb, var(--ink-500) 16%, transparent); color: var(--ink-500); }
+.handcuff-tag { font-size: 11px; font-weight: 600; color: var(--accent); }
+
+/* Compare view - two full player-modal renders side by side (see
+   playermodal.js's openComparePlayerModal). .modal-overlay-wide only
+   applies while a wide modal is open (see modal.js's openModal(html,
+   {wide}) - the plain single-player modal keeps its normal 860px cap. */
+.modal-overlay-wide .modal-box { max-width: min(1500px, 96vw); }
+.compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.compare-col { padding-right: 4px; }
+.compare-col[data-compare-col="a"] { border-right: 1px solid var(--border); padding-right: 20px; }
+.compare-toggle { display: none; }
+
+.compare-checkbox { margin-right: 6px; vertical-align: middle; cursor: pointer; }
+
+/* Floating "N selected, ready to compare" tray - a fixed pill at the bottom
+   of the viewport rather than anything tied to one tabpanel, since the
+   selection itself (compare.js) persists across Start/Sit <-> Rankings. */
+.compare-tray {
+  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 10px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 999px;
+  box-shadow: var(--shadow); padding: 8px 10px 8px 16px; z-index: 500; max-width: 90vw;
+}
+.compare-tray-label { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.compare-tray-go {
+  border: none; border-radius: 999px; padding: 6px 14px; font-size: 12.5px; font-weight: 600; cursor: pointer;
+  background: var(--accent); color: var(--accent-ink); white-space: nowrap;
+}
+.compare-tray-go:disabled { background: color-mix(in srgb, var(--ink-500) 25%, transparent); color: var(--ink-500); cursor: default; }
+.compare-tray-clear { border: none; background: transparent; color: var(--ink-500); font-size: 18px; line-height: 1; cursor: pointer; padding: 0 2px; }
+
+@media (max-width: 700px) {
+  .modal-tab-btn { padding: 8px 10px; font-size: 12px; }
+  .modal-overlay-wide .modal-box { max-width: 100%; padding: 14px; }
+  .compare-toggle { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+  .compare-side-btn {
+    flex: 1; border: none; background: transparent; color: var(--ink-500); padding: 8px 6px; font-size: 12.5px;
+    font-weight: 500; cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .compare-side-btn.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+  .compare-grid { display: block; }
+  .compare-col { display: none; padding-right: 0 !important; border-right: none !important; }
+  .compare-col.active { display: block; }
+  .compare-tray { bottom: 10px; padding: 6px 8px 6px 12px; }
+  .compare-tray-label { max-width: 40vw; }
+}
+@media (pointer: coarse) {
+  .modal-tab-btn { min-height: 30px; }
+  .compare-checkbox { width: 18px; height: 18px; }
+}

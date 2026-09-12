@@ -172,10 +172,24 @@ function matchupRow(m, data, expandedKey, yourTeamId, avg, spread) {
     return `<span class="heat-cell" style="background:${colorForRatio(ratio)}; display:inline-block; width:100%;">${fmt(v, 1)}</span>`;
   };
 
-  // Only populated for the current week's real matchups (see engine/
-  // pipeline.py's live win-probability block) - accurate as of the last site
-  // build, not updated live minute-to-minute during games.
+  // Populated for the current week's real matchups AND every other
+  // not-yet-played week (see engine/pipeline.py's _win_pcts) - the current
+  // week uses live in-game state, every other one falls back to plain
+  // pre-game projections; either way, null for an already-decided game
+  // (the real score already answers the question).
   const winPct = (pct) => (pct === null || pct === undefined ? "" : `<div class="muted small">${fmt(pct * 100, 0)}% to win</div>`);
+
+  // A single two-segment bar rather than two separate numbers, so the
+  // matchup reads as one comparison at a glance - home's share on the left,
+  // away's on the right, in the same left-right order as the two name
+  // columns it sits between.
+  const winProbBar = (homePct, awayPct) =>
+    homePct === null || homePct === undefined
+      ? ""
+      : `<div class="winprob-bar" title="${fmt(homePct * 100, 0)}% / ${fmt(awayPct * 100, 0)}%">
+          <div class="winprob-seg winprob-home" style="width:${homePct * 100}%"></div>
+          <div class="winprob-seg winprob-away" style="width:${awayPct * 100}%"></div>
+        </div>`;
 
   const expanded = expandedKey === key;
   return `
@@ -185,6 +199,7 @@ function matchupRow(m, data, expandedKey, yourTeamId, avg, spread) {
       <td class="schedule-cell small">${scoreCell(awayScore)}</td>
       <td class="schedule-cell">${escapeHtml(teamLabel(away) || m.away_team_id)}${winPct(m.away_win_pct)}</td>
     </tr>
+    ${m.home_win_pct !== null && m.home_win_pct !== undefined ? `<tr class="winprob-row"><td colspan="4">${winProbBar(m.home_win_pct, m.away_win_pct)}</td></tr>` : ""}
     ${expanded
       ? `<tr><td colspan="4">
           <div class="lineup-symmetric-heading">

@@ -218,6 +218,18 @@ def test_fa_values_includes_negative_gains_unlike_pickups():
     assert {c["add"] for c in pickup_result} == {"fa_strong"}
 
 
+def test_fa_values_weekly_breakdown_sums_to_gain():
+    # Same sum-check pattern as test_depth_values_by_week_spikes_on_starters_
+    # bye above - a player modal's NMD week-by-week view is only trustworthy
+    # if the weekly numbers it shows actually add up to the headline total.
+    players = {"rb1": _player("rb1", "RB", 20.0), "rb2": _player("rb2", "RB", 4.0)}
+    strong_fa = _player("fa_strong", "RB", 25.0)
+    free_agents = {"RB": [strong_fa]}
+    values = fa_values(["rb1", "rb2"], players, free_agents, WEEKS, SLOTS, ELIGIBILITY)
+    assert sum(values["fa_strong"]["weekly"].values()) == pytest.approx(values["fa_strong"]["gain"])
+    assert set(values["fa_strong"]["weekly"]) == set(WEEKS)
+
+
 def test_pickups_prefers_same_position_drop_over_unrelated_bench_player():
     # A weak kicker plus an unrelated, even-weaker bench WR: a strong FA
     # kicker should suggest dropping the weak KICKER, not the bench WR

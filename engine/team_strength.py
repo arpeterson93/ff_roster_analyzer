@@ -151,12 +151,18 @@ def depth_values_by_week(
     eligibility: dict[str, set[str]],
 ) -> dict[str, dict[str, dict[int, float]]]:
     """Per-player, per-week lineup-delta value: {player_id: {"value_delta":
-    {week: delta}, "value_delta_ww": {week: delta}}}. depth_values() is just
-    this summed across weeks; this is the finer-grained view for charting how
-    a player's marginal value moves week to week (bye weeks, tough
-    matchups elsewhere on the roster creating temporary scarcity, etc)."""
+    {week: delta}, "value_delta_ww": {week: delta}, "ww_replacement_id":
+    fa_id or None}}. depth_values() is just this summed across weeks; this
+    is the finer-grained view for charting how a player's marginal value
+    moves week to week (bye weeks, tough matchups elsewhere on the roster
+    creating temporary scarcity, etc), and for naming WHICH free agent
+    value_delta_ww is actually computed against (a single best-by-ros_total
+    pick for the whole series, not re-chosen week to week - see
+    lineup_total_with_streaming_by_week's own docstring for why fa_values()
+    picks differently; this mirrors depth_values_by_week's original
+    behavior, unchanged)."""
     base_by_week = lineup_total_by_week(team_player_ids, players, weeks, slots, eligibility)
-    result: dict[str, dict[str, dict[int, float]]] = {}
+    result: dict[str, dict[str, dict[int, float] | str | None]] = {}
     for pid in team_player_ids:
         if pid not in players:
             continue
@@ -174,7 +180,10 @@ def depth_values_by_week(
             value_delta_ww = {w: base_by_week[w] - ww_by_week[w] for w in weeks}
         else:
             value_delta_ww = dict(value_delta)
-        result[pid] = {"value_delta": value_delta, "value_delta_ww": value_delta_ww}
+        result[pid] = {
+            "value_delta": value_delta, "value_delta_ww": value_delta_ww,
+            "ww_replacement_id": best_fa.id if best_fa is not None else None,
+        }
     return result
 
 
@@ -188,7 +197,10 @@ def depth_values(
 ) -> dict[str, dict[str, float]]:
     by_week = depth_values_by_week(team_player_ids, players, free_agents_by_pos, weeks, slots, eligibility)
     return {
-        pid: {"value_delta": sum(v["value_delta"].values()), "value_delta_ww": sum(v["value_delta_ww"].values())}
+        pid: {
+            "value_delta": sum(v["value_delta"].values()), "value_delta_ww": sum(v["value_delta_ww"].values()),
+            "ww_replacement_id": v["ww_replacement_id"],
+        }
         for pid, v in by_week.items()
     }
 
@@ -284,14 +296,22 @@ def fa_values(
     ir_player_ids: frozenset[str] = frozenset(),
     fa_pool_size: int = 30,
 ) -> dict[str, dict]:
-    """{fa_id: {"gain": .., "drop": ..}} for every free agent considered (top
-    `fa_pool_size` per position by ros_total) - the lineup-total gain from
-    adding them and dropping the weakest same-position rostered player (or
-    weakest overall if none at that position), whether or not it's actually a
-    good pickup. pickups() is just this filtered/sorted/truncated to positive
-    gains; this unfiltered version is for showing "value to your team" next
-    to any free agent (e.g. in the Rankings view), not just recommended ones."""
-    base_total = lineup_total_with_streaming(team_player_ids, players, free_agents_by_pos, weeks, slots, eligibility)
+    """{fa_id: {"gain": .., "drop": .., "weekly": {week: delta}}} for every
+    free agent considered (top `fa_pool_size` per position by ros_total) -
+    the lineup-total gain from adding them and dropping the weakest
+    same-position rostered player (or weakest overall if none at that
+    position), whether or not it's actually a good pickup. pickups() is
+    just this filtered/sorted/truncated to positive gains; this unfiltered
+    version is for showing "value to your team" next to any free agent
+    (e.g. in the Rankings view), not just recommended ones.
+
+    weekly is the SAME add/drop pairing's per-week breakdown, not a
+    separately-optimized week-by-week choice - a real manager makes one
+    add/drop decision, not a different trade every week - computed via
+    lineup_total_with_streaming_by_week rather than summing it away
+    immediately, since callers wanting week-by-week detail (a player
+    modal's NMD breakdown) shouldn't have to redo this exact computation."""
+    base_by_week = lineup_total_with_streaming_by_week(team_player_ids, players, free_agents_by_pos, weeks, slots, eligibility)
     depth = depth_values(team_player_ids, players, free_agents_by_pos, weeks, slots, eligibility)
     droppable = [pid for pid in team_player_ids if pid not in ir_player_ids and pid in depth]
     if not droppable:
@@ -315,8 +335,9 @@ def fa_values(
             # lineup_total_with_streaming), so a candidate only shows a gain
             # here when actually rostering them beats that default streaming
             # plan - e.g. a real talent upgrade, not just filling a bye week.
-            new_total = lineup_total_with_streaming(new_roster, new_players, free_agents_by_pos, weeks, slots, eligibility)
-            result[fa.id] = {"gain": new_total - base_total, "drop": drop_pid}
+            new_by_week = lineup_total_with_streaming_by_week(new_roster, new_players, free_agents_by_pos, weeks, slots, eligibility)
+            weekly = {w: new_by_week[w] - base_by_week[w] for w in weeks}
+            result[fa.id] = {"gain": sum(weekly.values()), "drop": drop_pid, "weekly": weekly}
     return result
 
 

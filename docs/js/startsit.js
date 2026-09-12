@@ -2,6 +2,7 @@ import { fmt, escapeHtml, getYourTeam, setYourTeam } from "./state.js";
 import { POSITION_COLOR, INJURY_BADGE, opponentCellHtml, ratioForRank, colorForRatio, formatKickoff, sortByPositionOrder, teamLabel, playerPhotoHtml, weeklyProjection } from "./colors.js";
 import { openPlayerModal } from "./playermodal.js";
 import { openPointsAgainstModal } from "./pointsagainstmodal.js";
+import { compareCheckboxHtml, wireCompareCheckboxes } from "./compare.js";
 
 function posTag(pos) {
   const color = POSITION_COLOR[pos] || "#888";
@@ -46,7 +47,7 @@ function playerRow(p, week, currentWeek, slotLabel, isStreamed) {
       <div class="player-cell">
         ${playerPhotoHtml(p)}
         <div>
-          <div>${posTag(p.position)} <strong>${escapeHtml(p.name)}</strong> ${healthBadge(p.injury_status)} ${streamBadge}</div>
+          <div>${compareCheckboxHtml(p)}${posTag(p.position)} <strong>${escapeHtml(p.name)}</strong> ${healthBadge(p.injury_status)} ${streamBadge}</div>
           <div class="muted small row-meta">${playerMetaLine(p)}</div>
           <div class="muted small row-meta mobile-line" ${oppAttrs}>${kickoff ? escapeHtml(kickoff) + " " : ""}${opponentCellHtml(weekEntry)}</div>
         </div>
@@ -178,6 +179,7 @@ function wireRowClicks(container, data) {
       if (team) openPointsAgainstModal(team, cell.dataset.pos, data);
     });
   });
+  wireCompareCheckboxes(container, data);
 }
 
 export function renderStartSit(container, data, slug) {

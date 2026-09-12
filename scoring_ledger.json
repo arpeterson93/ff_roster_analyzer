@@ -1,0 +1,418 @@
+{
+  "2PC": {
+    "status": "good",
+    "comment": "Exclude leagues with 20 points"
+  },
+  "PTD": {
+    "status": "good",
+    "comment": "Only include leagues with 4"
+  },
+  "2PR": {
+    "status": "good",
+    "comment": "Exclude leagues with 20"
+  },
+  "RTD": {
+    "status": "good",
+    "comment": "Only include leagues with 6"
+  },
+  "PAT": {
+    "status": "good",
+    "comment": "Only include leagues with 1"
+  },
+  "2PRE": {
+    "status": "good",
+    "comment": "Exclude leagues with 20"
+  },
+  "RETD": {
+    "status": "good",
+    "comment": "Only include leagues with 6"
+  },
+  "INTT": {
+    "status": "good",
+    "comment": ""
+  },
+  "FTD": {
+    "status": "good",
+    "comment": "Only include leagues with 6"
+  },
+  "FUML": {
+    "status": "good",
+    "comment": ""
+  },
+  "KRTD": {
+    "status": "good",
+    "comment": "Only include leagues with 6"
+  },
+  "PRTD": {
+    "status": "good",
+    "comment": "Only include leagues with 6"
+  },
+  "RY": {
+    "status": "good",
+    "comment": "Only include leagues with 0.1"
+  },
+  "FG40": {
+    "status": "good",
+    "comment": "Only include leagues with 3-4"
+  },
+  "FG0": {
+    "status": "good",
+    "comment": "Only include leagues with 3"
+  },
+  "FG50": {
+    "status": "good",
+    "comment": "Only include leagues with 4-5"
+  },
+  "FG60": {
+    "status": "good",
+    "comment": "Only include leagues with 5-6"
+  },
+  "FRTD": {
+    "status": "good",
+    "comment": "Only include leagues with 6"
+  },
+  "REC": {
+    "status": "good",
+    "comment": ""
+  },
+  "REY": {
+    "status": "good",
+    "comment": "Only include leagues with .1"
+  },
+  "PY": {
+    "status": "good",
+    "comment": "Only include leagues with .04-.05"
+  },
+  "INTTD": {
+    "status": "good",
+    "comment": "Only include leagues with 6"
+  },
+  "BLKKRTD": {
+    "status": "good",
+    "comment": "Only include leagues with 6"
+  },
+  "FGM": {
+    "status": "good",
+    "comment": "Only include leagues with -1"
+  },
+  "2PRET": {
+    "status": "good",
+    "comment": ""
+  },
+  "PATM": {
+    "status": "good",
+    "comment": "Only include leagues with -1"
+  },
+  "1PSF": {
+    "status": "good",
+    "comment": ""
+  },
+  "P400": {
+    "status": "bad",
+    "comment": ""
+  },
+  "RY200": {
+    "status": "bad",
+    "comment": ""
+  },
+  "REY200": {
+    "status": "bad",
+    "comment": ""
+  },
+  "RY100": {
+    "status": "bad",
+    "comment": ""
+  },
+  "REY100": {
+    "status": "bad",
+    "comment": ""
+  },
+  "FGM0": {
+    "status": "bad",
+    "comment": ""
+  },
+  "P300": {
+    "status": "bad",
+    "comment": ""
+  },
+  "RTD40": {
+    "status": "bad",
+    "comment": ""
+  },
+  "RETD50": {
+    "status": "bad",
+    "comment": ""
+  },
+  "PTD40": {
+    "status": "bad",
+    "comment": ""
+  },
+  "RETD40": {
+    "status": "bad",
+    "comment": ""
+  },
+  "RTD50": {
+    "status": "bad",
+    "comment": ""
+  },
+  "PTD50": {
+    "status": "bad",
+    "comment": ""
+  },
+  "FGM40": {
+    "status": "bad",
+    "comment": ""
+  },
+  "PY25": {
+    "status": "bad",
+    "comment": ""
+  },
+  "REY10": {
+    "status": "bad",
+    "comment": ""
+  },
+  "RY10": {
+    "status": "bad",
+    "comment": ""
+  },
+  "FGY": {
+    "status": "good",
+    "comment": ""
+  },
+  "KR": {
+    "status": "bad",
+    "comment": ""
+  },
+  "PR": {
+    "status": "bad",
+    "comment": ""
+  },
+  "PY5": {
+    "status": "bad",
+    "comment": ""
+  },
+  "SKD": {
+    "status": "bad",
+    "comment": ""
+  },
+  "PC": {
+    "status": "bad",
+    "comment": ""
+  },
+  "RA": {
+    "status": "bad",
+    "comment": ""
+  },
+  "WM1": {
+    "status": "bad",
+    "comment": ""
+  },
+  "WM10": {
+    "status": "bad",
+    "comment": ""
+  },
+  "WM15": {
+    "status": "bad",
+    "comment": ""
+  },
+  "WM20": {
+    "status": "bad",
+    "comment": ""
+  },
+  "WM25": {
+    "status": "bad",
+    "comment": ""
+  },
+  "WM5": {
+    "status": "bad",
+    "comment": ""
+  },
+  "BLKK": {
+    "status": "bad",
+    "comment": ""
+  },
+  "FR": {
+    "status": "bad",
+    "comment": ""
+  },
+  "FUM": {
+    "status": "bad",
+    "comment": ""
+  },
+  "INT": {
+    "status": "bad",
+    "comment": ""
+  },
+  "KR25": {
+    "status": "bad",
+    "comment": ""
+  },
+  "PY20": {
+    "status": "bad",
+    "comment": ""
+  },
+  "SF": {
+    "status": "bad",
+    "comment": ""
+  },
+  "FGM50": {
+    "status": "bad",
+    "comment": ""
+  },
+  "PR10": {
+    "status": "bad",
+    "comment": ""
+  },
+  "PR25": {
+    "status": "bad",
+    "comment": ""
+  },
+  "FF": {
+    "status": "bad",
+    "comment": ""
+  },
+  "KR10": {
+    "status": "bad",
+    "comment": ""
+  },
+  "PT20": {
+    "status": "bad",
+    "comment": ""
+  },
+  "TK": {
+    "status": "bad",
+    "comment": ""
+  },
+  "FGM60": {
+    "status": "bad",
+    "comment": ""
+  },
+  "HALFSK": {
+    "status": "bad",
+    "comment": ""
+  },
+  "PC10": {
+    "status": "bad",
+    "comment": ""
+  },
+  "PD": {
+    "status": "bad",
+    "comment": ""
+  },
+  "PT10": {
+    "status": "bad",
+    "comment": ""
+  },
+  "PTA40": {
+    "status": "bad",
+    "comment": ""
+  },
+  "PTA42": {
+    "status": "bad",
+    "comment": ""
+  },
+  "PTA44": {
+    "status": "bad",
+    "comment": ""
+  },
+  "PTB": {
+    "status": "bad",
+    "comment": ""
+  },
+  "PTTB": {
+    "status": "bad",
+    "comment": ""
+  },
+  "PY10": {
+    "status": "bad",
+    "comment": ""
+  },
+  "RA10": {
+    "status": "bad",
+    "comment": ""
+  },
+  "RA5": {
+    "status": "bad",
+    "comment": ""
+  },
+  "RET": {
+    "status": "bad",
+    "comment": ""
+  },
+  "SK": {
+    "status": "bad",
+    "comment": ""
+  },
+  "STF": {
+    "status": "bad",
+    "comment": ""
+  },
+  "TKA": {
+    "status": "bad",
+    "comment": ""
+  },
+  "FGA50": {
+    "status": "bad",
+    "comment": ""
+  },
+  "FGA60": {
+    "status": "bad",
+    "comment": ""
+  },
+  "INC": {
+    "status": "bad",
+    "comment": ""
+  },
+  "IP10": {
+    "status": "bad",
+    "comment": ""
+  },
+  "PA": {
+    "status": "bad",
+    "comment": ""
+  },
+  "PT": {
+    "status": "bad",
+    "comment": ""
+  },
+  "PTA33": {
+    "status": "bad",
+    "comment": ""
+  },
+  "PTA34": {
+    "status": "bad",
+    "comment": ""
+  },
+  "PTA36": {
+    "status": "bad",
+    "comment": ""
+  },
+  "PTFC": {
+    "status": "bad",
+    "comment": ""
+  },
+  "REFD": {
+    "status": "bad",
+    "comment": ""
+  },
+  "REY20": {
+    "status": "bad",
+    "comment": ""
+  },
+  "RFD": {
+    "status": "bad",
+    "comment": ""
+  },
+  "RY5": {
+    "status": "bad",
+    "comment": ""
+  },
+  "TK3": {
+    "status": "bad",
+    "comment": ""
+  },
+  "TKS": {
+    "status": "bad",
+    "comment": ""
+  }
+}

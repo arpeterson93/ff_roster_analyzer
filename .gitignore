@@ -16,3 +16,12 @@ service_account.json
 docs/data/
 .cache/
 
+# Pulled/derived FAAB-pool data - large, regenerable from tools/faab_history's
+# own pull/build scripts, not source. combined-training-table.json in
+# particular (~436MB) exceeds GitHub's 100MB per-file push limit outright.
+tools/faab_history/combined-training-table.json
+tools/faab_history/other-leagues-bids-raw.json
+tools/faab_history/other-leagues-bids.json
+tools/faab_history/other-leagues-rostered-by-week.json
+*.bak
+

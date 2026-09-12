@@ -45,7 +45,18 @@ OUTBID_STATUSES = {"FAILED_INVALIDPLAYERSOURCE"}
 FREEAGENT_FLAT_COST_DOLLARS = 2.0
 
 
-def fetch_season(league: League, year: int) -> list[dict]:
+def fetch_season(league: League, year: int, *, cents_scale: bool = True) -> list[dict]:
+    """cents_scale=True (The O League's own default - real money changes
+    hands here, and ESPN's bidAmount for this league really is in cents,
+    e.g. raw 2225 -> a real $22.25 bid) divides bidAmount by 100 to get
+    real dollars. Confirmed live 2026-09 this does NOT hold universally:
+    pooling other public leagues, several showed a single top bid's raw
+    bidAmount landing suspiciously close to (or exactly at) their own
+    reported acquisitionBudget - e.g. one league's real $200 budget saw a
+    top raw bid of exactly 200, an all-in bid reported as a plain dollar
+    integer, not cents - so pull_public_league_bids.py calls this with
+    cents_scale=False and keeps every other league's nominal bidAmount as
+    ESPN reports it, undivided."""
     rows = []
     for week in WEEKS:
         params = {"view": "mTransactions2", "scoringPeriodId": week}
@@ -72,7 +83,7 @@ def fetch_season(league: League, year: int) -> list[dict]:
                     "type": t.get("type"),  # FREEAGENT adds are always a $0 uncontested pickup, not a real bid - keep this so the FAAB model can exclude them
                     "status": t.get("status"),
                     "bid_amount_raw": t.get("bidAmount"),
-                    "bid_amount_dollars": (t.get("bidAmount") or 0) / 100,
+                    "bid_amount_dollars": (t.get("bidAmount") or 0) / 100 if cents_scale else (t.get("bidAmount") or 0),
                     "add_player_id": add_item["playerId"],
                     "add_player_name": league.player_map.get(add_item["playerId"], "Unknown"),
                     "drop_player_ids": [d["playerId"] for d in drop_items],
@@ -97,7 +108,15 @@ def collapse_contingent_bids(rows: list[dict]) -> list[dict]:
     return result
 
 
-def classify(rows: list[dict]) -> list[dict]:
+def classify(rows: list[dict], freeagent_flat_cost_dollars: float = FREEAGENT_FLAT_COST_DOLLARS) -> list[dict]:
+    """freeagent_flat_cost_dollars defaults to THIS league's own $2 house
+    rule - a real fee its human managers charge for uncontested pickups on
+    top of what ESPN itself records (ESPN's own bid_amount is $0 for a
+    FREEAGENT add; there was no auction). That's specific to The O League,
+    not a platform default - a caller pulling any OTHER league's bids (see
+    pull_public_league_bids.py) has no evidence its managers do the same and
+    must pass 0.0, or every uncontested pickup in that league gets
+    overstated by a fee that league never actually charged."""
     for r in rows:
         if r["status"] == "EXECUTED":
             r["signal"] = "won"
@@ -112,7 +131,7 @@ def classify(rows: list[dict]) -> list[dict]:
         if r["signal"] != "won":
             r["effective_cost_dollars"] = 0.0
         elif r["type"] == "FREEAGENT":
-            r["effective_cost_dollars"] = FREEAGENT_FLAT_COST_DOLLARS
+            r["effective_cost_dollars"] = freeagent_flat_cost_dollars
         else:
             r["effective_cost_dollars"] = r["bid_amount_dollars"]
     return rows
@@ -130,11 +149,19 @@ def main():
     if not espn_s2 or not swid:
         sys.exit("Set ESPN_S2_OLEAGUE and SWID_OLEAGUE env vars first (see README's Watch list/FAAB history section).")
 
+    # 2019-2025 only - see build_training_table.py's O_LEAGUE_LEGACY_LAST_
+    # SEASON (duplicated here, not imported - this script doesn't depend on
+    # that one). 2026 onward, this league is treated like any other public
+    # league: real, nominal (not cents-scaled) bidAmount and a real
+    # enforced acquisitionBudget - per the human who runs it, confirmed
+    # 2026-09.
+    O_LEAGUE_LEGACY_LAST_SEASON = 2025
+
     all_rows = []
     for year in range(args.start_year, args.end_year + 1):
         print(f"season {year}...", file=sys.stderr)
         league = League(league_id=LEAGUE_ID, year=year, espn_s2=espn_s2, swid=swid)
-        all_rows.extend(fetch_season(league, year))
+        all_rows.extend(fetch_season(league, year, cents_scale=year <= O_LEAGUE_LEGACY_LAST_SEASON))
 
     deduped = collapse_contingent_bids(all_rows)
     classified = classify(deduped)

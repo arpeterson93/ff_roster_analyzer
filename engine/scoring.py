@@ -76,6 +76,95 @@ PLAYER_STAT_EXPR: dict[str, callable] = {
     "FGM60": lambda r: _get(r, "fg_missed_60_"),
     "FG50P": lambda r: _get(r, "fg_made_50_59") + _get(r, "fg_made_60_"),
     "FGM50P": lambda r: _get(r, "fg_missed_50_59") + _get(r, "fg_missed_60_"),
+    # "Every N yards" bonus categories - a whole-number count of complete
+    # N-yard increments (floor division), NOT a continuous per-yard rate -
+    # a league's own `points` value for one of these is points PER
+    # increment, e.g. PY25 at 1.0 pt = 1 pt per full 25 passing yards, none
+    # for a partial one. Discovered live 2026-09 pooling other public
+    # leagues - our own O League doesn't use this scoring style, so these
+    # were never needed until real other-league data started hitting
+    # ScoringRules.from_espn's unmapped-item safety net.
+    "PY5": lambda r: _get(r, "passing_yards") // 5,
+    "PY10": lambda r: _get(r, "passing_yards") // 10,
+    "PY20": lambda r: _get(r, "passing_yards") // 20,
+    "PY25": lambda r: _get(r, "passing_yards") // 25,
+    "PY50": lambda r: _get(r, "passing_yards") // 50,
+    "PY100": lambda r: _get(r, "passing_yards") // 100,
+    "RY5": lambda r: _get(r, "rushing_yards") // 5,
+    "RY10": lambda r: _get(r, "rushing_yards") // 10,
+    "RY20": lambda r: _get(r, "rushing_yards") // 20,
+    "RY25": lambda r: _get(r, "rushing_yards") // 25,
+    "RY50": lambda r: _get(r, "rushing_yards") // 50,
+    "R100": lambda r: _get(r, "rushing_yards") // 100,  # ESPN's own abbr for "every 100 rushing yards" - not RY100
+    "REY5": lambda r: _get(r, "receiving_yards") // 5,
+    "REY10": lambda r: _get(r, "receiving_yards") // 10,
+    "REY20": lambda r: _get(r, "receiving_yards") // 20,
+    "REY25": lambda r: _get(r, "receiving_yards") // 25,
+    "REY50": lambda r: _get(r, "receiving_yards") // 50,
+    "RE100": lambda r: _get(r, "receiving_yards") // 100,  # ESPN's own abbr for "every 100 receiving yards" - not REY100
+    "REC5": lambda r: _get(r, "receptions") // 5,
+    "REC10": lambda r: _get(r, "receptions") // 10,
+    "IP10": lambda r: (_get(r, "attempts") - _get(r, "completions")) // 10,
+    "PC10": lambda r: _get(r, "completions") // 10,
+    "RA5": lambda r: _get(r, "carries") // 5,
+    "RA10": lambda r: _get(r, "carries") // 10,
+    # Return yardage - real player_stats columns, not a fumbles/TD-style
+    # aggregate. Discovered live 2026-09 alongside the "every N yards"
+    # categories above - same story, a real category our own league
+    # doesn't use.
+    "KR": lambda r: _get(r, "kickoff_return_yards"),
+    "KR10": lambda r: _get(r, "kickoff_return_yards") // 10,
+    "KR25": lambda r: _get(r, "kickoff_return_yards") // 25,
+    "PR": lambda r: _get(r, "punt_return_yards"),
+    "PR10": lambda r: _get(r, "punt_return_yards") // 10,
+    "PR25": lambda r: _get(r, "punt_return_yards") // 25,
+    # FG Attempted brackets - nflverse only tracks made/missed per distance
+    # bracket, not attempted directly - attempted = made + missed.
+    "FGA50": lambda r: _get(r, "fg_made_50_59") + _get(r, "fg_missed_50_59"),
+    "FGA60": lambda r: _get(r, "fg_made_60_") + _get(r, "fg_missed_60_"),
+    # Single-game yardage MILESTONE bonuses - a flat one-time bonus for
+    # crossing a threshold in one game, not a per-yard/per-increment rate
+    # (unlike the "every N yards" categories above) - the expression is a
+    # 1/0 indicator, and the league's own `points` value is the flat bonus.
+    "P300": lambda r: 1.0 if 300 <= _get(r, "passing_yards") < 400 else 0.0,
+    "P400": lambda r: 1.0 if _get(r, "passing_yards") >= 400 else 0.0,
+    "RY100": lambda r: 1.0 if 100 <= _get(r, "rushing_yards") < 200 else 0.0,
+    "RY200": lambda r: 1.0 if _get(r, "rushing_yards") >= 200 else 0.0,
+    "REY100": lambda r: 1.0 if 100 <= _get(r, "receiving_yards") < 200 else 0.0,
+    "REY200": lambda r: 1.0 if _get(r, "receiving_yards") >= 200 else 0.0,
+    "SKD": lambda r: _get(r, "sacks_suffered"),  # QB being sacked, not a defender's sack (that's "SK" in DST_STAT_EXPR)
+    "RET": lambda r: _get(r, "targets"),
+    "RFD": lambda r: _get(r, "rushing_first_downs"),
+    "REFD": lambda r: _get(r, "receiving_first_downs"),
+    # FG yardage (0.1 pt/yard on made field goals, confirmed with the user
+    # 2026-09) - approximated from nflverse's made-FG-by-distance-BUCKET
+    # counts (fg_made_0_19/20_29/etc, the same columns FG0/FG40/FG50/FG60
+    # already use), since nflverse doesn't track each kick's exact distance
+    # at the weekly aggregate level - real per-kick distance would need
+    # play-by-play data, not worth it for a category only 11 of 144
+    # inventoried leagues use. Each bucket's real NFL attempts cluster near
+    # its own top end (kickers essentially never attempt a truly short FG,
+    # long ones cluster near the practical kicking-range ceiling), so these
+    # midpoints lean toward each bucket's upper end rather than its
+    # arithmetic center.
+    "FGY": lambda r: (
+        _get(r, "fg_made_0_19") * 18 + _get(r, "fg_made_20_29") * 25 + _get(r, "fg_made_30_39") * 35
+        + _get(r, "fg_made_40_49") * 45 + _get(r, "fg_made_50_59") * 55 + _get(r, "fg_made_60_") * 62
+    ),
+    # Deliberately NOT mapped: FGMY/FGAY (missed/attempted FG yardage - same
+    # bucket-only limitation as FGY above, but with zero real leagues using
+    # either in the 144-league inventory - not worth guessing at until one
+    # actually shows up), PT/PT10/PT20/
+    # PTA*/PTB/PTTB (punter stats - not in nflverse's offense player_stats
+    # at all), PTD40/50, RTD40/50, RETD40/50 (TD-by-distance-bucket bonuses
+    # - nflverse has total TDs, not broken out by yardage), TK/TKA/TKS/TK3/
+    # STF/PD (individual defensive-player stats - these belong to leagues
+    # with IDP roster slots, which vet_candidates.py's compare_to_baseline
+    # is supposed to reject already; a league hitting this gap suggests its
+    # IDP detection has a blind spot worth a follow-up, not that these
+    # belong in the player-stat domain), WM1/5/10/15/20/25 (team/matchup
+    # win-margin bonuses - not a player OR team-defense stat, a different
+    # scoring domain ScoringRules doesn't model at all).
 }
 
 _RETURN_TD_ABBRS = {"KRTD", "PRTD"}

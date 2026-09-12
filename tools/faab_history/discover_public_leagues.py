@@ -17,39 +17,64 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import sys
 import time
 from pathlib import Path
 
 import requests
 
-BASE_URL = "https://fantasy.espn.com/apis/v3/games/ffl/seasons/{year}/segments/0/leagues/{league_id}"
+# fantasy.espn.com/apis/v3/... now returns an empty, unusable 202 for API calls
+# (discovered live 2026-09-10) - reads have moved to this host, which returns
+# real 200 JSON for the same paths.
+BASE_URL = "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/{year}/segments/0/leagues/{league_id}"
 OUT_PATH = Path(__file__).parent / "discovered_leagues.json"
-DELAY_SECONDS = 0.25
+DELAY_RANGE = (0.6, 1.8)  # randomized per-request pause, not a fixed bot-like interval
+LONG_PAUSE_EVERY = 200  # take a longer break periodically, like a human clicking around
+LONG_PAUSE_RANGE = (15.0, 45.0)
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+    "Accept": "application/json",
+    "Referer": "https://fantasy.espn.com/",
+    "Origin": "https://fantasy.espn.com",
+}
 
 
-def check_league(league_id: int, year: int) -> dict | None:
-    """None if not a public, fetchable league this year. Otherwise a dict of
-    what we'd need to decide if it's worth pulling FAAB history from."""
+def check_league(league_id: int, year: int) -> tuple[str, dict | None]:
+    """Returns (status_label, info). info is only set when status is "public"."""
     try:
-        resp = requests.get(BASE_URL.format(year=year, league_id=league_id), params={"view": "mSettings"}, timeout=10)
-    except requests.RequestException:
-        return None
+        resp = requests.get(
+            BASE_URL.format(year=year, league_id=league_id),
+            params={"view": "mSettings"},
+            headers=HEADERS,
+            timeout=10,
+        )
+    except requests.RequestException as exc:
+        return f"error({exc.__class__.__name__})", None
+    # 404 = no league was ever created at this id. 401 = a league exists here
+    # but isn't public - "not authorized", not "not found". Both are useful
+    # signal for id density even though neither is a hit.
+    if resp.status_code == 404:
+        return "does_not_exist(404)", None
+    if resp.status_code == 401:
+        return "exists_but_private(401)", None
     if resp.status_code != 200:
-        return None
+        return f"http_{resp.status_code}", None
     data = resp.json()
     settings = data.get("settings", {})
     if not settings.get("isPublic"):
-        return None
+        return "exists_but_private(200,isPublic=false)", None
     acq = settings.get("acquisitionSettings", {})
-    return {
+    info = {
         "league_id": league_id,
         "name": settings.get("name"),
         "size": settings.get("size"),
         "uses_faab": bool(acq.get("isUsingAcquisitionBudget")),
         "acquisition_budget": acq.get("acquisitionBudget"),
-        "scoring_periods": len((data.get("status") or {}).get("waiverLastExecutionDate", "") or "") or None,
+        "matchup_period_count": settings.get("scheduleSettings", {}).get("matchupPeriodCount"),
     }
+    return "public", info
 
 
 def main():
@@ -65,19 +90,42 @@ def main():
     seen_ids = {r["league_id"] for r in found}
 
     checked = 0
+    exists_count = 0  # leagues that exist but aren't public (401, or 200+isPublic=false) - id density signal
+    faab_count = sum(1 for r in found if r["uses_faab"])
     for lid in range(args.start, args.end + 1):
         if lid in seen_ids:
             continue
-        result = check_league(lid, args.year)
+        status, result = check_league(lid, args.year)
         checked += 1
         if result:
             found.append(result)
+            if result["uses_faab"]:
+                faab_count += 1
             tag = "FAAB" if result["uses_faab"] else "non-FAAB"
-            print(f"  {lid}: PUBLIC ({tag}) - {result['name']!r}, {result['size']} teams, budget={result['acquisition_budget']}", file=sys.stderr)
-        if checked % 50 == 0:
-            print(f"...{checked} checked, {len(found)} public so far (through id {lid})", file=sys.stderr)
+            print(
+                f"{lid}: PUBLIC ({tag}) - {result['name']!r}, {result['size']} teams, "
+                f"budget={result['acquisition_budget']} "
+                f"[{len(found)} public found so far, {faab_count} of those use FAAB]",
+                file=sys.stderr,
+            )
             OUT_PATH.write_text(json.dumps(found, indent=2))
-        time.sleep(DELAY_SECONDS)
+        else:
+            if status.startswith("exists_but_private"):
+                exists_count += 1
+            print(f"{lid}: {status}", file=sys.stderr)
+        if checked % 20 == 0:
+            print(
+                f"...{checked} checked, {len(found)} public so far ({faab_count} FAAB), "
+                f"{exists_count} real-but-private leagues seen (through id {lid})",
+                file=sys.stderr,
+            )
+            OUT_PATH.write_text(json.dumps(found, indent=2))
+        if checked % LONG_PAUSE_EVERY == 0:
+            pause = random.uniform(*LONG_PAUSE_RANGE)
+            print(f"...taking a longer break ({pause:.0f}s)", file=sys.stderr)
+            time.sleep(pause)
+        else:
+            time.sleep(random.uniform(*DELAY_RANGE))
 
     OUT_PATH.write_text(json.dumps(found, indent=2))
     faab_count = sum(1 for r in found if r["uses_faab"])

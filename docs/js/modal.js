@@ -25,8 +25,9 @@ export function closeModal() {
   if (modalEl) modalEl.hidden = true;
 }
 
-export function openModal(html) {
+export function openModal(html, { wide = false } = {}) {
   const modal = ensureModal();
+  modal.classList.toggle("modal-overlay-wide", wide);
   modal.querySelector(".modal-content").innerHTML = html;
   modal.hidden = false;
 }

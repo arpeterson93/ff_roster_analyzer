@@ -14,8 +14,11 @@ from engine.faab_estimate import FaabModel  # noqa: E402
 
 if __name__ == "__main__":
     model = FaabModel()
-    print(f"trainable rows: {len(model.rows)}")
-    print("season avg team spend:", {k: round(v, 2) for k, v in sorted(model.season_avg_spend.items())})
-    print("\nregression coefficients (on log1p(pct of season-avg team spend)):")
-    for name, c in model.coefs.items():
+    print(f"interest rows (deduped, one per event): {len(model.interest_rows)}")
+    print(f"price rows (won only): {len(model.price_rows)}")
+    print("\ninterest (logistic, P(anyone bids)) coefficients:")
+    for name, c in model.interest_coefs.items():
+        print(f"  {name:28s} {c:+.4f}")
+    print("\nprice (OLS on log1p(pct of effective starting budget), won rows only) coefficients:")
+    for name, c in model.price_coefs.items():
         print(f"  {name:28s} {c:+.4f}")

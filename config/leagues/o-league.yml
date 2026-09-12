@@ -8,7 +8,7 @@ credentials: null          # env var names for private leagues, e.g. {espn_s2: E
 scoring_format: standard   # standard | half | ppr  -> FantasyPros page family
 settings_sheet_id: 1RDRiu5rqS0Vh1Jge36tr5cTN_o9GmSUrJbK_APiRq1Q    # Google Sheet id for live-editable settings (see README "Settings sheet")
 faab_model:
-  enabled: true            # estimates for currently-WAIVERS-status free agents (see engine/faab_estimate.py); needs tools/faab_history/o-league-training-table.json committed - AGS has no historical FAAB data, leave unset/false there
+  enabled: true            # estimates for currently-WAIVERS-status free agents (see engine/faab_estimate.py) - trained on the pooled multi-league table (tools/faab_history/combined-training-table.json), not just this league's own history, so any league on the site can enable this regardless of whether it has FAAB history of its own
 valuation:
   curve_seasons: [2022, 2023, 2024, 2025]
   curve_min_games: 8

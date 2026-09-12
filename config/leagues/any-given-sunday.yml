@@ -7,6 +7,8 @@ private: true
 credentials: {espn_s2: ESPN_S2_AGS, swid: SWID_AGS}
 scoring_format: half       # standard | half | ppr  -> FantasyPros page family
 settings_sheet_id: 1RDRiu5rqS0Vh1Jge36tr5cTN_o9GmSUrJbK_APiRq1Q    # Google Sheet id for live-editable settings (see README "Settings sheet") - same sheet as o-league, rows scoped by league_slug
+faab_model:
+  enabled: true            # estimates for currently-WAIVERS-status free agents (see engine/faab_estimate.py) - trained on the pooled multi-league table (tools/faab_history/combined-training-table.json), not this league's own history (AGS has none), confirmed 2026-09 that AGS itself uses real FAAB bidding
 valuation:
   curve_seasons: [2022, 2023, 2024, 2025]
   curve_min_games: 8

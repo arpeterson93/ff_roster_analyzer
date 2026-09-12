@@ -3,6 +3,7 @@ import { POSITION_COLOR, INJURY_BADGE, opponentCellHtml, sortByPositionOrder, te
 import { openPlayerModal } from "./playermodal.js";
 import { openPointsAgainstModal } from "./pointsagainstmodal.js";
 import { loadWatchlist, setWatched } from "./watchlist.js";
+import { compareCheckboxHtml, wireCompareCheckboxes } from "./compare.js";
 
 const FLEX_POSITIONS = ["RB", "WR", "TE"];
 
@@ -38,7 +39,7 @@ function columns(data, watched) {
     },
     {
       key: "name", label: "Player",
-      fmt: (v, p) => `<span class="pos-tag" style="background:${POSITION_COLOR[p.position] || "#888"}">${p.position}</span> ${escapeHtml(v)} ${healthBadge(p.injury_status)}`,
+      fmt: (v, p) => `${compareCheckboxHtml(p)}<span class="pos-tag" style="background:${POSITION_COLOR[p.position] || "#888"}">${p.position}</span> ${escapeHtml(v)} ${healthBadge(p.injury_status)}`,
     },
     { key: "nfl_team", label: "Team" },
     {
@@ -61,10 +62,15 @@ function columns(data, watched) {
       fmt: (_v, p) => {
         const est = (data.faabEstimates || {})[p.id];
         if (!est) return "–";
+        // % of effective starting budget IF contested (comp-based method) -
+        // not blended with P(bid), see playermodal.js/engine/faab_estimate.py
+        // for why, and not a $ amount - see the conversation this was built
+        // from for why the target moved off a fictional $1000 scale.
+        const pct = (est.conditional_price || {}).comp_based;
         const d = est.distribution;
         return d
-          ? `$${fmt(est.comp_based, 0)} <span class="muted small">($${fmt(d.p25, 0)}–$${fmt(d.p75, 0)})</span>`
-          : `$${fmt(est.comp_based, 0)}`;
+          ? `${fmt(pct * 100, 1)}% <span class="muted small">(${fmt(d.p25 * 100, 1)}–${fmt(d.p75 * 100, 1)}%)</span>`
+          : `${fmt(pct * 100, 1)}%`;
       },
     },
     ...(yourTeamId !== null
@@ -161,6 +167,7 @@ function render(container, data, filters, watched) {
       if (team) openPointsAgainstModal(team, cell.dataset.pos, data);
     });
   });
+  wireCompareCheckboxes(wrap, data);
 }
 
 export function renderRankings(container, data, slug) {
