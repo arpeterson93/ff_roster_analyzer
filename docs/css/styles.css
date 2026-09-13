@@ -196,7 +196,7 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 .ros-opp { font-weight: 700; font-size: 11px; }
 .ros-rank { font-size: 10px; opacity: 0.85; }
 /* Frozen first column - stays put while the week columns scroll
-   horizontally (.table-wrap's own overflow-x). Needs an explicit
+   horizontally (#ros-grid-wrap's own overflow-x below). Needs an explicit
    background since sticky positioning doesn't otherwise stop the heat
    cells scrolling underneath from showing through. */
 .ros-name, .ros-grid th:first-child {
@@ -204,6 +204,30 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
   border-right: 1px solid var(--border);
 }
 .ros-name { white-space: nowrap; }
+/* Same "sticky <th> inside an overflow-x wrap silently doesn't stick"
+   fix already worked out for #rankings-table-wrap above: overflow-x forces
+   overflow-y to compute as non-visible too (CSS Overflow Module's pairing
+   rule), which makes THIS div the sticky descendants' containing block -
+   so it needs its own bounded height and to scroll internally (both axes)
+   for `top: 0` to stick to anything real, and border-collapse:separate,
+   since sticky on a <th> is unreliable under the default collapsed border
+   in every major engine. */
+.ros-grid { border-collapse: separate; border-spacing: 0; }
+#ros-grid-wrap { overflow: auto; max-height: 70vh; }
+.ros-grid thead th {
+  position: sticky; top: 0; z-index: 3; background: var(--card);
+  border-bottom: 1px solid var(--border);
+}
+.ros-grid thead th:first-child { z-index: 4; } /* sticky on BOTH axes at the corner */
+/* The position-divider row's own <td> spans the full scrollable width (it
+   has to, for its background tint to cover the row) - sticking THAT would
+   do nothing useful since it's already as wide as the scrollport. Sticking
+   this inner label instead keeps just the text pinned to the left edge as
+   the row scrolls, at the same 8px the cell's own left padding already
+   places it at when unscrolled. Left-only (not top) - it should stay
+   visible while scrolling sideways through ITS OWN group's row, not stay
+   pinned while scrolling down into a different position's rows. */
+.ros-divider-label { position: sticky; left: 8px; display: inline-block; }
 
 /* Settings' field rows used a fixed 220px label + inline range/select/checkbox
    in one unbroken flex row - on a narrow phone that's simply wider than the
@@ -236,6 +260,29 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
    colors.js's shortName) - the 700px breakpoint below picks one, same
    pattern as .mobile-line. */
 .short-name { display: none; }
+
+/* Player modal's expandable Game Log bar-per-play chart (see
+   docs/js/playermodal.js's playLogDetailHtml / engine/play_log.py) -
+   entirely percentage-positioned (left/bottom/height, never a fixed pixel
+   width) so it fits any screen width, including mobile, without ever
+   needing horizontal scroll - the whole point was seeing WHEN in the game
+   scoring happened without fighting the layout to see it. */
+.game-log-detail td { padding: 10px 8px 14px; }
+.play-chart-wrap { margin: 4px 0 10px; }
+.play-chart {
+  position: relative; height: 110px; background: var(--paper);
+  border-radius: 4px; overflow: hidden;
+}
+.play-chart-qline { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--border); }
+.play-chart-baseline { position: absolute; left: 0; right: 0; height: 1px; background: var(--ink-500); opacity: 0.5; }
+.play-bar {
+  position: absolute; width: 2.2%; min-width: 3px; max-width: 10px;
+  transform: translateX(-50%); background: var(--accent); border-radius: 2px 2px 0 0;
+}
+.play-bar-neg { background: var(--red-600); border-radius: 0 0 2px 2px; }
+.play-chart-axis { display: flex; justify-content: space-between; margin-top: 2px; font-size: 10px; color: var(--ink-500); }
+.play-top-table { width: 100%; }
+.play-top-table td:nth-child(2) { white-space: normal; word-break: break-word; } /* play label wraps, never scrolls */
 
 .pill {
   display: inline-block;
@@ -472,6 +519,14 @@ details[open] summary { margin-bottom: 8px; }
   .lineup-player .pos-tag { display: none; }
   .full-name { display: none; }
   .short-name { display: inline; }
+
+  /* Belt-and-suspenders on top of the "F. Last" swap above: even a short
+     name could still wrap to 2 lines here specifically (caught live
+     2026-09-14 - "Omarion Hampton"/"Parker Washington" both still wrapped
+     despite white-space:nowrap, likely position:sticky + this table's auto
+     layout interacting badly on some engines) - an explicit max-width plus
+     ellipsis forces single-line rendering no matter what caused that. */
+  .ros-name { max-width: 84px; overflow: hidden; text-overflow: ellipsis; }
 }
 
 @media (pointer: coarse) {

@@ -86,6 +86,20 @@ def schedules(seasons: int | list[int], current_season: int | None = None) -> pl
     return _normalize_team_columns(df, ["away_team", "home_team"])
 
 
+def play_by_play(seasons: int | list[int], current_season: int | None = None) -> pl.DataFrame:
+    """Play-by-play (nflfastR), for engine/play_log.py's per-play scoring
+    breakdown - one row per play, not per player-week. Same graceful-empty-
+    frame-on-failure behavior as player_stats below (a fresh current season
+    before any real plays have happened yet shouldn't crash the pipeline)."""
+    seasons_list = [seasons] if isinstance(seasons, int) else list(seasons)
+    try:
+        df = _cached_load("pbp", seasons_list, lambda: nfl.load_pbp(seasons_list), current_season=current_season)
+    except ConnectionError:
+        probe = _cached_load("pbp_schema_probe", [2023], lambda: nfl.load_pbp([2023]), current_season=None)
+        return probe.clear()
+    return _normalize_team_columns(df, ["posteam", "defteam", "home_team", "away_team"])
+
+
 def player_stats(seasons: int | list[int], current_season: int | None = None) -> pl.DataFrame:
     """Weekly per-player stats. Returns an empty frame with the expected columns
     if the season's file does not exist yet (e.g. the current season before

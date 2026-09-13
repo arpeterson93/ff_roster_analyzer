@@ -156,7 +156,7 @@ function scheduleGrid(roster, currentWeek, finalWeek) {
     .map((p) => {
       const byWeek = new Map((p.weekly || []).map((w) => [w.week, w]));
       const cells = weeks.map((w) => rosCellHtml(byWeek.get(w), p.position)).join("");
-      const divider = p.position !== lastPos ? `<tr class="week-divider"><td colspan="${colCount}">${p.position}</td></tr>` : "";
+      const divider = p.position !== lastPos ? `<tr class="week-divider"><td colspan="${colCount}"><div class="ros-divider-label">${p.position}</div></td></tr>` : "";
       lastPos = p.position;
       // Mobile shows "F. Last" (see styles.css's ".full-name"/".short-name"
       // toggle, same pattern as Schedule's symmetric lineup).
@@ -164,7 +164,7 @@ function scheduleGrid(roster, currentWeek, finalWeek) {
       return `${divider}<tr data-player-id="${p.id}" class="clickable-row"><td class="ros-name">${nameHtml}</td>${cells}</tr>`;
     })
     .join("");
-  return `<table class="ros-grid">${header}<tbody>${rows}</tbody></table>`;
+  return `<table class="ros-grid"><thead>${header}</thead><tbody>${rows}</tbody></table>`;
 }
 
 function changesTable(changes, playersById) {
@@ -224,7 +224,7 @@ export function renderStartSit(container, data, slug) {
       </div>
       <div class="card">
         <h2>Rest-of-season opponent schedule</h2>
-        <div class="table-wrap">${scheduleGrid(roster, data.meta.current_week, data.meta.final_week)}</div>
+        <div class="table-wrap" id="ros-grid-wrap">${scheduleGrid(roster, data.meta.current_week, data.meta.final_week)}</div>
       </div>
     `;
     container.querySelector("#startsit-team-select").addEventListener("change", (e) => {

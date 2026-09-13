@@ -30,6 +30,7 @@ from engine.matchups import (
     points_by_team_week_pos,
     team_weeks_from_opponent,
 )
+from engine.play_log import build_game_play_index, scoring_plays_for_player
 from engine.points_against import dst_points_against_detail, points_against_detail
 from engine.scoring import ScoringRules
 from engine.standings import (
@@ -62,6 +63,7 @@ from ingest.config import load_all_league_configs
 from ingest.base import Matchup
 from ingest.espn_client import EspnClient
 from ingest.espn_injuries import EspnInjuriesFetchError, fetch_ir_return_weeks
+from ingest.espn_scoreboard import fetch_remaining_game_fraction
 from ingest.settings_sheet import SettingsSheetError, apply_remote_settings, fetch_remote_settings, parse_seeding_config
 from ingest.weather import fetch_game_weather
 
@@ -109,6 +111,32 @@ def _id_lookup(ranks_df, id_map: ids_mod.IdMap) -> dict[str, dict]:
         res = id_map.resolve(fp_id=row.get("fp_id"), name=row["name"], pos=row["pos"], team=row.get("team"))
         lookup[res.id] = row
     return lookup
+
+
+def _positional_ranks_from_overall(players: list[dict]) -> None:
+    """Recomputes each player's ros_pos_rank IN PLACE, from where they land
+    among same-position players within ros_overall_rank's own order - not
+    fetch_ros's independent per-position page (ros-<format>-<pos>.php),
+    which draws its own separate expert-vote consensus and doesn't have to
+    (and often doesn't) nest into the same order as the combined overall
+    page. Rankings' primary "Rank" column already shows ros_overall_rank -
+    the positional figure shown beside it should be consistent with THAT
+    ordering, not silently sourced from a different one.
+
+    A player absent from the overall list (outside FantasyPros' own cutoff
+    there) keeps whatever ros_pos_rank fetch_ros already gave them from
+    their own position's page - the two lists don't cover equal depth, and
+    losing a positional rank entirely for everyone outside the overall
+    Top-N would be a worse regression than leaving them with a figure from
+    a slightly different consensus."""
+    by_position: dict[str, list[dict]] = {}
+    for p in players:
+        if p.get("ros_overall_rank") is not None:
+            by_position.setdefault(p["position"], []).append(p)
+    for plist in by_position.values():
+        plist.sort(key=lambda p: p["ros_overall_rank"])
+        for i, p in enumerate(plist, start=1):
+            p["ros_pos_rank"] = i
 
 
 def _compute_faab_estimates(
@@ -558,9 +586,11 @@ def run_league(cfg: dict) -> dict:
     # Actual (not projected) per-week stat lines for weeks already played,
     # keyed for O(1) lookup while building each player's `weekly` array below.
     actual_offense_by_id_week: dict[tuple[str, int], dict] = {}
+    gsis_by_pid: dict[str, str] = {}
     for row in current_stats.iter_rows(named=True):
         pid = id_map.resolve(gsis_id=row["player_id"], name=row["player_display_name"], pos=row["position"], team=row["team"]).id
         actual_offense_by_id_week[(pid, row["week"])] = row
+        gsis_by_pid[pid] = row["player_id"]
     # DST's own weekly output needs the game's final score to compute PA
     # (points allowed) and fantasy points - not present on the team_stats row
     # itself, so pull each week's opponent score in the same way
@@ -753,6 +783,7 @@ def run_league(cfg: dict) -> dict:
     if overall_lookup:
         for p in players_out:
             p["ros_overall_rank"] = overall_lookup.get(p["id"])
+        _positional_ranks_from_overall(players_out)
     else:
         ranked = sorted((p for p in players_out if p["ros_pos_rank"] is not None), key=lambda p: p["ros_total"], reverse=True)
         for i, p in enumerate(ranked, start=1):
@@ -761,6 +792,36 @@ def run_league(cfg: dict) -> dict:
             p.setdefault("ros_overall_rank", None)
 
     players_by_id = {p["id"]: p for p in players_out}
+
+    # Per-play scoring breakdown for the player modal's expandable Game Log
+    # row (see engine/play_log.py) - offense/kicker only, already-played
+    # weeks only. Best-effort: play-by-play is a "nice to have" detail view,
+    # never worth failing the whole pipeline over - a fetch/schema problem
+    # just means no play-level breakdown for this build, same degrade-
+    # gracefully pattern as espn_future_projections/ir_return_weeks above.
+    game_log_plays_out: dict[str, dict[str, list[dict]]] = {}
+    try:
+        pbp_current = nd.play_by_play(season, current_season=season)
+        for w in range(1, weeks_played + 1):
+            week_rows = list(pbp_current.filter(pl.col("season") == season, pl.col("week") == w).iter_rows(named=True))
+            if not week_rows:
+                continue
+            play_index = build_game_play_index(week_rows)
+            for p in players_out:
+                if p["position"] not in offense_positions:
+                    continue
+                gsis_id = gsis_by_pid.get(p["id"])
+                plays_for_player = play_index.get(gsis_id) if gsis_id else None
+                if not plays_for_player:
+                    continue
+                scoring_plays = scoring_plays_for_player(plays_for_player, gsis_id, player_rules)
+                if scoring_plays:
+                    game_log_plays_out.setdefault(p["id"], {})[str(w)] = scoring_plays
+    except Exception:
+        logger.warning("play-by-play fetch/processing failed - Game Log per-play breakdown disabled for this build", exc_info=True)
+        warnings.append("Play-by-play fetch failed; per-play Game Log breakdown unavailable this build")
+        game_log_plays_out = {}
+
     # Which week (if any) each player is on bye - the trigger for
     # optimal_lineup_for_week_with_bye_fill's streaming fill-in. Covers free
     # agents too, not just rostered players (harmless/unused there).
@@ -1033,17 +1094,39 @@ def run_league(cfg: dict) -> dict:
             team_week_sd[(t.team_id, w)] = sd_sq ** 0.5
 
     # --- live win probability (current week only) ---
-    # Each starter's (mean, sd) collapses to (actual points, 0) once their
-    # game is done (per ESPN's own game_played heuristic - no live polling
-    # needed, this just reads whatever's true as of this build), otherwise
-    # stays at their full projected week + sd. Summed per team into one
-    # Normal(mean, sd), then engine.standings.matchup_win_probability turns
-    # the two teams' distributions into a single win% for the matchup -
-    # accurate as of the last site build, not truly real-time in-game. Every
-    # OTHER not-yet-played week (no live status to blend in yet regardless)
-    # uses the plain projected team_week_mean/team_week_sd instead - see
-    # _win_pcts below.
+    # Each starter's (mean, sd) BLENDS toward (actual points, 0) smoothly as
+    # their real NFL game progresses, rather than snapping straight from
+    # "fully uncertain" to "fully final" the instant ESPN's fantasy API
+    # marks their game done - live-verified against the ESPN app's own
+    # displayed in-game projection for a real player (Christian Watson,
+    # week 1 2026): actual_so_far + remaining_fraction * pregame_projection
+    # matched it exactly at halftime (remaining_fraction=0.5). SD scales by
+    # sqrt(remaining_fraction), not remaining_fraction itself - variance
+    # (not SD) is the additive quantity for a process accumulating roughly
+    # uniformly over game-clock time (the same reasoning a random walk's
+    # variance grows linearly with elapsed time while its SD only grows
+    # with elapsed time's square root), so a full-game SD represents all 60
+    # minutes of variance and the REMAINING portion is pregame_sd *
+    # sqrt(remaining_fraction).
+    #
+    # remaining_fraction comes from ESPN's PUBLIC scoreboard (real
+    # quarter/clock state - the fantasy API never exposes this, only a
+    # crude done/not-done flag) via ingest.espn_scoreboard, keyed by team;
+    # a team missing from it (that fetch failed entirely, or - degenerate -
+    # a team not found on the live scoreboard for some other reason) falls
+    # back to the OLD binary rule instead of guessing every team is at some
+    # arbitrary default, so a scoreboard outage degrades to today's
+    # already-safe behavior rather than corrupting every matchup's win%.
+    #
+    # Summed per team into one Normal(mean, sd), then
+    # engine.standings.matchup_win_probability turns the two teams'
+    # distributions into a single win% for the matchup - accurate as of the
+    # last site build, not truly real-time in-game (the pipeline itself
+    # only runs on its own schedule). Every OTHER not-yet-played week (no
+    # live status to blend in yet regardless) uses the plain projected
+    # team_week_mean/team_week_sd instead - see _win_pcts below.
     live_status_by_espn_id = client.get_live_week_player_status(current_week)
+    remaining_frac_by_team = fetch_remaining_game_fraction()
     team_live_mean_sd: dict[int, tuple[float, float]] = {}
     for team_id, starters in espn_started_by_team.items():
         mean_total = 0.0
@@ -1051,12 +1134,14 @@ def run_league(cfg: dict) -> dict:
         for pid in starters:
             p = players_by_id[pid]
             wp = next((w for w in p["weekly"] if w["week"] == current_week), None)
-            mean, sd = p["this_week"] or 0.0, wp["sd"] if wp else 0.0
+            pregame_mean, pregame_sd = p["this_week"] or 0.0, wp["sd"] if wp else 0.0
             live = live_status_by_espn_id.get(p["espn_id"])
-            if live is not None and live[1]:
-                mean, sd = live[0], 0.0
-            mean_total += mean
-            var_total += sd**2
+            points_so_far = live[0] if live is not None else 0.0
+            frac = remaining_frac_by_team.get(p["nfl_team"])
+            if frac is None:
+                frac = 0.0 if (live is not None and live[1]) else 1.0
+            mean_total += points_so_far + frac * pregame_mean
+            var_total += (pregame_sd * (frac**0.5)) ** 2
         team_live_mean_sd[team_id] = (mean_total, var_total**0.5)
 
     def _win_pcts(m: Matchup) -> tuple[float | None, float | None]:
@@ -1196,6 +1281,7 @@ def run_league(cfg: dict) -> dict:
         "schedule.json": schedule_out,
         "fa_values.json": fa_values_out,
         "fa_values_detail.json": fa_values_detail_out,
+        "game_log_plays.json": game_log_plays_out,
         "unmapped.json": unmapped,
         "faab_estimates.json": faab_estimates_out,
     }

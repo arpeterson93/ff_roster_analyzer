@@ -3,21 +3,90 @@ import { POSITION_COLOR, impliedTotalCellHtml, opponentCellHtml, teamLabel, play
 import { openModal } from "./modal.js";
 import { groupedHeaderHtml, statCellsHtml } from "./statcolumns.js";
 
+// Bar-per-play chart (x = elapsed game time, y = points scored on THAT
+// play) plus a top-plays table, for weeks with a per-play breakdown (see
+// engine/play_log.py - offense/kicker only, so a DST's game log never gets
+// a clickable row here). Purely percentage-positioned (no fixed pixel
+// widths anywhere) so it never needs horizontal scroll on a phone screen -
+// the whole point was to see WHEN scoring happened (garbage time or not)
+// without fighting the layout to see it.
+function playLogDetailHtml(plays) {
+  const positives = plays.filter((p) => p.points > 0).map((p) => p.points);
+  const negatives = plays.filter((p) => p.points < 0).map((p) => -p.points);
+  const maxPos = Math.max(1, ...positives, 0);
+  const maxNeg = Math.max(1, ...negatives, 0);
+  // Baseline sits low (not centered) - real fantasy scoring plays are
+  // overwhelmingly positive (a fumble/INT is the rare exception), so most
+  // of the chart's height should go to the common case.
+  const baselinePct = maxNeg > 0 ? 18 : 4;
+  const bars = plays
+    .map((p) => {
+      const leftPct = (p.elapsed_min / 60) * 100;
+      const isNeg = p.points < 0;
+      const heightPct = isNeg
+        ? Math.max(3, (Math.abs(p.points) / maxNeg) * baselinePct)
+        : Math.max(3, (p.points / maxPos) * (100 - baselinePct));
+      const posStyle = isNeg ? `top:${baselinePct}%; height:${heightPct}%;` : `bottom:${100 - baselinePct}%; height:${heightPct}%;`;
+      return `<div class="play-bar ${isNeg ? "play-bar-neg" : ""}" style="left:${leftPct}%; ${posStyle}" title="${fmt(p.elapsed_min, 0)}' - ${escapeHtml(p.label)}: ${p.points >= 0 ? "+" : ""}${fmt(p.points, 1)} pts"></div>`;
+    })
+    .join("");
+  const top = plays.slice().sort((a, b) => b.points - a.points).slice(0, 5);
+  const topRows = top
+    .map((p) => `<tr><td class="num">${fmt(p.elapsed_min, 0)}'</td><td>${escapeHtml(p.label)}</td><td class="num">${p.points >= 0 ? "+" : ""}${fmt(p.points, 1)}</td></tr>`)
+    .join("");
+  return `
+    <div class="play-chart-wrap">
+      <div class="play-chart">
+        <div class="play-chart-baseline" style="bottom:${100 - baselinePct}%"></div>
+        <div class="play-chart-qline" style="left:25%"></div>
+        <div class="play-chart-qline" style="left:50%"></div>
+        <div class="play-chart-qline" style="left:75%"></div>
+        ${bars}
+      </div>
+      <div class="play-chart-axis"><span>Q1</span><span>Q2</span><span>Q3</span><span>Q4</span></div>
+    </div>
+    <table class="play-top-table">
+      <thead><tr><th>Time</th><th>Play</th><th class="num">Pts</th></tr></thead>
+      <tbody>${topRows}</tbody>
+    </table>
+  `;
+}
+
 // Same grouped stat columns as the points-against modal, so a position's
-// actual-results columns read identically in both places.
-function gameLogTable(player) {
+// actual-results columns read identically in both places. A played week
+// with a per-play breakdown available (data.gameLogPlays - offense/kicker
+// only, see engine/play_log.py) is clickable to expand it; weeks without
+// one (DST, or a build from before this existed) render exactly as before.
+function gameLogTable(player, data) {
   const { top, bottom, flatColumns } = groupedHeaderHtml(player.position, ["Wk", "Opp"]);
+  const colCount = flatColumns.length + 3;
+  const playsByWeek = (data.gameLogPlays || {})[player.id] || {};
   const rows = (player.weekly || [])
     .filter((w) => w.actual)
     .slice()
     .reverse()
     .map((w) => {
       const fpts = w.actual.points !== undefined && w.actual.points !== null ? fmt(w.actual.points, 1) : "-";
-      return `<tr><td>${w.week}</td><td>${opponentCellHtml(w)}</td>${statCellsHtml(w.actual.stats, flatColumns)}<td><strong>${fpts}</strong></td></tr>`;
+      const plays = playsByWeek[String(w.week)];
+      const hasDetail = plays && plays.length > 0;
+      const mainRow = `<tr class="game-log-row ${hasDetail ? "clickable-row" : ""}" data-week="${w.week}"><td>${w.week}</td><td>${opponentCellHtml(w)}</td>${statCellsHtml(w.actual.stats, flatColumns)}<td><strong>${fpts}</strong></td></tr>`;
+      const detailRow = hasDetail
+        ? `<tr class="game-log-detail" data-week-detail="${w.week}" hidden><td colspan="${colCount}">${playLogDetailHtml(plays)}</td></tr>`
+        : "";
+      return mainRow + detailRow;
     })
     .join("");
   if (!rows) return `<p class="muted small">No games played yet this season.</p>`;
   return `<div class="table-wrap"><table>${top}${bottom}<tbody>${rows}</tbody></table></div>`;
+}
+
+function wireGameLogRows(scopeEl) {
+  scopeEl.querySelectorAll("tr.game-log-row.clickable-row").forEach((row) => {
+    row.addEventListener("click", () => {
+      const detail = scopeEl.querySelector(`tr.game-log-detail[data-week-detail="${row.dataset.week}"]`);
+      if (detail) detail.hidden = !detail.hidden;
+    });
+  });
 }
 
 // ESPN wk is a second, independent number shown alongside our own Proj/SD -
@@ -288,7 +357,7 @@ function faabEstimateSection(player, data) {
 function overviewTabHtml(player, data) {
   const hasGameLog = (player.weekly || []).some((w) => w.actual);
   return `
-    ${hasGameLog ? `<h3>Game log</h3>${gameLogTable(player)}` : ""}
+    ${hasGameLog ? `<h3>Game log</h3>${gameLogTable(player, data)}` : ""}
     <h3>${hasGameLog ? "Remaining schedule" : "Weekly projections"}</h3>
     <div class="table-wrap">${projectionTable(player, data.meta.current_week)}</div>
   `;
@@ -457,6 +526,7 @@ export function openPlayerModal(player, data) {
   const scope = document.querySelector(".modal-content");
   wirePlayerModalTabs(scope);
   wireFaabConfidenceSlider(scope, player, data);
+  wireGameLogRows(scope);
 }
 
 // Side-by-side on a wide screen (see .compare-grid/.modal-overlay-wide in
@@ -480,6 +550,7 @@ export function openComparePlayerModal(playerA, playerB, data) {
   modalContent.querySelectorAll(".compare-col").forEach((col) => wirePlayerModalTabs(col));
   wireFaabConfidenceSlider(modalContent.querySelector('[data-compare-col="a"]'), playerA, data);
   wireFaabConfidenceSlider(modalContent.querySelector('[data-compare-col="b"]'), playerB, data);
+  modalContent.querySelectorAll(".compare-col").forEach((col) => wireGameLogRows(col));
   modalContent.querySelectorAll(".compare-side-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       modalContent.querySelectorAll(".compare-side-btn").forEach((b) => b.classList.toggle("active", b === btn));

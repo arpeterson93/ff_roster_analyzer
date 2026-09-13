@@ -120,33 +120,41 @@ function tradeTargetsTable(targets, playersById, teamsById) {
     .join("")}</tbody></table>`;
 }
 
+// Same breakdown as the top-of-page bars (positionBars/team.slot_strength) -
+// actual starting-lineup SLOTS per the league's own roster settings (QB,
+// RB, WR1, WR2, TE, FLEX1, FLEX2, K, DST, ...), not the flatter per-BASE-
+// position aggregate (team.position_strength) this table used before.
+// slot_strength/slot_labels are computed server-side for every team, not
+// just whichever one happens to be selected (see engine/pipeline.py), so
+// there's a real per-team column to show here despite only one team's own
+// bars being visible above at a time.
 function leagueWideTable(data, yourTeamId) {
-  const positions = data.meta.positions;
-  // Color relative to the SPREAD WITHIN EACH POSITION'S OWN COLUMN (highest
-  // ppw in that column = green, lowest = red, middle = yellow) rather than a
-  // fixed points/week scale shared across every column - positions with a
-  // wide gap between the best and worst team (e.g. RB) and positions with a
-  // narrow one (e.g. K) would otherwise all get squeezed onto the same ruler,
+  const slots = (data.teams[0]?.slot_labels || []).slice().sort(slotBarSort);
+  // Color relative to the SPREAD WITHIN EACH SLOT'S OWN COLUMN (highest ppw
+  // in that column = green, lowest = red, middle = yellow) rather than a
+  // fixed points/week scale shared across every column - slots with a wide
+  // gap between the best and worst team (e.g. RB) and slots with a narrow
+  // one (e.g. K) would otherwise all get squeezed onto the same ruler,
   // making two very different RB values look like the same shade.
   const ranges = {};
-  positions.forEach((pos) => {
-    const vals = data.teams.map((t) => t.position_strength[pos]?.ppw).filter((v) => v !== undefined && v !== null);
-    ranges[pos] = { min: Math.min(...vals), max: Math.max(...vals) };
+  slots.forEach((slot) => {
+    const vals = data.teams.map((t) => t.slot_strength[slot]?.ppw).filter((v) => v !== undefined && v !== null);
+    ranges[slot] = { min: Math.min(...vals), max: Math.max(...vals) };
   });
-  const totalFor = (t) => positions.reduce((acc, pos) => acc + (t.position_strength[pos]?.ppw || 0), 0);
+  const totalFor = (t) => slots.reduce((acc, slot) => acc + (t.slot_strength[slot]?.ppw || 0), 0);
   const totals = data.teams.map(totalFor);
   const totalRange = { min: Math.min(...totals), max: Math.max(...totals) };
 
-  const header = `<tr><th>Team</th>${positions.map((p) => `<th>${p}</th>`).join("")}<th>Total</th></tr>`;
+  const header = `<tr><th>Team</th>${slots.map((s) => `<th>${s}</th>`).join("")}<th>Total</th></tr>`;
   const rows = data.teams
     .slice()
     .sort((a, b) => totalFor(b) - totalFor(a))
     .map((t) => {
-      const cells = positions
-        .map((pos) => {
-          const s = t.position_strength[pos];
+      const cells = slots
+        .map((slot) => {
+          const s = t.slot_strength[slot];
           if (!s) return "<td>–</td>";
-          const { min, max } = ranges[pos];
+          const { min, max } = ranges[slot];
           const ratio = max > min ? (s.ppw - min) / (max - min) : 0.5;
           return `<td class="heat-cell" style="background:${colorForRatio(ratio)}">${fmt(s.ppw, 1)}</td>`;
         })

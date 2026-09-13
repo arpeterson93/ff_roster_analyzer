@@ -32,7 +32,7 @@ async function fetchJsonOptional(path) {
 export async function loadLeagueData(slug) {
   if (cache.has(slug)) return cache.get(slug);
   const base = `data/${slug}`;
-  const [meta, players, teams, lineups, matchups, standings, recentResults, pointsAgainst, faValues, schedule, faabEstimates, faValuesDetail] = await Promise.all([
+  const [meta, players, teams, lineups, matchups, standings, recentResults, pointsAgainst, faValues, schedule, faabEstimates, faValuesDetail, gameLogPlays] = await Promise.all([
     fetchJson(`${base}/meta.json`),
     fetchJson(`${base}/players.json`),
     fetchJson(`${base}/teams.json`),
@@ -45,12 +45,13 @@ export async function loadLeagueData(slug) {
     fetchJson(`${base}/schedule.json`),
     fetchJson(`${base}/faab_estimates.json`),
     fetchJsonOptional(`${base}/fa_values_detail.json`),
+    fetchJsonOptional(`${base}/game_log_plays.json`),
   ]);
   const playersById = new Map(players.map((p) => [p.id, p]));
   const teamsById = new Map(teams.map((t) => [t.team_id, t]));
   const data = {
     meta, players, playersById, teams, teamsById, lineups, matchups, standings,
-    recentResults, pointsAgainst, faValues, schedule, faabEstimates, faValuesDetail,
+    recentResults, pointsAgainst, faValues, schedule, faabEstimates, faValuesDetail, gameLogPlays,
   };
   cache.set(slug, data);
   return data;
