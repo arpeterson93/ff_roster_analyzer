@@ -1,5 +1,5 @@
 import { fmt, escapeHtml, getYourTeam, setYourTeam } from "./state.js";
-import { POSITION_COLOR, INJURY_BADGE, opponentCellHtml, ratioForRank, colorForRatio, formatKickoff, sortByPositionOrder, teamLabel, playerPhotoHtml, weeklyProjection } from "./colors.js";
+import { POSITION_COLOR, INJURY_BADGE, impliedTotalCellHtml, opponentCellHtml, ratioForRank, colorForRatio, formatKickoff, sortByPositionOrder, teamLabel, playerPhotoHtml, weeklyProjection } from "./colors.js";
 import { openPlayerModal } from "./playermodal.js";
 import { openPointsAgainstModal } from "./pointsagainstmodal.js";
 import { compareCheckboxHtml, wireCompareCheckboxes } from "./compare.js";
@@ -57,6 +57,7 @@ function playerRow(p, week, currentWeek, slotLabel, isStreamed) {
       ${kickoff ? `<div class="muted small row-meta">${kickoff}</div>` : ""}
       <div>${opponentCellHtml(weekEntry)}</div>
     </td>
+    <td class="desktop-col">${impliedTotalCellHtml(p, weekEntry)}</td>
     <td><strong>${fmt(proj, 1)}</strong></td>
   </tr>`;
 }
@@ -93,11 +94,12 @@ function lineupSection(roster, week, lineupWeek, currentWeek, allPlayersById) {
   return `
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Slot</th><th>Player</th><th class="desktop-col">Opp</th><th>Proj</th></tr></thead>
+        <thead><tr><th>Slot</th><th>Player</th><th class="desktop-col">Opp</th><th class="desktop-col">Total</th><th>Proj</th></tr></thead>
         <tbody>${rows}</tbody>
         <tfoot>
           <tr class="totals-row">
             <td colspan="2">Starters total</td>
+            <td class="desktop-col"></td>
             <td class="desktop-col"></td>
             <td><strong>${fmt(ourTotal, 1)}</strong></td>
           </tr>
@@ -107,11 +109,12 @@ function lineupSection(roster, week, lineupWeek, currentWeek, allPlayersById) {
     <h3>Bench</h3>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Slot</th><th>Player</th><th class="desktop-col">Opp</th><th>Proj</th></tr></thead>
+        <thead><tr><th>Slot</th><th>Player</th><th class="desktop-col">Opp</th><th class="desktop-col">Total</th><th>Proj</th></tr></thead>
         <tbody>${benchRows}</tbody>
         <tfoot>
           <tr class="totals-row">
             <td colspan="2">Bench total</td>
+            <td class="desktop-col"></td>
             <td class="desktop-col"></td>
             <td><strong>${fmt(benchTotal, 1)}</strong></td>
           </tr>

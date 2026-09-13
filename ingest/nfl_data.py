@@ -217,6 +217,44 @@ def kickoff_utc_from_schedule(schedules_df: pl.DataFrame, season: int) -> dict[t
     return kickoff
 
 
+def game_context_from_schedule(schedules_df: pl.DataFrame, season: int) -> dict[tuple[str, int], dict]:
+    """{(team, week): {"implied_total", "opponent_implied_total", "neutral_site",
+    "roof", "stadium_id", "stadium"}}, REG season only.
+
+    implied_total/opponent_implied_total come from nflverse's own spread_line/
+    total_line - live-verified against ESPN's own odds for the same games:
+    nflverse's spread_line is POSITIVE when the HOME team is favored (e.g.
+    Bengals -3.5 at home shows spread_line=3.5), the OPPOSITE sign convention
+    from a bettor-facing "team -3.5" line, so:
+        home_implied = (total_line + spread_line) / 2
+        away_implied = (total_line - spread_line) / 2
+    Both are None until the book has posted lines for that week (usually
+    within a few days of kickoff, not the whole season up front).
+
+    stadium_id/stadium/roof are the REAL per-game venue (not each team's own
+    usual home venue) - this is what makes a neutral-site game (location ==
+    "Neutral", e.g. a London/Mexico City/Melbourne game) resolve correctly
+    without any special-casing: the row's own venue for that week is already
+    wherever the game actually is."""
+    reg = schedules_df.filter(pl.col("season") == season, pl.col("game_type") == "REG")
+    ctx: dict[tuple[str, int], dict] = {}
+    for row in reg.iter_rows(named=True):
+        total, spread = row.get("total_line"), row.get("spread_line")
+        if total is not None and spread is not None:
+            home_total, away_total = (total + spread) / 2, (total - spread) / 2
+        else:
+            home_total = away_total = None
+        shared = {
+            "neutral_site": row.get("location") == "Neutral",
+            "roof": row.get("roof"),
+            "stadium_id": row.get("stadium_id"),
+            "stadium": row.get("stadium"),
+        }
+        ctx[(row["home_team"], row["week"])] = {**shared, "implied_total": home_total, "opponent_implied_total": away_total}
+        ctx[(row["away_team"], row["week"])] = {**shared, "implied_total": away_total, "opponent_implied_total": home_total}
+    return ctx
+
+
 def nfl_week_context(
     season: int, schedules_df: pl.DataFrame
 ) -> tuple[int, dict[str, int], dict[tuple[str, int], str | None]]:

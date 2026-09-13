@@ -1,3 +1,5 @@
+import { fmt } from "./state.js";
+
 // 3-stop color scale (red -> amber -> green) reused for the matchup heat
 // table and position-strength bars. Pattern borrowed from irrigation_planner.
 
@@ -112,6 +114,24 @@ export function opponentCellHtml(weekEntry) {
   const color = colorForRatio(ratioForRank(weekEntry.rank));
   const rankTitle = hasRank ? `title="Matchup rank ${weekEntry.rank} of 32 (1 = best)"` : "";
   return `<span class="pill opp-pill" style="background:${color}" ${rankTitle}>${label}${hasRank ? ` (${weekEntry.rank})` : ""}</span>`;
+}
+
+// Vegas-implied team total for the CURRENT week only (see engine/pipeline.py -
+// a future week's line usually isn't posted yet, so weekEntry.implied_total
+// is only ever non-null there). For a DST, the number that actually matters
+// is the OPPOSING offense's implied total (how many points the team they're
+// facing is expected to score), not their own - the caller is expected to
+// pass the player's own current-week weekEntry regardless of position, this
+// picks the right field internally. Weather (temp/wind/precip, outdoor/
+// retractable-roof games only) rides along as a hover tooltip rather than
+// its own column - there wasn't room to justify a whole column for it.
+export function impliedTotalCellHtml(p, weekEntry) {
+  if (!weekEntry) return `<span class="muted">&ndash;</span>`;
+  const total = p.position === "DST" ? weekEntry.opponent_implied_total : weekEntry.implied_total;
+  if (total === null || total === undefined) return `<span class="muted">&ndash;</span>`;
+  const w = weekEntry.weather;
+  const title = w ? ` title="${w.temperature_f}&deg;F, wind ${w.wind}, ${w.precip_pct ?? 0}% precip - ${w.short_forecast}"` : "";
+  return `<span${title}>${fmt(total, 1)}</span>`;
 }
 
 // "Sun 3:25 PM" in the VIEWER's own local time zone - the pipeline only ever

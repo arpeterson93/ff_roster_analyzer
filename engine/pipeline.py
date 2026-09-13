@@ -10,6 +10,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import polars as pl
+
 from engine.curve import Curve, blend_current, build_curve, build_dst_curve
 from engine.faab_estimate import (
     FANTASY_RELEVANT_SNAP_PCT,
@@ -61,6 +63,7 @@ from ingest.base import Matchup
 from ingest.espn_client import EspnClient
 from ingest.espn_injuries import EspnInjuriesFetchError, fetch_ir_return_weeks
 from ingest.settings_sheet import SettingsSheetError, apply_remote_settings, fetch_remote_settings, parse_seeding_config
+from ingest.weather import fetch_game_weather
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -478,6 +481,27 @@ def run_league(cfg: dict) -> dict:
     prior_season = season - 1
     weeks = list(range(current_week, final_week + 1))
 
+    # Vegas-implied team totals (from nflverse's own spread_line/total_line -
+    # see ingest.nfl_data.game_context_from_schedule) for every week a line
+    # has been posted, plus a real hourly forecast (ingest.weather) for
+    # outdoor/retractable-roof stadiums, but ONLY for the current week - a
+    # forecast for a future week would be silently stale noise (NWS's own
+    # hourly horizon is ~7 days) or None anyway, so there's nothing useful to
+    # fetch there. One NWS call per unique stadium this week, not per team.
+    game_context = nd.game_context_from_schedule(schedules_current, season)
+    _weather_by_stadium: dict[str, dict | None] = {}
+    weather_by_team: dict[str, dict | None] = {}
+    current_week_games = schedules_current.filter(
+        (pl.col("season") == season) & (pl.col("game_type") == "REG") & (pl.col("week") == current_week)
+    )
+    for row in current_week_games.iter_rows(named=True):
+        sid = row.get("stadium_id")
+        if sid not in _weather_by_stadium:
+            _weather_by_stadium[sid] = fetch_game_weather(sid, row.get("roof"), kickoff.get((row["home_team"], current_week)))
+        w = _weather_by_stadium[sid]
+        weather_by_team[row["home_team"]] = w
+        weather_by_team[row["away_team"]] = w
+
     # Best-effort: espn.com/nfl/injuries' own return-date estimates, used
     # below to zero an IR player's proprietary projection for the weeks
     # before they're expected back (see engine.valuation.project_player's
@@ -686,6 +710,18 @@ def run_league(cfg: dict) -> dict:
                         "index": wp.index, "rank": wp.rank, "projected": wp.projected, "sd": wp.sd,
                         "espn_projected": espn_future_projections.get(p.espn_id, {}).get(wp.week),
                         "actual": _actual_weekly_stats(p.position, p.nfl_team, res.id, wp.week, weeks_played, actual_offense_by_id_week, actual_dst_by_team_week),
+                        # implied_total is this player's OWN team; opponent_implied_total
+                        # is the team they're facing that week - for a DST, the opponent's
+                        # number is the one that actually matters (how many points the
+                        # offense they're facing is expected to put up), so the frontend
+                        # picks whichever field fits the player's position rather than
+                        # this always meaning "the number to headline".
+                        "implied_total": (game_context.get((p.nfl_team, wp.week)) or {}).get("implied_total"),
+                        "opponent_implied_total": (game_context.get((p.nfl_team, wp.week)) or {}).get("opponent_implied_total"),
+                        # Only ever populated for the CURRENT week - see the
+                        # weather_by_team comment above for why a future week
+                        # is never worth fetching.
+                        "weather": weather_by_team.get(p.nfl_team) if wp.week == current_week else None,
                     }
                     for wp in proj.weekly
                 ],

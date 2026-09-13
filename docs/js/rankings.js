@@ -1,5 +1,5 @@
 import { fmt, escapeHtml, getYourTeam } from "./state.js";
-import { POSITION_COLOR, INJURY_BADGE, opponentCellHtml, sortByPositionOrder, teamLabel } from "./colors.js";
+import { POSITION_COLOR, INJURY_BADGE, impliedTotalCellHtml, opponentCellHtml, sortByPositionOrder, teamLabel } from "./colors.js";
 import { openPlayerModal } from "./playermodal.js";
 import { openPointsAgainstModal } from "./pointsagainstmodal.js";
 import { loadWatchlist, setWatched } from "./watchlist.js";
@@ -45,6 +45,10 @@ function columns(data, watched) {
     {
       key: "_opp", label: "Opp", sortable: false,
       fmt: (_v, p) => `<span data-opp-cell data-team="${escapeHtml(thisWeekEntry(p, data.meta.current_week).opponent || "")}" data-pos="${p.position}">${opponentCellHtml(thisWeekEntry(p, data.meta.current_week))}</span>`,
+    },
+    {
+      key: "_implied_total", label: "Total", sortable: false,
+      fmt: (_v, p) => impliedTotalCellHtml(p, thisWeekEntry(p, data.meta.current_week)),
     },
     { key: "espn_projected_week", label: "ESPN wk", fmt: (v) => fmt(v, 1) },
     { key: "fp_week_projected_pts", label: "FP wk", fmt: (v) => (v === null || v === undefined ? "–" : fmt(v, 1)) },

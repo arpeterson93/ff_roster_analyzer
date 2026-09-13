@@ -1,5 +1,5 @@
 import { fmt, escapeHtml, getYourTeam } from "./state.js";
-import { POSITION_COLOR, opponentCellHtml, teamLabel, playerPhotoHtml, weeklyProjection } from "./colors.js";
+import { POSITION_COLOR, impliedTotalCellHtml, opponentCellHtml, teamLabel, playerPhotoHtml, weeklyProjection } from "./colors.js";
 import { openModal } from "./modal.js";
 import { groupedHeaderHtml, statCellsHtml } from "./statcolumns.js";
 
@@ -382,6 +382,7 @@ function playerModalContentHtml(player, data) {
   const team = player.fantasy_team_id !== null ? data.teamsById.get(player.fantasy_team_id) : null;
   const faabHtml = faabEstimateSection(player, data);
   const nmdHtml = nmdDetailSection(player, data);
+  const currentWeekEntry = (player.weekly || []).find((w) => w.week === data.meta.current_week);
 
   const header = `
     <div class="player-modal-header">
@@ -396,6 +397,7 @@ function playerModalContentHtml(player, data) {
       <div class="stat-tile"><div class="stat-label">ROS total</div><div class="stat-value">${fmt(player.ros_total, 1)}</div></div>
       <div class="stat-tile"><div class="stat-label">Reg / Playoff</div><div class="stat-value">${fmt(player.reg_total, 1)} / ${fmt(player.playoff_total, 1)}</div></div>
       <div class="stat-tile"><div class="stat-label">Value (w/ waivers)</div><div class="stat-value">${player.value_delta_ww !== null ? fmt(player.value_delta_ww, 1) : "–"}</div></div>
+      <div class="stat-tile"><div class="stat-label">${player.position === "DST" ? "Opp implied total" : "Implied total"}</div><div class="stat-value">${impliedTotalCellHtml(player, currentWeekEntry)}</div></div>
     </div>
   `;
 

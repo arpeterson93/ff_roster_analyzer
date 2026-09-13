@@ -2,7 +2,7 @@ from datetime import date
 
 import polars as pl
 
-from ingest.nfl_data import kickoff_utc_from_schedule, week_for_date
+from ingest.nfl_data import game_context_from_schedule, kickoff_utc_from_schedule, week_for_date
 
 _WEEK_SCHEDULE = pl.DataFrame(
     [
@@ -60,3 +60,53 @@ def test_kickoff_ignores_other_seasons_and_game_types():
     )
     kickoff = kickoff_utc_from_schedule(df, 2025)
     assert kickoff == {}
+
+
+def _schedule_row(**overrides):
+    row = {
+        "season": 2026, "game_type": "REG", "week": 1, "home_team": "CIN", "away_team": "TB",
+        "location": "Home", "spread_line": 3.5, "total_line": 50.5, "roof": "outdoors",
+        "stadium_id": "CIN00", "stadium": "Paycor Stadium",
+    }
+    row.update(overrides)
+    return row
+
+
+def test_game_context_implied_totals_match_espn_verified_sign_convention():
+    # nflverse's spread_line is POSITIVE when the HOME team is favored - the
+    # opposite of a bettor-facing "team -3.5" line - live-verified 2026-09-13
+    # against ESPN's own odds for this exact game (Bengals -3.5 at home,
+    # O/U 50.5 -> Bengals implied 27.0, Buccaneers implied 23.5).
+    df = pl.DataFrame([_schedule_row()])
+    ctx = game_context_from_schedule(df, 2026)
+    assert ctx[("CIN", 1)]["implied_total"] == 27.0
+    assert ctx[("CIN", 1)]["opponent_implied_total"] == 23.5
+    assert ctx[("TB", 1)]["implied_total"] == 23.5
+    assert ctx[("TB", 1)]["opponent_implied_total"] == 27.0
+
+
+def test_game_context_no_line_posted_yet_is_none_not_zero():
+    df = pl.DataFrame([_schedule_row(spread_line=None, total_line=None)])
+    ctx = game_context_from_schedule(df, 2026)
+    assert ctx[("CIN", 1)]["implied_total"] is None
+    assert ctx[("TB", 1)]["opponent_implied_total"] is None
+
+
+def test_game_context_neutral_site_and_venue_reflect_the_actual_game_not_either_teams_normal_home():
+    # The 2026 Melbourne game: LA is nominally "home" for seeding purposes,
+    # but the real venue and neutral-site flag must come from this row, not
+    # from either team's usual stadium.
+    df = pl.DataFrame([_schedule_row(
+        home_team="LA", away_team="SF", location="Neutral", roof=None,
+        stadium_id="MEL00", stadium="Melbourne Cricket Ground",
+    )])
+    ctx = game_context_from_schedule(df, 2026)
+    assert ctx[("LA", 1)]["neutral_site"] is True
+    assert ctx[("SF", 1)]["neutral_site"] is True
+    assert ctx[("LA", 1)]["stadium_id"] == "MEL00"
+    assert ctx[("SF", 1)]["stadium"] == "Melbourne Cricket Ground"
+
+
+def test_game_context_ignores_other_seasons_and_game_types():
+    df = pl.DataFrame([_schedule_row(game_type="POST"), _schedule_row(season=2025)])
+    assert game_context_from_schedule(df, 2026) == {}
