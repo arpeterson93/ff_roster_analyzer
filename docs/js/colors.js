@@ -66,15 +66,27 @@ export function winProbColor(pct) {
   return colorForRatio((clamped - 0.25) / 0.5);
 }
 
+// Trailing generational suffix, not a surname - "Marvin Harrison Jr." must
+// keep "Harrison" as the surname with "Jr." tacked on after, not replaced
+// by it (caught live 2026-09-14: was showing "M. Jr." / "A. Sr.").
+const _NAME_SUFFIXES = new Set(["jr", "jr.", "sr", "sr.", "ii", "iii", "iv", "v"]);
+
 // "Christian McCaffrey" -> "C. McCaffrey" - the compact mobile form (see
-// styles.css's ".full-name"/".short-name" toggle). Deliberately naive: takes
-// the first token's initial and the LAST token as the surname, so a suffix
-// or multi-word last name ("Amon-Ra St. Brown") loses some fidelity - fine
-// for a space-constrained mobile label, not meant as a real name parser.
+// styles.css's ".full-name"/".short-name" toggle). Deliberately naive beyond
+// the suffix handling above: takes the first token's initial and the last
+// non-suffix token as the surname, so a multi-word last name ("Amon-Ra St.
+// Brown") still loses some fidelity - fine for a space-constrained mobile
+// label, not meant as a full name parser.
 export function shortName(name) {
   const parts = (name || "").trim().split(/\s+/);
   if (parts.length < 2) return name || "";
-  return `${parts[0][0]}. ${parts[parts.length - 1]}`;
+  let end = parts.length - 1;
+  let suffix = "";
+  if (parts.length > 2 && _NAME_SUFFIXES.has(parts[end].toLowerCase())) {
+    suffix = ` ${parts[end]}`;
+    end -= 1;
+  }
+  return `${parts[0][0]}. ${parts[end]}${suffix}`;
 }
 
 // Rank (1 = best, N = worst, within ONE position's own 32 teams) -> ratio.

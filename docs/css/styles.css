@@ -195,6 +195,14 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 .ros-cell { padding: 4px 3px; min-width: 40px; }
 .ros-opp { font-weight: 700; font-size: 11px; }
 .ros-rank { font-size: 10px; opacity: 0.85; }
+/* Frozen first column - stays put while the week columns scroll
+   horizontally (.table-wrap's own overflow-x). Needs an explicit
+   background since sticky positioning doesn't otherwise stop the heat
+   cells scrolling underneath from showing through. */
+.ros-name, .ros-grid th:first-child {
+  position: sticky; left: 0; z-index: 2; background: var(--card);
+  border-right: 1px solid var(--border);
+}
 .ros-name { white-space: nowrap; }
 
 /* Settings' field rows used a fixed 220px label + inline range/select/checkbox
@@ -301,7 +309,11 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 .trade-side { flex: 1; min-width: 220px; }
 .trade-verdict { font-size: 16px; font-weight: 700; margin: 10px 0; }
 
-.heat-cell { text-align: center; font-variant-numeric: tabular-nums; color: #111; border-radius: 4px; }
+.heat-cell { text-align: center; font-variant-numeric: tabular-nums; color: #111; }
+/* Rounded only on Schedule's own score cells (the win-probability-adjacent
+   ones) - Team Strength, Start/Sit's ROS opponent grid, and the Matchups
+   tab share this same class but stay square-cornered. */
+#tab-schedule .heat-cell { border-radius: 4px; }
 
 .muted { color: var(--ink-500); }
 .small { font-size: 12px; }
@@ -383,7 +395,7 @@ details[open] summary { margin-bottom: 8px; }
 .lineup-player-home { text-align: right; }
 .lineup-player-away { text-align: left; }
 .lineup-score { text-align: center; font-variant-numeric: tabular-nums; }
-.lineup-slot { text-align: center; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+.lineup-slot { display: flex; align-items: center; justify-content: center; text-align: center; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
 
 /* :not([hidden]) matters here - a bare .modal-overlay{display:flex} rule
    ties in specificity with the UA's [hidden]{display:none} and, as the
@@ -596,6 +608,11 @@ details[open] summary { margin-bottom: 8px; }
   background: var(--card); border: 1px solid var(--border); border-radius: 999px;
   box-shadow: var(--shadow); padding: 8px 10px 8px 16px; z-index: 500; max-width: 90vw;
 }
+/* This class's own "display: flex" above otherwise beats the browser's
+   default "[hidden] { display: none }" at equal specificity, so setting
+   el.hidden = true (see compare.js) would do nothing without this - the
+   tray would always render, empty, until something was selected. */
+.compare-tray[hidden] { display: none; }
 .compare-tray-label { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .compare-tray-go {
   border: none; border-radius: 999px; padding: 6px 14px; font-size: 12.5px; font-weight: 600; cursor: pointer;

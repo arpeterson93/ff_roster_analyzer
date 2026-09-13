@@ -139,6 +139,8 @@ function leagueWideTable(data, yourTeamId) {
 
   const header = `<tr><th>Team</th>${positions.map((p) => `<th>${p}</th>`).join("")}<th>Total</th></tr>`;
   const rows = data.teams
+    .slice()
+    .sort((a, b) => totalFor(b) - totalFor(a))
     .map((t) => {
       const cells = positions
         .map((pos) => {

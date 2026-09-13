@@ -1,5 +1,5 @@
 import { fmt, escapeHtml, getYourTeam, setYourTeam } from "./state.js";
-import { POSITION_COLOR, INJURY_BADGE, impliedTotalCellHtml, opponentCellHtml, ratioForRank, colorForRatio, formatKickoff, sortByPositionOrder, teamLabel, playerPhotoHtml, weeklyProjection } from "./colors.js";
+import { POSITION_COLOR, INJURY_BADGE, impliedTotalCellHtml, opponentCellHtml, ratioForRank, colorForRatio, formatKickoff, shortName, sortByPositionOrder, teamLabel, playerPhotoHtml, weeklyProjection } from "./colors.js";
 import { openPlayerModal } from "./playermodal.js";
 import { openPointsAgainstModal } from "./pointsagainstmodal.js";
 import { compareCheckboxHtml, wireCompareCheckboxes } from "./compare.js";
@@ -144,13 +144,24 @@ function scheduleGrid(roster, currentWeek, finalWeek) {
   const weeks = [];
   for (let w = currentWeek; w <= finalWeek; w++) weeks.push(w);
   const sorted = roster.slice().sort((a, b) => sortByPositionOrder(a, b, (p) => p.position) || b.ros_total - a.ros_total);
+  const colCount = weeks.length + 1;
 
   const header = `<tr><th>Player</th>${weeks.map((w) => `<th>Wk ${w}</th>`).join("")}</tr>`;
+  // A divider row per position group instead of a chip in the name cell -
+  // this grid is dense enough that a per-row chip was one more thing
+  // competing for a sliver of column width; one label above each group
+  // says the same thing once instead of on every row.
+  let lastPos = null;
   const rows = sorted
     .map((p) => {
       const byWeek = new Map((p.weekly || []).map((w) => [w.week, w]));
       const cells = weeks.map((w) => rosCellHtml(byWeek.get(w), p.position)).join("");
-      return `<tr data-player-id="${p.id}" class="clickable-row"><td class="ros-name">${posTag(p.position)} ${escapeHtml(p.name)}</td>${cells}</tr>`;
+      const divider = p.position !== lastPos ? `<tr class="week-divider"><td colspan="${colCount}">${p.position}</td></tr>` : "";
+      lastPos = p.position;
+      // Mobile shows "F. Last" (see styles.css's ".full-name"/".short-name"
+      // toggle, same pattern as Schedule's symmetric lineup).
+      const nameHtml = `<span class="full-name">${escapeHtml(p.name)}</span><span class="short-name">${escapeHtml(shortName(p.name))}</span>`;
+      return `${divider}<tr data-player-id="${p.id}" class="clickable-row"><td class="ros-name">${nameHtml}</td>${cells}</tr>`;
     })
     .join("");
   return `<table class="ros-grid">${header}<tbody>${rows}</tbody></table>`;
