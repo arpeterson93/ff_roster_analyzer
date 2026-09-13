@@ -24,7 +24,7 @@ function formatGameClock(elapsedMin) {
   return `${quarter}Q ${mins}:${String(secs).padStart(2, "0")}`;
 }
 
-function playLogDetailHtml(plays) {
+function playLogDetailHtml(plays, incompletions = []) {
   const positives = plays.filter((p) => p.points > 0).map((p) => p.points);
   const negatives = plays.filter((p) => p.points < 0).map((p) => -p.points);
   const maxPos = Math.max(1, ...positives, 0);
@@ -34,6 +34,13 @@ function playLogDetailHtml(plays) {
   // the rare exception), so most of the height should go to the common
   // case above the line, not be split evenly with it.
   const baselinePct = maxNeg > 0 ? 18 : 4;
+  // sqrt (not linear) scale: a single TD is worth 3-7x a typical catch, and
+  // on a linear scale that one play stretches the axis until every other
+  // play is a sliver a couple pixels tall. sqrt keeps big plays reading as
+  // bigger (ordering is preserved) without letting one outlier flatten
+  // everything else - exact values are still in the tooltip/top table, this
+  // only changes bar HEIGHT, not the numbers shown anywhere.
+  const scaled = (v, max) => (max > 0 ? Math.sqrt(v / max) : 0);
   const bars = plays
     .map((p) => {
       const leftPct = (p.elapsed_min / 60) * 100;
@@ -43,8 +50,8 @@ function playLogDetailHtml(plays) {
       // baselinePct%` for a bar growing UP from it, but `top: (100 -
       // baselinePct)%` for one growing DOWN from that same line.
       const heightPct = isNeg
-        ? Math.max(3, (Math.abs(p.points) / maxNeg) * baselinePct)
-        : Math.max(3, (p.points / maxPos) * (100 - baselinePct));
+        ? Math.max(3, scaled(Math.abs(p.points), maxNeg) * baselinePct)
+        : Math.max(3, scaled(p.points, maxPos) * (100 - baselinePct));
       const posStyle = isNeg ? `top:${100 - baselinePct}%; height:${heightPct}%;` : `bottom:${baselinePct}%; height:${heightPct}%;`;
       return `<div class="play-bar ${isNeg ? "play-bar-neg" : ""}" style="left:${leftPct}%; ${posStyle}" title="${formatGameClock(p.elapsed_min)} - ${escapeHtml(p.label)}: ${p.points >= 0 ? "+" : ""}${fmt(p.points, 1)} pts"></div>`;
     })
@@ -52,6 +59,13 @@ function playLogDetailHtml(plays) {
   const top = plays.slice().sort((a, b) => b.points - a.points).slice(0, 5);
   const topRows = top
     .map((p) => `<tr><td class="num">${formatGameClock(p.elapsed_min)}</td><td>${escapeHtml(p.label)}</td><td class="num">${p.points >= 0 ? "+" : ""}${fmt(p.points, 1)}</td></tr>`)
+    .join("");
+  // Incomplete targets are always 0 points (see engine/play_log.py's
+  // incomplete_targets_for_player) - never a bar, but still a real,
+  // time-stamped event worth marking, so they get a small triangle below
+  // the x-axis instead of competing for space in the scoring chart above it.
+  const incompleteMarkers = (incompletions || [])
+    .map((inc) => `<span class="play-incomplete-marker" style="left:${(inc.elapsed_min / 60) * 100}%" title="${formatGameClock(inc.elapsed_min)} - ${escapeHtml(inc.label)}"></span>`)
     .join("");
   return `
     <div class="play-chart-wrap">
@@ -67,6 +81,7 @@ function playLogDetailHtml(plays) {
       <div class="play-chart-axis">
         <span style="left:12.5%">Q1</span><span style="left:37.5%">Q2</span><span style="left:62.5%">Q3</span><span style="left:87.5%">Q4</span>
       </div>
+      ${incompleteMarkers ? `<div class="play-chart-incompletions">${incompleteMarkers}</div>` : ""}
     </div>
     <table class="play-top-table">
       <thead><tr><th>Time</th><th>Play</th><th class="num">Pts</th></tr></thead>
@@ -90,11 +105,13 @@ function gameLogTable(player, data) {
     .reverse()
     .map((w) => {
       const fpts = w.actual.points !== undefined && w.actual.points !== null ? fmt(w.actual.points, 1) : "-";
-      const plays = playsByWeek[String(w.week)];
-      const hasDetail = plays && plays.length > 0;
+      const weekDetail = playsByWeek[String(w.week)];
+      const scoringPlays = weekDetail?.plays || [];
+      const incompletions = weekDetail?.incompletions || [];
+      const hasDetail = scoringPlays.length > 0 || incompletions.length > 0;
       const mainRow = `<tr class="game-log-row ${hasDetail ? "clickable-row" : ""}" data-week="${w.week}"><td>${w.week}</td><td>${opponentCellHtml(w)}</td>${statCellsHtml(w.actual.stats, flatColumns)}<td><strong>${fpts}</strong></td></tr>`;
       const detailRow = hasDetail
-        ? `<tr class="game-log-detail" data-week-detail="${w.week}" hidden><td colspan="${colCount}">${playLogDetailHtml(plays)}</td></tr>`
+        ? `<tr class="game-log-detail" data-week-detail="${w.week}" hidden><td colspan="${colCount}">${playLogDetailHtml(scoringPlays, incompletions)}</td></tr>`
         : "";
       return mainRow + detailRow;
     })
@@ -103,11 +120,51 @@ function gameLogTable(player, data) {
   return `<div class="table-wrap"><table>${top}${bottom}<tbody>${rows}</tbody></table></div>`;
 }
 
+// Bars are positioned by percent-of-elapsed-time, so two plays seconds apart
+// really can land on the same pixels - and the chart is `hidden` (0 width)
+// until a row is expanded, so this can't run until then. Reads each bar's
+// real on-screen position/width (only known once visible), then nudges
+// overlapping ones apart by a minimum pixel gap while keeping them in time
+// order - a forward pass pushes each bar clear of the one before it, and a
+// backward pass pulls everything back inside the chart if that pushed the
+// last bar(s) past the right edge.
+function resolveBarOverlap(chartEl) {
+  const width = chartEl.clientWidth;
+  const bars = Array.from(chartEl.querySelectorAll(".play-bar"));
+  if (!width || bars.length < 2) return;
+  const GAP = 3;
+  const items = bars
+    .map((el) => ({ el, w: el.offsetWidth, center: (parseFloat(el.style.left) / 100) * width }))
+    .sort((a, b) => a.center - b.center);
+
+  for (let i = 1; i < items.length; i++) {
+    const minCenter = items[i - 1].center + items[i - 1].w / 2 + GAP + items[i].w / 2;
+    if (items[i].center < minCenter) items[i].center = minCenter;
+  }
+  const last = items[items.length - 1];
+  const maxCenter = width - last.w / 2;
+  if (last.center > maxCenter) {
+    last.center = maxCenter;
+    for (let i = items.length - 2; i >= 0; i--) {
+      const maxAllowed = items[i + 1].center - items[i + 1].w / 2 - GAP - items[i].w / 2;
+      if (items[i].center > maxAllowed) items[i].center = maxAllowed;
+    }
+  }
+  items.forEach(({ el, center }) => {
+    el.style.left = `${(center / width) * 100}%`;
+  });
+}
+
 function wireGameLogRows(scopeEl) {
   scopeEl.querySelectorAll("tr.game-log-row.clickable-row").forEach((row) => {
     row.addEventListener("click", () => {
       const detail = scopeEl.querySelector(`tr.game-log-detail[data-week-detail="${row.dataset.week}"]`);
-      if (detail) detail.hidden = !detail.hidden;
+      if (!detail) return;
+      detail.hidden = !detail.hidden;
+      if (!detail.hidden) {
+        const chart = detail.querySelector(".play-chart");
+        if (chart) resolveBarOverlap(chart);
+      }
     });
   });
 }

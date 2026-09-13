@@ -294,6 +294,17 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
    up with the quarter BOUNDARIES rather than their centers). */
 .play-chart-axis { position: relative; height: 12px; margin-top: 2px; font-size: 10px; color: var(--ink-500); }
 .play-chart-axis span { position: absolute; transform: translateX(-50%); }
+/* Incomplete targets are always 0 points (see engine/play_log.py's
+   incomplete_targets_for_player) - never a bar, since a zero-height bar
+   would be invisible anyway, but still a real, time-stamped event worth
+   marking. A small triangle below the x-axis keeps it out of the scoring
+   chart entirely while still lining up with the same time position. */
+.play-chart-incompletions { position: relative; height: 8px; margin-top: 1px; }
+.play-incomplete-marker {
+  position: absolute; top: 0; width: 0; height: 0; transform: translateX(-50%);
+  border-left: 4px solid transparent; border-right: 4px solid transparent;
+  border-bottom: 6px solid var(--amber-500);
+}
 .play-top-table { width: 100%; }
 .play-top-table td:nth-child(2) { white-space: normal; word-break: break-word; } /* play label wraps, never scrolls */
 

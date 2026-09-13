@@ -1,4 +1,4 @@
-from engine.play_log import build_game_play_index, scoring_plays_for_player
+from engine.play_log import build_game_play_index, incomplete_targets_for_player, scoring_plays_for_player
 from engine.scoring import ScoringRules
 
 _RULES = ScoringRules(
@@ -86,6 +86,25 @@ def test_elapsed_minutes_at_halftime_is_thirty():
     row = _row(rusher_player_id="RB1", rushing_yards=1, game_seconds_remaining=1800)
     plays = scoring_plays_for_player([row], "RB1", _RULES)
     assert plays[0]["elapsed_min"] == 30.0
+
+
+def test_incomplete_target_is_captured_separately_from_scoring_plays():
+    row = _row(receiver_player_id="WR1", complete_pass=False, passer_player_name="P.Mahomes")
+    assert scoring_plays_for_player([row], "WR1", _RULES) == []
+    incompletions = incomplete_targets_for_player([row], "WR1")
+    assert len(incompletions) == 1
+    assert incompletions[0]["label"] == "Incomplete target from P.Mahomes"
+    assert incompletions[0]["elapsed_min"] == 30.0
+
+
+def test_completed_reception_is_not_an_incomplete_target():
+    row = _row(receiver_player_id="WR1", complete_pass=True, receiving_yards=8)
+    assert incomplete_targets_for_player([row], "WR1") == []
+
+
+def test_incomplete_targets_ignore_plays_where_player_is_not_the_receiver():
+    row = _row(rusher_player_id="RB1", rushing_yards=5)
+    assert incomplete_targets_for_player([row], "RB1") == []
 
 
 def test_build_game_play_index_groups_by_every_relevant_id_column():

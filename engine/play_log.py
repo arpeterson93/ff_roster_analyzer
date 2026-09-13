@@ -140,6 +140,25 @@ def _play_stat_row_and_label(row: dict, gsis_id: str) -> tuple[dict, str] | None
     return None
 
 
+def incomplete_targets_for_player(plays: list[dict], gsis_id: str) -> list[dict]:
+    """[{elapsed_min, label}, ...] for every target this player was NOT
+    credited a completion on - always 0 fantasy points, so never a bar in
+    scoring_plays_for_player, but still a real, time-stamped event worth
+    marking on the same axis (a string of drops/incompletions is exactly
+    the kind of "how did they actually get their points" context the chart
+    exists for)."""
+    out = []
+    for row in plays:
+        if row.get("receiver_player_id") != gsis_id or row.get("complete_pass"):
+            continue
+        out.append({
+            "elapsed_min": _elapsed_minutes(row.get("game_seconds_remaining")),
+            "label": f"Incomplete target from {_short_name(row.get('passer_player_name'))}",
+        })
+    out.sort(key=lambda p: p["elapsed_min"])
+    return out
+
+
 def scoring_plays_for_player(plays: list[dict], gsis_id: str, rules: ScoringRules) -> list[dict]:
     """[{elapsed_min, points, label}, ...] ordered by game time, for every
     play in `plays` (this player's own subset from build_game_play_index)

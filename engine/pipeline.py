@@ -30,7 +30,7 @@ from engine.matchups import (
     points_by_team_week_pos,
     team_weeks_from_opponent,
 )
-from engine.play_log import build_game_play_index, scoring_plays_for_player
+from engine.play_log import build_game_play_index, incomplete_targets_for_player, scoring_plays_for_player
 from engine.points_against import dst_points_against_detail, points_against_detail
 from engine.scoring import ScoringRules
 from engine.standings import (
@@ -799,7 +799,12 @@ def run_league(cfg: dict) -> dict:
     # never worth failing the whole pipeline over - a fetch/schema problem
     # just means no play-level breakdown for this build, same degrade-
     # gracefully pattern as espn_future_projections/ir_return_weeks above.
-    game_log_plays_out: dict[str, dict[str, list[dict]]] = {}
+    # Each week's value is {"plays": [...scoring plays...], "incompletions":
+    # [...targets with 0 points...]} - incompletions are never scoring plays
+    # (see incomplete_targets_for_player) but are still shown, as below-axis
+    # markers rather than bars, so a string of drops/incompletions during
+    # the game is visible on the same time axis.
+    game_log_plays_out: dict[str, dict[str, dict[str, list[dict]]]] = {}
     try:
         pbp_current = nd.play_by_play(season, current_season=season)
         for w in range(1, weeks_played + 1):
@@ -815,8 +820,9 @@ def run_league(cfg: dict) -> dict:
                 if not plays_for_player:
                     continue
                 scoring_plays = scoring_plays_for_player(plays_for_player, gsis_id, player_rules)
-                if scoring_plays:
-                    game_log_plays_out.setdefault(p["id"], {})[str(w)] = scoring_plays
+                incompletions = incomplete_targets_for_player(plays_for_player, gsis_id)
+                if scoring_plays or incompletions:
+                    game_log_plays_out.setdefault(p["id"], {})[str(w)] = {"plays": scoring_plays, "incompletions": incompletions}
     except Exception:
         logger.warning("play-by-play fetch/processing failed - Game Log per-play breakdown disabled for this build", exc_info=True)
         warnings.append("Play-by-play fetch failed; per-play Game Log breakdown unavailable this build")
