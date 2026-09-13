@@ -54,6 +54,29 @@ export function colorForRatio(ratio) {
   return `rgb(${r},${g},${b})`;
 }
 
+// Win-probability coloring: pure red at/below 25%, pure green at/above 75%,
+// a continuous red->amber->green blend in between (50% lands exactly on
+// amber) - unlike colorForRatio's own 0-1 span, which only ever reaches
+// pure red/green at the extreme ends. Clamped to the 25-75% band and
+// remapped onto colorForRatio's own 0-1 scale rather than a separate color
+// table, so both stay a single continuous formula instead of two competing
+// ones drifting apart later.
+export function winProbColor(pct) {
+  const clamped = Math.max(0.25, Math.min(0.75, pct));
+  return colorForRatio((clamped - 0.25) / 0.5);
+}
+
+// "Christian McCaffrey" -> "C. McCaffrey" - the compact mobile form (see
+// styles.css's ".full-name"/".short-name" toggle). Deliberately naive: takes
+// the first token's initial and the LAST token as the surname, so a suffix
+// or multi-word last name ("Amon-Ra St. Brown") loses some fidelity - fine
+// for a space-constrained mobile label, not meant as a real name parser.
+export function shortName(name) {
+  const parts = (name || "").trim().split(/\s+/);
+  if (parts.length < 2) return name || "";
+  return `${parts[0][0]}. ${parts[parts.length - 1]}`;
+}
+
 // Rank (1 = best, N = worst, within ONE position's own 32 teams) -> ratio.
 // This is the color basis used everywhere a matchup rank is shown: it's
 // always a full, guaranteed 0-1 spread for every position, unlike a fixed

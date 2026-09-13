@@ -223,6 +223,12 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
    renderings of the same data - the 700px breakpoint below picks one. */
 .mobile-line { display: none; }
 
+/* Schedule's symmetric lineup table: ".full-name"/".short-name" are the same
+   name in two forms ("Christian McCaffrey" vs "C. McCaffrey" - see
+   colors.js's shortName) - the 700px breakpoint below picks one, same
+   pattern as .mobile-line. */
+.short-name { display: none; }
+
 .pill {
   display: inline-block;
   padding: 1px 8px;
@@ -354,12 +360,18 @@ details[open] summary { margin-bottom: 8px; }
    the geometry (a fixed-length indicator that SLIDES along the track,
    rather than a proportional two-color fill). */
 .winprob-slider { position: absolute; top: 0; bottom: 0; width: 50%; display: flex; border-radius: 4px; overflow: hidden; }
-.winprob-seg.winprob-home { background: var(--accent); }
-.winprob-seg.winprob-away { background: color-mix(in srgb, var(--ink-500) 55%, transparent); }
+/* Each .winprob-seg's background is set inline per matchup (see
+   schedule.js's winProbColor) - colored by that side's OWN win probability,
+   not a fixed home/away pair. */
 /* Dead-center (50/50) reference tick - taller than the bar itself so it
    still reads as a landmark even when the slider fully covers the track
    (which it does whenever both teams have some real chance). */
 .winprob-center-line { position: absolute; top: -2px; bottom: -2px; left: 50%; width: 1px; background: var(--ink-500); opacity: 0.6; }
+/* The score row directly above an unplayed matchup's bar otherwise carries
+   the default td border-bottom (see the site-wide "th, td" rule) right
+   where the bar begins - drop it only there (a played game's row keeps its
+   normal border; there's no bar row to clash with). */
+.schedule-row:has(+ .winprob-row) td { border-bottom: none; }
 
 /* Schedule's expanded matchup: one shared table mirrored around a single
    center "slot" column, home outside-left and away outside-right (players
@@ -441,6 +453,13 @@ details[open] summary { margin-bottom: 8px; }
   #tab-startsit #startsit-team-select { flex: 3 1 0; }
   #tab-startsit #startsit-week-select { flex: 1 1 0; min-width: 64px; }
   .mobile-line { display: block; }
+
+  /* Schedule's symmetric lineup: drop the position chip (already tight with
+     two full lineups mirrored side by side) and swap to the "F. Last" short
+     name form. */
+  .lineup-player .pos-tag { display: none; }
+  .full-name { display: none; }
+  .short-name { display: inline; }
 }
 
 @media (pointer: coarse) {

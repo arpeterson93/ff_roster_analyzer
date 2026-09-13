@@ -1,5 +1,5 @@
 import { fmt, escapeHtml, getYourTeam } from "./state.js";
-import { POSITION_COLOR, sortByPositionOrder, colorForRatio, teamLabel, weeklyProjection } from "./colors.js";
+import { POSITION_COLOR, sortByPositionOrder, colorForRatio, shortName, teamLabel, weeklyProjection, winProbColor } from "./colors.js";
 
 function posTag(pos) {
   return `<span class="pos-tag" style="background:${POSITION_COLOR[pos] || "#888"}">${pos}</span>`;
@@ -118,7 +118,12 @@ function symmetricLineupHtml(homeTeamId, awayTeamId, week, data) {
     if (!p) return "";
     const streamBadge = streamed.has(pid) ? ` <span class="pill small stream-badge" title="Free-agent bye-week fill-in, not on your roster">FA</span>` : "";
     const irBadge = p.lineup_slot === "IR" ? ` <span class="muted small">(IR)</span>` : "";
-    return `${posTag(p.position)} ${escapeHtml(p.name)}${streamBadge}${irBadge}`;
+    // Mobile drops the position chip and abbreviates to "F. Last" (see
+    // styles.css's ".lineup-player .pos-tag"/".full-name"/".short-name"
+    // rules) - this table is already tight with two full lineups mirrored
+    // side by side, and a chip + full name doesn't fit a phone width.
+    const nameHtml = `<span class="full-name">${escapeHtml(p.name)}</span><span class="short-name">${escapeHtml(shortName(p.name))}</span>`;
+    return `${posTag(p.position)} ${nameHtml}${streamBadge}${irBadge}`;
   };
   const scoreCell = (pid, lineupWeek) => {
     const p = pid && resolvePlayer(pid, data);
@@ -184,20 +189,18 @@ function matchupRow(m, data, expandedKey, yourTeamId, avg, spread) {
   // sits centered on the track's midpoint (25%-75%); the more lopsided the
   // matchup, the further it slides toward the favored side (fully flush
   // left at 100% home, fully flush right at 100% away), while staying the
-  // same length throughout. The home/away color split inside that sliding
-  // bar always lands exactly on the track's fixed 50% mark regardless of
-  // where the bar itself has slid to, so the boundary between the two
-  // colors doubles as the "dead center" reference point (also marked with
-  // its own tick, visible whenever the bar doesn't cover it - i.e.
-  // whenever either side is a sure thing).
+  // same length throughout. Each half is colored by THAT team's own win
+  // probability (winProbColor - red below 25%, green above 75%, blended
+  // between) rather than a fixed home/away color pair, so the bar itself
+  // reads as "how good are this team's real chances" at a glance.
   const winProbBar = (homePct, awayPct) =>
     homePct === null || homePct === undefined
       ? ""
       : `<div class="winprob-bar" title="${fmt(homePct * 100, 0)}% / ${fmt(awayPct * 100, 0)}%">
           <div class="winprob-center-line"></div>
           <div class="winprob-slider" style="left:${50 - 50 * homePct}%;">
-            <div class="winprob-seg winprob-home" style="width:${homePct * 100}%"></div>
-            <div class="winprob-seg winprob-away" style="width:${awayPct * 100}%"></div>
+            <div class="winprob-seg" style="width:${homePct * 100}%; background:${winProbColor(homePct)}"></div>
+            <div class="winprob-seg" style="width:${awayPct * 100}%; background:${winProbColor(awayPct)}"></div>
           </div>
         </div>`;
 
