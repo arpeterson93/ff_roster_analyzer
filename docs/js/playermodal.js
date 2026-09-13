@@ -10,40 +10,63 @@ import { groupedHeaderHtml, statCellsHtml } from "./statcolumns.js";
 // widths anywhere) so it never needs horizontal scroll on a phone screen -
 // the whole point was to see WHEN scoring happened (garbage time or not)
 // without fighting the layout to see it.
+// "23.45" elapsed minutes -> "2Q 5:33" (quarter + clock REMAINING in it,
+// matching how the game clock itself reads, not "minutes since kickoff").
+function formatGameClock(elapsedMin) {
+  const quarter = Math.min(4, Math.floor(elapsedMin / 15) + 1);
+  const remaining = Math.max(0, 15 - (elapsedMin - (quarter - 1) * 15));
+  let mins = Math.floor(remaining);
+  let secs = Math.round((remaining - mins) * 60);
+  if (secs === 60) {
+    secs = 0;
+    mins += 1;
+  }
+  return `${quarter}Q ${mins}:${String(secs).padStart(2, "0")}`;
+}
+
 function playLogDetailHtml(plays) {
   const positives = plays.filter((p) => p.points > 0).map((p) => p.points);
   const negatives = plays.filter((p) => p.points < 0).map((p) => -p.points);
   const maxPos = Math.max(1, ...positives, 0);
   const maxNeg = Math.max(1, ...negatives, 0);
-  // Baseline sits low (not centered) - real fantasy scoring plays are
-  // overwhelmingly positive (a fumble/INT is the rare exception), so most
-  // of the chart's height should go to the common case.
+  // baselinePct = % of the chart's height reserved BELOW the zero-line -
+  // real fantasy scoring plays are overwhelmingly positive (a fumble/INT is
+  // the rare exception), so most of the height should go to the common
+  // case above the line, not be split evenly with it.
   const baselinePct = maxNeg > 0 ? 18 : 4;
   const bars = plays
     .map((p) => {
       const leftPct = (p.elapsed_min / 60) * 100;
       const isNeg = p.points < 0;
+      // bottom/top are measured from OPPOSITE edges of the container, so
+      // the same "baselinePct up from the bottom" line is `bottom:
+      // baselinePct%` for a bar growing UP from it, but `top: (100 -
+      // baselinePct)%` for one growing DOWN from that same line.
       const heightPct = isNeg
         ? Math.max(3, (Math.abs(p.points) / maxNeg) * baselinePct)
         : Math.max(3, (p.points / maxPos) * (100 - baselinePct));
-      const posStyle = isNeg ? `top:${baselinePct}%; height:${heightPct}%;` : `bottom:${100 - baselinePct}%; height:${heightPct}%;`;
-      return `<div class="play-bar ${isNeg ? "play-bar-neg" : ""}" style="left:${leftPct}%; ${posStyle}" title="${fmt(p.elapsed_min, 0)}' - ${escapeHtml(p.label)}: ${p.points >= 0 ? "+" : ""}${fmt(p.points, 1)} pts"></div>`;
+      const posStyle = isNeg ? `top:${100 - baselinePct}%; height:${heightPct}%;` : `bottom:${baselinePct}%; height:${heightPct}%;`;
+      return `<div class="play-bar ${isNeg ? "play-bar-neg" : ""}" style="left:${leftPct}%; ${posStyle}" title="${formatGameClock(p.elapsed_min)} - ${escapeHtml(p.label)}: ${p.points >= 0 ? "+" : ""}${fmt(p.points, 1)} pts"></div>`;
     })
     .join("");
   const top = plays.slice().sort((a, b) => b.points - a.points).slice(0, 5);
   const topRows = top
-    .map((p) => `<tr><td class="num">${fmt(p.elapsed_min, 0)}'</td><td>${escapeHtml(p.label)}</td><td class="num">${p.points >= 0 ? "+" : ""}${fmt(p.points, 1)}</td></tr>`)
+    .map((p) => `<tr><td class="num">${formatGameClock(p.elapsed_min)}</td><td>${escapeHtml(p.label)}</td><td class="num">${p.points >= 0 ? "+" : ""}${fmt(p.points, 1)}</td></tr>`)
     .join("");
   return `
     <div class="play-chart-wrap">
       <div class="play-chart">
-        <div class="play-chart-baseline" style="bottom:${100 - baselinePct}%"></div>
+        <div class="play-chart-yaxis-label play-chart-yaxis-max">${fmt(maxPos, 1)} pts</div>
+        <div class="play-chart-yaxis-label play-chart-yaxis-zero" style="bottom:${baselinePct}%">0</div>
+        <div class="play-chart-baseline" style="bottom:${baselinePct}%"></div>
         <div class="play-chart-qline" style="left:25%"></div>
         <div class="play-chart-qline" style="left:50%"></div>
         <div class="play-chart-qline" style="left:75%"></div>
         ${bars}
       </div>
-      <div class="play-chart-axis"><span>Q1</span><span>Q2</span><span>Q3</span><span>Q4</span></div>
+      <div class="play-chart-axis">
+        <span style="left:12.5%">Q1</span><span style="left:37.5%">Q2</span><span style="left:62.5%">Q3</span><span style="left:87.5%">Q4</span>
+      </div>
     </div>
     <table class="play-top-table">
       <thead><tr><th>Time</th><th>Play</th><th class="num">Pts</th></tr></thead>

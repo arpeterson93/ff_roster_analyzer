@@ -274,13 +274,26 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
   border-radius: 4px; overflow: hidden;
 }
 .play-chart-qline { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--border); }
-.play-chart-baseline { position: absolute; left: 0; right: 0; height: 1px; background: var(--ink-500); opacity: 0.5; }
+.play-chart-baseline { position: absolute; left: 0; right: 30px; height: 1px; background: var(--ink-500); opacity: 0.5; }
 .play-bar {
   position: absolute; width: 2.2%; min-width: 3px; max-width: 10px;
   transform: translateX(-50%); background: var(--accent); border-radius: 2px 2px 0 0;
 }
 .play-bar-neg { background: var(--red-600); border-radius: 0 0 2px 2px; }
-.play-chart-axis { display: flex; justify-content: space-between; margin-top: 2px; font-size: 10px; color: var(--ink-500); }
+/* Y-axis scale reference - just the two endpoints (0 at the baseline, the
+   game's own highest-scoring play at the top of the positive region)
+   rather than a full tick axis; every bar's height is proportional
+   between them, which is enough to read "how big was this one" without a
+   dense ruler competing with the bars for space. */
+.play-chart-yaxis-label { position: absolute; right: 2px; font-size: 9px; color: var(--ink-500); line-height: 1; white-space: nowrap; }
+.play-chart-yaxis-max { top: 2px; }
+.play-chart-yaxis-zero { transform: translateY(50%); }
+/* Quarter labels centered under the MIDDLE of their own 25%-wide segment
+   (12.5/37.5/62.5/87.5%), not flex-space-between's edge-aligned spacing
+   (which put "Q1" at the very left edge and "Q4" at the very right, lined
+   up with the quarter BOUNDARIES rather than their centers). */
+.play-chart-axis { position: relative; height: 12px; margin-top: 2px; font-size: 10px; color: var(--ink-500); }
+.play-chart-axis span { position: absolute; transform: translateX(-50%); }
 .play-top-table { width: 100%; }
 .play-top-table td:nth-child(2) { white-space: normal; word-break: break-word; } /* play label wraps, never scrolls */
 
