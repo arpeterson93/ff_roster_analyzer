@@ -195,6 +195,66 @@ pytest -q
 Run with `PYTHONIOENCODING=utf-8` on Windows if player names with accented
 characters fail to print.
 
+## FAAB model data refresh (occasional, manual - not in any workflow)
+
+The FAAB bid estimator (`engine/faab_estimate.py`, the "FAAB Bid" player-modal
+tab and the Waiver Bid Backtest artifact) trains on a pooled multi-league
+dataset that lives outside git entirely - see "FAAB training data storage"
+below. Nothing about refreshing or retraining it is scheduled or automatic:
+the daily `build` workflow only *reuses* whatever's currently published,
+never rebuilds it. Pulling ~30 leagues' worth of ESPN history is slow, has
+real WAF/soft-block risk (see `ingest/espn_injuries.py`'s comments), and
+retraining changes what the model actually believes - all good reasons for
+this to stay a deliberate action you run by hand, not a cron job.
+
+**To expand the pooled dataset with more leagues:**
+
+1. `python -m tools.faab_history.discover_public_leagues --start <id> --end <id>`
+   - scans an ESPN league-id range for leagues that are public *right now*
+   and currently running real FAAB bidding.
+2. `python -m tools.faab_history.vet_candidates` - filters those candidates
+   against The O League's own settings (team count, PPR format, not IDP,
+   looks like a normal points league). Any newly-encountered scoring
+   category needs a human judgment call in `scoring_ledger.json` (repo
+   root) before a league can pass this step - see `league_profile.py`'s
+   `load_scoring_ledger`/`check_scoring_ledger`.
+3. `python -m tools.faab_history.check_candidate_history` - checks which of
+   each vetted candidate's *past* seasons are actually readable without
+   ESPN login (being public today doesn't mean history is - The O League
+   itself needs credentials for 2019-2025 despite 2026 being open).
+4. `python -m tools.faab_history.pull_public_league_bids` and
+   `python -m tools.faab_history.pull_public_league_rosters` - pull the
+   accessible (league, year) pairs from step 3. Both default to every
+   league found accessible; pass `--league-id <id>` to pull just one.
+5. `python -m tools.faab_history.build_training_table` - joins The O
+   League's own bids plus everything pulled above against nflverse data and
+   each source league's own scoring rules, writing both
+   `o-league-training-table.json` (O League only - what `evaluate_model.py`
+   backtests against) and `combined-training-table.json` (pooled - what the
+   live model at `engine.faab_estimate.POOLED_TRAINING_TABLE_PATH` actually
+   trains on).
+6. Sanity-check before publishing - `python -m tools.faab_history.evaluate_model`
+   (backtest) and a look at the Waiver Bid Backtest artifact are the two
+   established ways to confirm a change didn't quietly make things worse
+   (see the "does pooling help" section on that artifact for the shape of
+   this check).
+7. `python -m tools.faab_history.publish_release_data combined-training-table.json`
+   (and any of the three raw files that changed) - uploads to the
+   `faab-data` release and updates the pinned checksum in
+   `fetch_release_data.py` in the same step. Commit that updated file.
+
+**FAAB training data storage:** `combined-training-table.json` (~436MB,
+over GitHub's 100MB per-file push limit) and the three raw pulled-data files
+it's built from aren't committed to git - they're assets on this repo's
+`faab-data` GitHub Release instead (a release's file attachments live
+outside git's own object store entirely, so they're exempt from both the
+100MB limit and git's repo-size concerns; unlike Git LFS, a public repo's
+release-asset bandwidth isn't metered the way LFS's stingy free tier is,
+which matters given the daily cron re-downloads it). `.github/workflows/build.yml`
+runs `python -m tools.faab_history.fetch_release_data` before the pipeline
+to pull the one file it needs; `--all` also fetches the three raw inputs,
+only needed to rebuild the training table from scratch per the steps above.
+
 ## Deployment (manual steps, one-time)
 
 1. Repo Settings → Pages → Source: **GitHub Actions**.

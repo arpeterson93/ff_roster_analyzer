@@ -44,6 +44,9 @@ jobs:
 
       - run: pytest -q
 
+      - name: Fetch FAAB training data
+        run: python -m tools.faab_history.fetch_release_data
+
       - name: Run pipeline
         env:
           PYTHONIOENCODING: utf-8
