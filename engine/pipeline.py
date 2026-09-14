@@ -142,6 +142,23 @@ def _positional_ranks_from_overall(players: list[dict]) -> None:
             p["ros_pos_rank"] = i
 
 
+def _faab_week_override(current_week: int, week_started: int | None) -> int:
+    """FAAB gets its OWN week number, one ahead of ESPN's real current_week -
+    but ONLY once current_week's own games have actually started (per the
+    schedule's earliest-game-day per week - see ingest/nfl_data.py's
+    week_for_date - not ESPN's scoringPeriodId, which doesn't flip until the
+    whole week is over). Deliberately NOT current_week + 1 unconditionally:
+    once ESPN's own current_week catches up to what this already bumped to,
+    it correctly stops advancing further until THAT week's games start in
+    turn. State machine: current_week=1 mid-week -> returns 2; ESPN then
+    flips to 2 before week 2's games start -> still returns 2 (week_started
+    is still 1, not yet equal to current_week); week 2's games start ->
+    returns 3. Deliberately scoped to the FAAB estimate call only -
+    current_week itself, and everything derived from it (Rankings, Start/
+    Sit's default week, projections), stays on ESPN's real value untouched."""
+    return current_week + 1 if week_started == current_week else current_week
+
+
 def _compute_faab_estimates(
     cfg: dict, client: EspnClient, players_out: list[dict], season: int, current_week: int,
     team_rosters: dict[int, list[str]], fa_values_out: dict[str, dict[str, float]],
@@ -152,6 +169,14 @@ def _compute_faab_estimates(
     tools/faab_history/ for how the historical training data was built.
     Opt-in per league via faab_model.enabled in config/leagues/<slug>.yml -
     the historical dataset only exists for The O League.
+
+    current_week here is NOT necessarily ESPN's real current_week - the
+    caller passes _faab_week_override's result, which runs one week ahead
+    once the real current week's own games have started (see that
+    function). That's intentional: it lets this treat the in-progress
+    week's own partial stats as "prior week" data, giving an early,
+    progressively-filling-in read on the upcoming waiver picture instead of
+    waiting for ESPN's own scoringPeriodId to flip once the week is fully over.
 
     Also attaches team_interest (see below) per candidate - team_rosters
     (team_id -> that team's own player ids, already built earlier in
@@ -1281,8 +1306,10 @@ def run_league(cfg: dict) -> dict:
         "settings_overrides_applied": settings_overrides,
     }
 
+    faab_week_started = nd.week_for_date(datetime.now(timezone.utc).date(), schedules_current, season)
+    faab_current_week = _faab_week_override(current_week, faab_week_started)
     try:
-        faab_estimates_out = _compute_faab_estimates(cfg, client, players_out, season, current_week, team_rosters, fa_values_out)
+        faab_estimates_out = _compute_faab_estimates(cfg, client, players_out, season, faab_current_week, team_rosters, fa_values_out)
     except Exception as exc:
         logger.warning("faab_model: estimate computation failed, writing empty faab_estimates.json: %s", exc)
         faab_estimates_out = {}

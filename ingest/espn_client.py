@@ -1,6 +1,7 @@
 """ESPN adapter implementing ingest.base.LeagueClient over espn_api."""
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
 import os
@@ -20,6 +21,17 @@ logger = logging.getLogger(__name__)
 # WAF sits in front of espn.com, which a 2026-09-10 live run showed can
 # soft-block a request (HTTP 202, empty body) after enough of a burst.
 _REQUEST_PACING_SEC = 0.4
+
+# get_live_week_player_status's box_scores() call goes through espn_api's own
+# requests.get() (see espn_api/requests/espn_requests.py), which passes no
+# timeout at all - a WAF soft-block here (the same real risk documented in
+# ingest/espn_scoreboard.py, hit live on this exact endpoint family) can hang
+# the whole pipeline indefinitely instead of failing fast. Bounded via a
+# throwaway thread since we can't pass a timeout into the library call
+# itself. One attempt only, not a retry loop like espn_scoreboard.py's - that
+# pattern fits a fast-failing 403, not a hang; retrying a hang just
+# compounds the wait for the same likely outcome.
+_LIVE_STATUS_TIMEOUT_SEC = 15
 
 _NON_STARTING_SLOTS = {"BE", "IR", "", "IR", "Rookie"}
 
@@ -231,9 +243,30 @@ class EspnClient:
         kickoff heuristic (BoxPlayer.game_played == 100) - lets a live
         matchup win-probability read collapse a finished player's remaining
         uncertainty to 0 without needing minute-by-minute polling; an
-        in-progress or not-yet-started player keeps their full projected SD."""
+        in-progress or not-yet-started player keeps their full projected SD.
+
+        Empty dict on any failure, including a timeout (see
+        _LIVE_STATUS_TIMEOUT_SEC above) - the caller (engine/pipeline.py)
+        already treats that identically to fetch_remaining_game_fraction's
+        own empty-dict failure case: every player falls back to their full
+        pregame projection for this build, the existing safe default,
+        rather than the whole pipeline run stalling on a WAF hang."""
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            boxes = executor.submit(self._league.box_scores, week=week).result(timeout=_LIVE_STATUS_TIMEOUT_SEC)
+        except Exception as exc:  # noqa: BLE001 - covers concurrent.futures.TimeoutError too
+            logger.warning("get_live_week_player_status: failed (%s) - live in-game blending disabled for this build", exc)
+            return {}
+        finally:
+            # wait=False: if this timed out, the submitted call is still
+            # running in that thread (Python can't force-kill it) - don't
+            # block pipeline shutdown waiting for a hang that may never
+            # resolve. The orphaned thread dies on its own once the
+            # underlying request eventually returns, errors, or the process exits.
+            executor.shutdown(wait=False)
+
         result: dict[int, tuple[float, bool]] = {}
-        for box in self._league.box_scores(week=week):
+        for box in boxes:
             for lineup in (box.home_lineup, box.away_lineup):
                 for bp in lineup:
                     result[bp.playerId] = (float(bp.points or 0.0), bp.game_played == 100)
