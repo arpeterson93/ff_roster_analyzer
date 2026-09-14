@@ -34,7 +34,7 @@ function formatGameClock(elapsedMin) {
   return `${quarter}Q ${mins}:${String(secs).padStart(2, "0")}`;
 }
 
-function playLogDetailHtml(plays, incompletions = []) {
+function playLogDetailHtml(plays, incompletions = [], gameDurationMin = 60) {
   const positives = plays.filter((p) => p.points > 0).map((p) => p.points);
   const negatives = plays.filter((p) => p.points < 0).map((p) => -p.points);
   const maxPos = Math.max(1, ...positives, 0);
@@ -51,15 +51,19 @@ function playLogDetailHtml(plays, incompletions = []) {
   // everything else - exact values are still in the tooltip/top table, this
   // only changes bar HEIGHT, not the numbers shown anywhere.
   const scaled = (v, max) => (max > 0 ? Math.sqrt(v / max) : 0);
-  // The axis is 60 minutes (4 real 15-min quarters) unless a play actually
-  // happened past that - a game that went to OT gets one more segment
-  // appended, sized by how far the real plays/incompletions reached (see
-  // engine/play_log.py's _elapsed_minutes - OT elapsed time is stacked
-  // past regulation rather than clamped to it), not a fixed guess at OT's
-  // length (10 min regular season, 15 in the playoffs).
+  // The axis is 60 minutes (4 real 15-min quarters) unless the game went to
+  // OT - then it extends to gameDurationMin (see engine/pipeline.py's
+  // game_durations_by_game_id), the REAL end of the game across every play,
+  // not just this player's own. A player's own last touch can land well
+  // before the game actually ended (someone else wins it on a late OT
+  // field goal without this player getting the ball back again) - sizing
+  // the axis off only their own plays would draw the OT segment far
+  // narrower than the overtime that actually happened. Still guarded by
+  // the plays'/incompletions' own elapsed times in case gameDurationMin
+  // is missing (older cached data) or, in theory, undershoots.
   const REGULATION_MIN = 60;
   const allElapsed = [...plays, ...incompletions].map((p) => p.elapsed_min);
-  const totalMinutes = Math.max(REGULATION_MIN, ...allElapsed);
+  const totalMinutes = Math.max(REGULATION_MIN, gameDurationMin || 0, ...allElapsed);
   const hasOt = totalMinutes > REGULATION_MIN;
   const bars = plays
     .map((p) => {
@@ -154,7 +158,7 @@ function gameLogTable(player, data) {
       const hasDetail = scoringPlays.length > 0 || incompletions.length > 0;
       const mainRow = `<tr class="game-log-row ${hasDetail ? "clickable-row" : ""}" data-week="${w.week}"><td>${w.week}</td><td>${opponentCellHtml(w)}</td>${statCellsHtml(w.actual.stats, flatColumns)}<td><strong>${fpts}</strong></td></tr>`;
       const detailRow = hasDetail
-        ? `<tr class="game-log-detail" data-week-detail="${w.week}" hidden><td colspan="${colCount}">${playLogDetailHtml(scoringPlays, incompletions)}</td></tr>`
+        ? `<tr class="game-log-detail" data-week-detail="${w.week}" hidden><td colspan="${colCount}">${playLogDetailHtml(scoringPlays, incompletions, weekDetail?.game_duration_min)}</td></tr>`
         : "";
       return mainRow + detailRow;
     })

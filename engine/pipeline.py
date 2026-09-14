@@ -30,7 +30,7 @@ from engine.matchups import (
     points_by_team_week_pos,
     team_weeks_from_opponent,
 )
-from engine.play_log import build_game_play_index, incomplete_targets_for_player, scoring_plays_for_player
+from engine.play_log import build_game_play_index, game_durations_by_game_id, incomplete_targets_for_player, scoring_plays_for_player
 from engine.points_against import dst_points_against_detail, points_against_detail
 from engine.scoring import ScoringRules
 from engine.standings import (
@@ -812,6 +812,7 @@ def run_league(cfg: dict) -> dict:
             if not week_rows:
                 continue
             play_index = build_game_play_index(week_rows)
+            game_durations = game_durations_by_game_id(week_rows)
             for p in players_out:
                 if p["position"] not in offense_positions:
                     continue
@@ -822,7 +823,11 @@ def run_league(cfg: dict) -> dict:
                 scoring_plays = scoring_plays_for_player(plays_for_player, gsis_id, player_rules)
                 incompletions = incomplete_targets_for_player(plays_for_player, gsis_id)
                 if scoring_plays or incompletions:
-                    game_log_plays_out.setdefault(p["id"], {})[str(w)] = {"plays": scoring_plays, "incompletions": incompletions}
+                    game_id = plays_for_player[0].get("game_id")
+                    duration = game_durations.get(game_id, 60.0)
+                    game_log_plays_out.setdefault(p["id"], {})[str(w)] = {
+                        "plays": scoring_plays, "incompletions": incompletions, "game_duration_min": round(duration, 2),
+                    }
     except Exception:
         logger.warning("play-by-play fetch/processing failed - Game Log per-play breakdown disabled for this build", exc_info=True)
         warnings.append("Play-by-play fetch failed; per-play Game Log breakdown unavailable this build")

@@ -78,6 +78,25 @@ def _fg_bucket(distance: float) -> str:
     return "fg_made_60_"
 
 
+def game_durations_by_game_id(week_pbp_rows: list[dict]) -> dict[str, float]:
+    """{game_id: minutes} - the real length of each game this week,
+    including any overtime, computed across EVERY play in the game (not
+    just one player's own plays). A player's own last touch can land well
+    before the game actually ended (e.g. the other team wins it on a late
+    OT field goal without this player getting the ball back) - sizing the
+    chart's x-axis off only their own plays would size the OT segment to
+    wherever their involvement happened to stop, not the game's real end."""
+    durations: dict[str, float] = {}
+    for row in week_pbp_rows:
+        game_id = row.get("game_id")
+        if not game_id:
+            continue
+        elapsed = _elapsed_minutes(row)
+        if elapsed > durations.get(game_id, 0.0):
+            durations[game_id] = elapsed
+    return durations
+
+
 def build_game_play_index(week_pbp_rows: list[dict]) -> dict[str, list[dict]]:
     """{gsis_id: [raw pbp row, ...]} - every play a player passed, rushed,
     received, or kicked on, for one week's worth of plays across every

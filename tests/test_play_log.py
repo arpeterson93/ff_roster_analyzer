@@ -1,4 +1,4 @@
-from engine.play_log import build_game_play_index, incomplete_targets_for_player, scoring_plays_for_player
+from engine.play_log import build_game_play_index, game_durations_by_game_id, incomplete_targets_for_player, scoring_plays_for_player
 from engine.scoring import ScoringRules
 
 _RULES = ScoringRules(
@@ -52,6 +52,32 @@ def test_postseason_ot_uses_a_15_minute_period():
     plays = scoring_plays_for_player([row], "RB1", _RULES)
     # 150 seconds into a 15-minute (900s) postseason OT period.
     assert plays[0]["elapsed_min"] == round(60 + 150 / 60, 2)
+
+
+def test_game_durations_by_game_id_uses_the_latest_play_in_the_whole_game():
+    # The player's own last touch is early in OT, but the OTHER team wins
+    # it on a field goal much later in the same OT period without this
+    # player getting the ball back - the game's real duration has to come
+    # from every play in the game, not just the ones a specific player was
+    # involved in.
+    rows = [
+        _row(rusher_player_id="RB1", rushing_yards=5, game_id="2026_01_AAA_BBB",
+             qtr=5, season_type="REG", quarter_seconds_remaining=540, game_seconds_remaining=540),  # 1 min into OT
+        _row(kicker_player_id="K2", field_goal_attempt=True, field_goal_result="made", kick_distance=40,
+             game_id="2026_01_AAA_BBB", qtr=5, season_type="REG", quarter_seconds_remaining=60, game_seconds_remaining=60),  # 9 min into OT
+    ]
+    durations = game_durations_by_game_id(rows)
+    assert durations["2026_01_AAA_BBB"] == 69.0
+
+
+def test_game_durations_by_game_id_tracks_multiple_games_independently():
+    rows = [
+        _row(rusher_player_id="RB1", rushing_yards=5, game_id="G1", game_seconds_remaining=1800),
+        _row(rusher_player_id="RB2", rushing_yards=5, game_id="G2", game_seconds_remaining=100),
+    ]
+    durations = game_durations_by_game_id(rows)
+    assert durations["G1"] == 30.0
+    assert durations["G2"] > durations["G1"]
 
 
 def test_second_ot_period_stacks_after_the_first():
