@@ -46,6 +46,19 @@ _FG_BUCKET_BY_DISTANCE = [
     (50, "fg_made_40_49"), (60, "fg_made_50_59"),
 ]
 
+# A play that started at the opponent's 5-yard line or closer - a high-value
+# opportunity (goal-to-go) regardless of whether it actually scored, so it's
+# tracked independently of points/label. nflverse's yardline_100 is the
+# offense's distance to the opponent's end zone at the START of the play
+# (lower = closer to scoring), not to be confused with the yard line the
+# play RESULTS in.
+_SHORT_FIELD_YARDLINE = 5
+
+
+def _short_field_yardline(row: dict) -> float | None:
+    yardline = row.get("yardline_100")
+    return yardline if yardline is not None and yardline <= _SHORT_FIELD_YARDLINE else None
+
 
 def _elapsed_minutes(row: dict) -> float:
     """Minutes since kickoff for this play - extended past the 60-minute
@@ -111,13 +124,14 @@ def build_game_play_index(week_pbp_rows: list[dict]) -> dict[str, list[dict]]:
     return index
 
 
-def _play_stat_row_and_label(row: dict, gsis_id: str) -> tuple[dict, str, bool] | None:
+def _play_stat_row_and_label(row: dict, gsis_id: str) -> tuple[dict, str, bool, str] | None:
     """(incremental stat row for ScoringRules.points_for_row, short clean
-    label, is_td) for the ONE role this player had on this specific play -
-    a play only ever earns them points for whichever role (passer/rusher/
-    receiver/kicker) their id matches, never more than one on the same
-    play. is_td powers the chart's gold TD-bar highlight, kept as an
-    explicit flag rather than re-parsed from the label."""
+    label, is_td, role) for the ONE role this player had on this specific
+    play - a play only ever earns them points for whichever role (passer/
+    rusher/receiver/kicker) their id matches, never more than one on the
+    same play. is_td powers the chart's gold TD-bar highlight; role
+    ("pass"/"rush"/"reception"/"kick") powers its by-role fill color, kept
+    as explicit flags rather than re-parsed from the label."""
     two_pt = row.get("two_point_conv_result") == "success"
 
     if row.get("passer_player_id") == gsis_id:
@@ -134,7 +148,7 @@ def _play_stat_row_and_label(row: dict, gsis_id: str) -> tuple[dict, str, bool] 
             label = "Interception thrown"
         else:
             label = f"{yards:.0f} yd pass to {_short_name(row.get('receiver_player_name'))}" + (" (TD)" if is_td else "")
-        return stat_row, label, is_td
+        return stat_row, label, is_td, "pass"
 
     if row.get("rusher_player_id") == gsis_id:
         yards = row.get("rushing_yards") or 0
@@ -150,7 +164,7 @@ def _play_stat_row_and_label(row: dict, gsis_id: str) -> tuple[dict, str, bool] 
             label = "2pt conversion rush"
         else:
             label = f"{yards:.0f} yd rush" + (" (TD)" if is_td else "")
-        return stat_row, label, is_td
+        return stat_row, label, is_td, "rush"
 
     if row.get("receiver_player_id") == gsis_id:
         is_catch = bool(row.get("complete_pass"))
@@ -170,56 +184,99 @@ def _play_stat_row_and_label(row: dict, gsis_id: str) -> tuple[dict, str, bool] 
             label = "2pt conversion catch"
         else:
             label = f"{yards:.0f} yd catch from {_short_name(row.get('passer_player_name'))}" + (" (TD)" if is_td else "")
-        return stat_row, label, is_td
+        return stat_row, label, is_td, "reception"
 
     if row.get("kicker_player_id") == gsis_id:
         if row.get("field_goal_attempt") and row.get("field_goal_result") == "made":
             dist = row.get("kick_distance") or 0
-            return {_fg_bucket(dist): 1}, f"{dist:.0f} yd field goal", False
+            return {_fg_bucket(dist): 1}, f"{dist:.0f} yd field goal", False, "kick"
         if row.get("extra_point_attempt") and row.get("extra_point_result") == "good":
-            return {"pat_made": 1}, "Extra point", False
+            return {"pat_made": 1}, "Extra point", False, "kick"
     return None
 
 
 def incomplete_targets_for_player(plays: list[dict], gsis_id: str) -> list[dict]:
-    """[{elapsed_min, label}, ...] for every target this player was NOT
-    credited a completion on - always 0 fantasy points, so never a bar in
-    scoring_plays_for_player, but still a real, time-stamped event worth
-    marking on the same axis (a string of drops/incompletions is exactly
-    the kind of "how did they actually get their points" context the chart
-    exists for)."""
+    """[{elapsed_min, label, short_field, yardline}, ...] for every target
+    this player was NOT credited a completion on - always 0 fantasy
+    points, so never a bar in scoring_plays_for_player, but still a real,
+    time-stamped event worth marking on the same axis (a string of drops/
+    incompletions is exactly the kind of "how did they actually get their
+    points" context the chart exists for)."""
     out = []
     for row in plays:
         if row.get("receiver_player_id") != gsis_id or row.get("complete_pass"):
             continue
+        yardline = _short_field_yardline(row)
         out.append({
             "elapsed_min": _elapsed_minutes(row),
             "label": f"Incomplete target from {_short_name(row.get('passer_player_name'))}",
+            "short_field": yardline is not None,
+            "yardline": yardline,
+        })
+    out.sort(key=lambda p: p["elapsed_min"])
+    return out
+
+
+def zero_point_plays_for_player(plays: list[dict], gsis_id: str, rules: ScoringRules) -> list[dict]:
+    """[{elapsed_min, label, role, short_field, yardline}, ...] for every
+    REAL carry or catch (never an incomplete target - see
+    incomplete_targets_for_player - and never a passer's own incomplete/
+    0-yard dropback, which would be noise: nearly every incompletion nets
+    the passer 0 points too) that contributed exactly 0 fantasy points -
+    e.g. stuffed for no gain at the goal line. Dropped from
+    scoring_plays_for_player as a non-event there, but still real usage
+    worth seeing (a bar would be indistinguishable from a genuinely tiny
+    nonzero play at this chart's scale, so the frontend marks these
+    differently instead of drawing a bar)."""
+    out = []
+    for row in plays:
+        result = _play_stat_row_and_label(row, gsis_id)
+        if result is None:
+            continue
+        stat_row, label, _is_td, role = result
+        if role not in ("rush", "reception"):
+            continue
+        if role == "reception" and not stat_row.get("receptions"):
+            continue  # incomplete target - handled separately
+        if rules.points_for_row(stat_row) != 0:
+            continue
+        yardline = _short_field_yardline(row)
+        out.append({
+            "elapsed_min": _elapsed_minutes(row),
+            "label": label,
+            "role": role,
+            "short_field": yardline is not None,
+            "yardline": yardline,
         })
     out.sort(key=lambda p: p["elapsed_min"])
     return out
 
 
 def scoring_plays_for_player(plays: list[dict], gsis_id: str, rules: ScoringRules) -> list[dict]:
-    """[{elapsed_min, points, label, is_td}, ...] ordered by game time, for
-    every play in `plays` (this player's own subset from
-    build_game_play_index) where they earned a nonzero fantasy-point
-    contribution - a routine incomplete target/non-scoring carry
-    contributes 0 and is dropped, not shown as a zero-height bar."""
+    """[{elapsed_min, points, label, is_td, role, short_field, yardline}, ...]
+    ordered by game time, for every play in `plays` (this player's own
+    subset from build_game_play_index) where they earned a nonzero
+    fantasy-point contribution - a routine incomplete target/non-scoring
+    carry contributes 0 and is dropped (see zero_point_plays_for_player),
+    not shown as a zero-height bar."""
     out = []
     for row in plays:
         result = _play_stat_row_and_label(row, gsis_id)
         if result is None:
             continue
-        stat_row, label, is_td = result
+        stat_row, label, is_td, role = result
         points = rules.points_for_row(stat_row)
         if points == 0:
             continue
+        yardline = _short_field_yardline(row)
         out.append({
             "elapsed_min": _elapsed_minutes(row),
             "points": round(points, 2),
             "label": label,
             "is_td": is_td,
+            "role": role,
+            "short_field": yardline is not None,
+            "yardline": yardline,
         })
     out.sort(key=lambda p: p["elapsed_min"])
     return out

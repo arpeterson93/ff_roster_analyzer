@@ -1,4 +1,7 @@
-from engine.play_log import build_game_play_index, game_durations_by_game_id, incomplete_targets_for_player, scoring_plays_for_player
+from engine.play_log import (
+    build_game_play_index, game_durations_by_game_id, incomplete_targets_for_player,
+    scoring_plays_for_player, zero_point_plays_for_player,
+)
 from engine.scoring import ScoringRules
 
 _RULES = ScoringRules(
@@ -162,6 +165,66 @@ def test_completed_reception_is_not_an_incomplete_target():
 def test_incomplete_targets_ignore_plays_where_player_is_not_the_receiver():
     row = _row(rusher_player_id="RB1", rushing_yards=5)
     assert incomplete_targets_for_player([row], "RB1") == []
+
+
+def test_scoring_plays_are_tagged_with_their_role():
+    rows = [
+        _row(passer_player_id="QB1", passing_yards=20, receiver_player_name="X"),
+        _row(rusher_player_id="RB1", rushing_yards=5),
+        _row(receiver_player_id="WR1", complete_pass=True, receiving_yards=5),
+    ]
+    assert scoring_plays_for_player([rows[0]], "QB1", _RULES)[0]["role"] == "pass"
+    assert scoring_plays_for_player([rows[1]], "RB1", _RULES)[0]["role"] == "rush"
+    assert scoring_plays_for_player([rows[2]], "WR1", _RULES)[0]["role"] == "reception"
+
+
+def test_play_starting_inside_the_5_is_flagged_short_field():
+    row = _row(rusher_player_id="RB1", rushing_yards=3, rush_touchdown=True, yardline_100=3)
+    plays = scoring_plays_for_player([row], "RB1", _RULES)
+    assert plays[0]["short_field"] is True
+    assert plays[0]["yardline"] == 3
+
+
+def test_play_starting_outside_the_5_is_not_short_field():
+    row = _row(rusher_player_id="RB1", rushing_yards=3, yardline_100=12)
+    plays = scoring_plays_for_player([row], "RB1", _RULES)
+    assert plays[0]["short_field"] is False
+    assert plays[0]["yardline"] is None
+
+
+def test_stuffed_carry_for_no_gain_is_a_zero_point_play_not_dropped():
+    row = _row(rusher_player_id="RB1", rushing_yards=0, yardline_100=2)
+    assert scoring_plays_for_player([row], "RB1", _RULES) == []
+    zeros = zero_point_plays_for_player([row], "RB1", _RULES)
+    assert len(zeros) == 1
+    assert zeros[0]["role"] == "rush"
+    assert zeros[0]["short_field"] is True
+    assert zeros[0]["yardline"] == 2
+
+
+def test_zero_yard_catch_in_non_ppr_is_a_zero_point_play():
+    non_ppr = ScoringRules(
+        items=[{"id": 3, "abbr": "REY", "points": 0.1}, {"id": 4, "abbr": "RETD", "points": 6}],
+        is_dst=False,
+    )
+    row = _row(receiver_player_id="WR1", complete_pass=True, receiving_yards=0)
+    assert scoring_plays_for_player([row], "WR1", non_ppr) == []
+    zeros = zero_point_plays_for_player([row], "WR1", non_ppr)
+    assert len(zeros) == 1
+    assert zeros[0]["role"] == "reception"
+
+
+def test_zero_point_plays_exclude_incomplete_targets():
+    row = _row(receiver_player_id="WR1", complete_pass=False, passer_player_name="P.Mahomes")
+    assert zero_point_plays_for_player([row], "WR1", _RULES) == []
+
+
+def test_zero_point_plays_exclude_qbs_own_incompletions():
+    # A QB's own incomplete pass thrown nets them 0 points too, but the
+    # user explicitly doesn't want every incompletion cluttering a QB's
+    # row with zero-point markers - only real carries/catches qualify.
+    row = _row(passer_player_id="QB1", receiver_player_id="WR1", complete_pass=False, passing_yards=0)
+    assert zero_point_plays_for_player([row], "QB1", _RULES) == []
 
 
 def test_build_game_play_index_groups_by_every_relevant_id_column():

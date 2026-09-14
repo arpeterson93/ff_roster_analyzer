@@ -1,5 +1,5 @@
 import { fmt, escapeHtml, getYourTeam } from "./state.js";
-import { POSITION_COLOR, impliedTotalCellHtml, opponentCellHtml, teamLabel, playerPhotoHtml, weeklyProjection } from "./colors.js";
+import { POSITION_COLOR, opponentCellHtml, teamLabel, playerPhotoHtml, weeklyProjection } from "./colors.js";
 import { openModal } from "./modal.js";
 import { groupedHeaderHtml, statCellsHtml } from "./statcolumns.js";
 
@@ -11,16 +11,20 @@ import { groupedHeaderHtml, statCellsHtml } from "./statcolumns.js";
 // the whole point was to see WHEN scoring happened (garbage time or not)
 // without fighting the layout to see it.
 // "23.45" elapsed minutes -> "2Q 5:33" (quarter + clock REMAINING in it,
-// matching how the game clock itself reads, not "minutes since kickoff").
-// Past 60 minutes (OT - see engine/play_log.py's _elapsed_minutes), there's
-// no fixed period length to count down from on the frontend (10 min in the
-// regular season, 15 in the playoffs) - so OT shows elapsed time INTO the
-// period instead, "OT 3:15" rather than a remaining-time countdown.
-function formatGameClock(elapsedMin) {
+// matching how the game clock itself reads, not "minutes since kickoff") -
+// remaining time counts DOWN, so it decreases left-to-right on the chart
+// same as elapsed time increases left-to-right. OT has no fixed period
+// length to count down from on the frontend (10 min in the regular season,
+// 15 in the playoffs) - so it counts down to `otEndMin` instead (the same
+// real end-of-game/OT value the chart's own OT axis segment is sized to,
+// see playLogDetailHtml's totalMinutes), keeping the same left-to-right
+// "less time remaining" direction as every quarter instead of inverting it
+// into a count-UP.
+function formatGameClock(elapsedMin, otEndMin = 70) {
   if (elapsedMin > 60) {
-    const otElapsed = elapsedMin - 60;
-    const mins = Math.floor(otElapsed);
-    const secs = Math.round((otElapsed - mins) * 60);
+    const remaining = Math.max(0, otEndMin - elapsedMin);
+    const mins = Math.floor(remaining);
+    const secs = Math.round((remaining - mins) * 60);
     return `OT ${mins}:${String(secs).padStart(2, "0")}`;
   }
   const quarter = Math.min(4, Math.floor(elapsedMin / 15) + 1);
@@ -34,7 +38,48 @@ function formatGameClock(elapsedMin) {
   return `${quarter}Q ${mins}:${String(secs).padStart(2, "0")}`;
 }
 
-function playLogDetailHtml(plays, incompletions = [], gameDurationMin = 60) {
+// Bars are colored by ROLE (which stat category the play came from), not
+// the player's own roster position - a WR on an end-around still shows as
+// a rushing-colored bar, a RB catching a swing pass shows as a receiving-
+// colored bar. Reuses the position-pill palette already established
+// elsewhere (colors.js's POSITION_COLOR) rather than inventing a new hue
+// set: passing = QB color, rushing = RB color, receiving = WR color.
+const ROLE_COLOR = { pass: POSITION_COLOR.QB, rush: POSITION_COLOR.RB, reception: POSITION_COLOR.WR };
+
+function shortFieldNote(p) {
+  return p.short_field ? ` - started at opp ${fmt(p.yardline, 0)}` : "";
+}
+
+function shortFieldMarkerHtml(p) {
+  // A play that started at the opponent's 5 or closer (see engine/
+  // play_log.py's _short_field_yardline) is a high-value goal-to-go look
+  // regardless of what happened on it - flagged with a small dot, nested
+  // as a CHILD of its own bar/marker (positioned at the parent's own
+  // `bottom:100%`, i.e. just above whatever the parent's own top edge is,
+  // whichever direction that bar happens to grow) rather than a sibling
+  // pinned to a fixed chart height. Nesting means it automatically stays
+  // above the right play - both visually (no chance of reading as
+  // belonging to a taller neighboring bar instead) and positionally (it
+  // moves with its parent if resolveBarOverlap nudges it apart from
+  // others), and it needs no color of its own.
+  if (!p.short_field) return "";
+  return `<div class="play-shortfield-marker" title="Started at opponent's ${fmt(p.yardline, 0)}"></div>`;
+}
+
+function tdLabelHtml(p) {
+  // Mirrors shortFieldMarkerHtml but on the opposite side: `top:100%` on a
+  // nested child lands at the parent bar's own BOTTOM edge - which, for a
+  // TD (always a positive, bottom-anchored bar in practice - a fumbled-away
+  // TD belongs to the recovering defense, not this player), is exactly the
+  // zero line, so the label sits just below it, same neighborhood as the
+  // incomplete-target triangles. Nested rather than a chart-level sibling
+  // for the same reason as the short-field dot: it travels with its own
+  // bar if resolveBarOverlap nudges it apart from a neighbor.
+  if (!p.is_td) return "";
+  return `<div class="play-td-label">TD</div>`;
+}
+
+function playLogDetailHtml(plays, incompletions = [], gameDurationMin = 60, zeroPointPlays = []) {
   const positives = plays.filter((p) => p.points > 0).map((p) => p.points);
   const negatives = plays.filter((p) => p.points < 0).map((p) => -p.points);
   const maxPos = Math.max(1, ...positives, 0);
@@ -51,6 +96,11 @@ function playLogDetailHtml(plays, incompletions = [], gameDurationMin = 60) {
   // everything else - exact values are still in the tooltip/top table, this
   // only changes bar HEIGHT, not the numbers shown anywhere.
   const scaled = (v, max) => (max > 0 ? Math.sqrt(v / max) : 0);
+  // Reserved headroom above the tallest possible bar for its own nested
+  // short-field dot (see shortFieldMarkerHtml) - without this, a play that
+  // was BOTH the game's highest-scoring play AND a short-field snap would
+  // have its dot clipped off by the chart's overflow:hidden top edge.
+  const TOP_MARGIN_PCT = 14;
   // The axis is 60 minutes (4 real 15-min quarters) unless the game went to
   // OT - then it extends to gameDurationMin (see engine/pipeline.py's
   // game_durations_by_game_id), the REAL end of the game across every play,
@@ -59,15 +109,24 @@ function playLogDetailHtml(plays, incompletions = [], gameDurationMin = 60) {
   // field goal without this player getting the ball back again) - sizing
   // the axis off only their own plays would draw the OT segment far
   // narrower than the overtime that actually happened. Still guarded by
-  // the plays'/incompletions' own elapsed times in case gameDurationMin
-  // is missing (older cached data) or, in theory, undershoots.
+  // every list's own elapsed times in case gameDurationMin is missing
+  // (older cached data) or, in theory, undershoots.
   const REGULATION_MIN = 60;
-  const allElapsed = [...plays, ...incompletions].map((p) => p.elapsed_min);
+  const allElapsed = [...plays, ...incompletions, ...zeroPointPlays].map((p) => p.elapsed_min);
   const totalMinutes = Math.max(REGULATION_MIN, gameDurationMin || 0, ...allElapsed);
   const hasOt = totalMinutes > REGULATION_MIN;
+  // Every x-position on this chart goes through toChartPct rather than a
+  // plain (minutes/total)*100 - bars/markers are centered on their own x
+  // position (translateX(-50%)) and can be several pixels wide, so a play
+  // right at kickoff or right at the final whistle would otherwise have
+  // half its own shape clipped off by the chart's overflow:hidden edge.
+  // Reserving a small margin on both ends keeps every play's shape fully
+  // visible without needing to turn off the edge clipping entirely.
+  const EDGE_MARGIN_PCT = 3;
+  const toChartPct = (minutes) => EDGE_MARGIN_PCT + (minutes / totalMinutes) * (100 - 2 * EDGE_MARGIN_PCT);
   const bars = plays
     .map((p) => {
-      const leftPct = (p.elapsed_min / totalMinutes) * 100;
+      const leftPct = toChartPct(p.elapsed_min);
       const isNeg = p.points < 0;
       // bottom/top are measured from OPPOSITE edges of the container, so
       // the same "baselinePct up from the bottom" line is `bottom:
@@ -75,14 +134,23 @@ function playLogDetailHtml(plays, incompletions = [], gameDurationMin = 60) {
       // baselinePct)%` for one growing DOWN from that same line.
       const heightPct = isNeg
         ? Math.max(3, scaled(Math.abs(p.points), maxNeg) * baselinePct)
-        : Math.max(3, scaled(p.points, maxPos) * (100 - baselinePct));
+        : Math.max(3, scaled(p.points, maxPos) * (100 - baselinePct - TOP_MARGIN_PCT));
       const posStyle = isNeg ? `top:${100 - baselinePct}%; height:${heightPct}%;` : `bottom:${baselinePct}%; height:${heightPct}%;`;
-      return `<div class="play-bar ${isNeg ? "play-bar-neg" : ""} ${p.is_td ? "play-bar-td" : ""}" style="left:${leftPct}%; ${posStyle}" title="${formatGameClock(p.elapsed_min)} - ${escapeHtml(p.label)}: ${p.points >= 0 ? "+" : ""}${fmt(p.points, 1)} pts"></div>`;
+      // Role color applies regardless of sign - which stat category the
+      // play came from is exactly as true for a fumble as for a gain, and
+      // "this cost you points" already reads from the bar growing DOWN
+      // from the baseline instead of up, so it doesn't also need a
+      // dedicated color. A TD keeps its role color but gets a gold OUTLINE
+      // instead of a flat fill (see .play-bar-td in styles.css), so a
+      // rushing TD still reads differently from a passing TD.
+      const roleStyle = ROLE_COLOR[p.role] ? `background:${ROLE_COLOR[p.role]};` : "";
+      const title = `${formatGameClock(p.elapsed_min, totalMinutes)} - ${escapeHtml(p.label)}${shortFieldNote(p)}: ${p.points >= 0 ? "+" : ""}${fmt(p.points, 1)} pts`;
+      return `<div class="play-bar ${isNeg ? "play-bar-neg" : ""}" style="left:${leftPct}%; ${posStyle} ${roleStyle}" title="${title}">${shortFieldMarkerHtml(p)}${tdLabelHtml(p)}</div>`;
     })
     .join("");
   const top = plays.slice().sort((a, b) => b.points - a.points).slice(0, 5);
   const topRows = top
-    .map((p) => `<tr><td class="num">${formatGameClock(p.elapsed_min)}</td><td>${escapeHtml(p.label)}</td><td class="num">${p.points >= 0 ? "+" : ""}${fmt(p.points, 1)}</td></tr>`)
+    .map((p) => `<tr><td class="num">${formatGameClock(p.elapsed_min, totalMinutes)}</td><td>${escapeHtml(p.label)}</td><td class="num">${p.points >= 0 ? "+" : ""}${fmt(p.points, 1)}</td></tr>`)
     .join("");
   // Incomplete targets are always 0 points (see engine/play_log.py's
   // incomplete_targets_for_player) - never a bar, but still a real,
@@ -90,10 +158,37 @@ function playLogDetailHtml(plays, incompletions = [], gameDurationMin = 60) {
   // trick: a 0-height box's own position IS the apex, and the visible
   // triangle (the border) renders BELOW that point - so anchoring the box
   // itself at `bottom: baselinePct%` (the same y=0 line the real baseline
-  // sits on) puts the apex exactly on the line, hanging down from it,
-  // right on the chart rather than in a separate strip beneath it.
+  // sits on) would put the apex exactly on the line - EXCEPT border-bottom
+  // also adds to the box's own rendered height, which pushes what
+  // `bottom:%` actually anchors (the box's outer/bottom edge, i.e. the
+  // triangle's BASE) down onto the line instead, leaving the apex hovering
+  // above it. The extra translateY nudges the whole box down by exactly
+  // that border height so the apex - not the base - lands on the line.
   const incompleteMarkers = (incompletions || [])
-    .map((inc) => `<div class="play-incomplete-marker" style="left:${(inc.elapsed_min / totalMinutes) * 100}%; bottom:${baselinePct}%" title="${formatGameClock(inc.elapsed_min)} - ${escapeHtml(inc.label)}"></div>`)
+    .map((inc) => {
+      const leftPct = toChartPct(inc.elapsed_min);
+      const title = `${formatGameClock(inc.elapsed_min, totalMinutes)} - ${escapeHtml(inc.label)}${shortFieldNote(inc)}`;
+      return `<div class="play-incomplete-marker" style="left:${leftPct}%; bottom:${baselinePct}%" title="${title}">${shortFieldMarkerHtml(inc)}</div>`;
+    })
+    .join("");
+  // A real carry/catch that scored exactly 0 points (see engine/
+  // play_log.py's zero_point_plays_for_player - a stuffed goal-line rush,
+  // a 0-yard catch in non-PPR) still happened and is worth seeing. Shaped
+  // like the other bars (same class, so it also gets resolveBarOverlap's
+  // spacing) but with a small FIXED height straddling the zero line rather
+  // than one derived from the sqrt scale - there's no real point value to
+  // represent, so plugging it into that scale would be meaningless, and a
+  // fixed height would otherwise land on the exact same 3%-floor height as
+  // countless genuinely tiny real plays. The plain gray fill (no role
+  // color) is what actually keeps it from reading as a scoring play.
+  const ZERO_BAR_HALF_SPAN_PCT = 3;
+  const zeroMarkers = (zeroPointPlays || [])
+    .map((z) => {
+      const leftPct = toChartPct(z.elapsed_min);
+      const title = `${formatGameClock(z.elapsed_min, totalMinutes)} - ${escapeHtml(z.label)}${shortFieldNote(z)}: 0 pts`;
+      const bottom = Math.max(0, baselinePct - ZERO_BAR_HALF_SPAN_PCT);
+      return `<div class="play-bar play-zero-bar" style="left:${leftPct}%; bottom:${bottom}%; height:${ZERO_BAR_HALF_SPAN_PCT * 2}%" title="${title}">${shortFieldMarkerHtml(z)}</div>`;
+    })
     .join("");
   // Segments: four fixed 15-minute quarters, plus one more (regulation to
   // totalMinutes) only when the game actually went there. Interior
@@ -105,10 +200,10 @@ function playLogDetailHtml(plays, incompletions = [], gameDurationMin = 60) {
   if (hasOt) segments.push({ start: REGULATION_MIN, end: totalMinutes, label: "OT" });
   const qlines = segments
     .slice(0, -1)
-    .map((s) => `<div class="play-chart-qline" style="left:${(s.end / totalMinutes) * 100}%"></div>`)
+    .map((s) => `<div class="play-chart-qline" style="left:${toChartPct(s.end).toFixed(2)}%"></div>`)
     .join("");
   const axisLabels = segments
-    .map((s) => `<span style="left:${(((s.start + s.end) / 2 / totalMinutes) * 100).toFixed(2)}%">${s.label}</span>`)
+    .map((s) => `<span style="left:${toChartPct((s.start + s.end) / 2).toFixed(2)}%">${s.label}</span>`)
     .join("");
   return `
     <div class="play-chart-wrap">
@@ -118,6 +213,7 @@ function playLogDetailHtml(plays, incompletions = [], gameDurationMin = 60) {
             <div class="play-chart-baseline" style="bottom:${baselinePct}%"></div>
             ${qlines}
             ${bars}
+            ${zeroMarkers}
             ${incompleteMarkers}
           </div>
           <div class="play-chart-axis">
@@ -155,10 +251,11 @@ function gameLogTable(player, data) {
       const weekDetail = playsByWeek[String(w.week)];
       const scoringPlays = weekDetail?.plays || [];
       const incompletions = weekDetail?.incompletions || [];
-      const hasDetail = scoringPlays.length > 0 || incompletions.length > 0;
+      const zeroPointPlays = weekDetail?.zero_point_plays || [];
+      const hasDetail = scoringPlays.length > 0 || incompletions.length > 0 || zeroPointPlays.length > 0;
       const mainRow = `<tr class="game-log-row ${hasDetail ? "clickable-row" : ""}" data-week="${w.week}"><td>${w.week}</td><td>${opponentCellHtml(w)}</td>${statCellsHtml(w.actual.stats, flatColumns)}<td><strong>${fpts}</strong></td></tr>`;
       const detailRow = hasDetail
-        ? `<tr class="game-log-detail" data-week-detail="${w.week}" hidden><td colspan="${colCount}">${playLogDetailHtml(scoringPlays, incompletions, weekDetail?.game_duration_min)}</td></tr>`
+        ? `<tr class="game-log-detail" data-week-detail="${w.week}" hidden><td colspan="${colCount}">${playLogDetailHtml(scoringPlays, incompletions, weekDetail?.game_duration_min, zeroPointPlays)}</td></tr>`
         : "";
       return mainRow + detailRow;
     })
@@ -167,36 +264,61 @@ function gameLogTable(player, data) {
   return `<div class="table-wrap"><table>${top}${bottom}<tbody>${rows}</tbody></table></div>`;
 }
 
-// Bars are positioned by percent-of-elapsed-time, so two plays seconds apart
-// really can land on the same pixels - and the chart is `hidden` (0 width)
-// until a row is expanded, so this can't run until then. Reads each bar's
-// real on-screen position/width (only known once visible), then nudges
-// overlapping ones apart by a minimum pixel gap while keeping them in time
-// order - a forward pass pushes each bar clear of the one before it, and a
-// backward pass pulls everything back inside the chart if that pushed the
-// last bar(s) past the right edge.
+// Bars/markers are positioned by percent-of-elapsed-time, so two plays
+// seconds apart really can land on the same pixels - and the chart is
+// `hidden` (0 width) until a row is expanded, so this can't run until then.
+// Reads each element's real on-screen position/width (only known once
+// visible), then nudges overlapping ones apart by a minimum pixel gap while
+// keeping them in time order - a forward pass pushes each one clear of the
+// one before it, and a backward pass pulls everything back inside the
+// chart if that pushed the last one(s) past the right edge. Covers
+// .play-incomplete-marker alongside .play-bar (which the zero-point bars
+// share a class with, so they're already included) so nothing renders on
+// top of - and reads as part of - a different, unrelated play. Each item is
+// also pre-nudged clear of the fixed period-boundary lines (Q1/Q2/Q3/end-of-
+// regulation) BEFORE the bar-vs-bar spacing pass runs, so that pass always
+// has the final say - nudging away from a line can never reintroduce an
+// overlap between two plays, even if it means one ends up a little closer
+// to a divider than ideal (rare, and far less visible than actual overlap).
 function resolveBarOverlap(chartEl) {
   const width = chartEl.clientWidth;
-  const bars = Array.from(chartEl.querySelectorAll(".play-bar"));
-  if (!width || bars.length < 2) return;
+  const bars = Array.from(chartEl.querySelectorAll(".play-bar, .play-incomplete-marker"));
+  if (!width || bars.length < 1) return;
   const GAP = 3;
+  const LINE_GAP = 3;
+  const qlineCenters = Array.from(chartEl.querySelectorAll(".play-chart-qline")).map(
+    (el) => (parseFloat(el.style.left) / 100) * width
+  );
   const items = bars
-    .map((el) => ({ el, w: el.offsetWidth, center: (parseFloat(el.style.left) / 100) * width }))
+    .map((el) => {
+      const w = el.offsetWidth;
+      let center = (parseFloat(el.style.left) / 100) * width;
+      qlineCenters.forEach((lineX) => {
+        const minDist = w / 2 + LINE_GAP;
+        if (Math.abs(center - lineX) < minDist) {
+          center = center >= lineX ? lineX + minDist : lineX - minDist;
+        }
+      });
+      return { el, w, center };
+    })
     .sort((a, b) => a.center - b.center);
 
-  for (let i = 1; i < items.length; i++) {
-    const minCenter = items[i - 1].center + items[i - 1].w / 2 + GAP + items[i].w / 2;
-    if (items[i].center < minCenter) items[i].center = minCenter;
-  }
-  const last = items[items.length - 1];
-  const maxCenter = width - last.w / 2;
-  if (last.center > maxCenter) {
-    last.center = maxCenter;
-    for (let i = items.length - 2; i >= 0; i--) {
-      const maxAllowed = items[i + 1].center - items[i + 1].w / 2 - GAP - items[i].w / 2;
-      if (items[i].center > maxAllowed) items[i].center = maxAllowed;
+  if (items.length > 1) {
+    for (let i = 1; i < items.length; i++) {
+      const minCenter = items[i - 1].center + items[i - 1].w / 2 + GAP + items[i].w / 2;
+      if (items[i].center < minCenter) items[i].center = minCenter;
+    }
+    const last = items[items.length - 1];
+    const maxCenter = width - last.w / 2;
+    if (last.center > maxCenter) {
+      last.center = maxCenter;
+      for (let i = items.length - 2; i >= 0; i--) {
+        const maxAllowed = items[i + 1].center - items[i + 1].w / 2 - GAP - items[i].w / 2;
+        if (items[i].center > maxAllowed) items[i].center = maxAllowed;
+      }
     }
   }
+
   items.forEach(({ el, center }) => {
     el.style.left = `${(center / width) * 100}%`;
   });
@@ -578,7 +700,6 @@ function playerModalContentHtml(player, data) {
   const team = player.fantasy_team_id !== null ? data.teamsById.get(player.fantasy_team_id) : null;
   const faabHtml = faabEstimateSection(player, data);
   const nmdHtml = nmdDetailSection(player, data);
-  const currentWeekEntry = (player.weekly || []).find((w) => w.week === data.meta.current_week);
 
   const header = `
     <div class="player-modal-header">
@@ -593,7 +714,6 @@ function playerModalContentHtml(player, data) {
       <div class="stat-tile"><div class="stat-label">ROS total</div><div class="stat-value">${fmt(player.ros_total, 1)}</div></div>
       <div class="stat-tile"><div class="stat-label">Reg / Playoff</div><div class="stat-value">${fmt(player.reg_total, 1)} / ${fmt(player.playoff_total, 1)}</div></div>
       <div class="stat-tile"><div class="stat-label">Value (w/ waivers)</div><div class="stat-value">${player.value_delta_ww !== null ? fmt(player.value_delta_ww, 1) : "–"}</div></div>
-      <div class="stat-tile"><div class="stat-label">${player.position === "DST" ? "Opp implied total" : "Implied total"}</div><div class="stat-value">${impliedTotalCellHtml(player, currentWeekEntry)}</div></div>
     </div>
   `;
 

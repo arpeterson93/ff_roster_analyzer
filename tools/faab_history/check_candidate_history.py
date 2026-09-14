@@ -10,8 +10,9 @@ scoringPeriodId=1 of each year as a cheap probe, not a full pull - once a
 league/year shows up here as "accessible", pull_o_league_bids.py's fetch_season
 logic (or a copy of it, pointed at this league) is what actually pulls all weeks.
 
-Run after vet_candidates.py has produced some compatible candidates:
-    python check_candidate_history.py
+Run after vet_candidates.py has produced some compatible candidates, from
+the repo root (needed for the league_profile import below to resolve):
+    python -m tools.faab_history.check_candidate_history
 Resumable - skips league ids already in history_availability.json.
 """
 from __future__ import annotations
@@ -25,7 +26,7 @@ from pathlib import Path
 
 import requests
 
-from league_profile import HEADERS
+from tools.faab_history.league_profile import HEADERS
 
 VETTED_PATH = Path(__file__).parent / "vetted_candidates.json"
 OUT_PATH = Path(__file__).parent / "history_availability.json"

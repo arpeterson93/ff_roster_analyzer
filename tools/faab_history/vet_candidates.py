@@ -10,8 +10,9 @@ standard-scoring model. Hard filters: team count within [--min-size,
 IDP league, and has recognizable standard offensive TD scoring. PPR format
 is reported but never disqualifying - useful context, not a hard requirement.
 
-Run after discover_public_leagues.py has found some FAAB candidates:
-    python vet_candidates.py
+Run after discover_public_leagues.py has found some FAAB candidates, from
+the repo root (needed for the league_profile import below to resolve):
+    python -m tools.faab_history.vet_candidates
 Resumable like the discovery scan - skips league ids already in vetted_candidates.json.
 """
 from __future__ import annotations
@@ -23,7 +24,9 @@ import sys
 import time
 from pathlib import Path
 
-from league_profile import compare_to_baseline, fetch_settings, load_scoring_ledger, profile_settings, scoring_format_items
+from tools.faab_history.league_profile import (
+    compare_to_baseline, fetch_settings, load_scoring_ledger, profile_settings, scoring_format_items,
+)
 
 DISCOVERED_PATH = Path(__file__).parent / "discovered_leagues.json"
 OUT_PATH = Path(__file__).parent / "vetted_candidates.json"

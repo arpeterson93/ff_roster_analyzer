@@ -25,8 +25,9 @@ Paced like pull_public_league_bids.py - one request per week is a lot of
 volume across ~200+ league-seasons, all unauthenticated.
 
 Run after pull_public_league_bids.py (or independently - both read the same
-history_availability.json worklist):
-    python pull_public_league_rosters.py
+history_availability.json worklist), from the repo root (needed for the
+pull_weekly_rosters import below to resolve):
+    python -m tools.faab_history.pull_public_league_rosters
 Resumable - skips (league_id, season) pairs already in the output file.
 """
 from __future__ import annotations
@@ -40,7 +41,7 @@ from pathlib import Path
 
 from espn_api.football import League
 
-from pull_weekly_rosters import WEEKS, rostered_ids_for_week
+from tools.faab_history.pull_weekly_rosters import WEEKS, rostered_ids_for_week
 
 HISTORY_PATH = Path(__file__).parent / "history_availability.json"
 OUT_PATH = Path(__file__).parent / "other-leagues-rostered-by-week.json"

@@ -21,6 +21,17 @@ function thisWeekEntry(p, currentWeek) {
   return (p.weekly || []).find((w) => w.week === currentWeek) || {};
 }
 
+// This league's passing scoring is precise enough (e.g. 0.04/yard) that
+// rounding every score to 1 decimal can hide real differences a QB's stat
+// line actually earned - but always showing 2 decimals would put a
+// pointless trailing zero on every score that doesn't need it. Show 2
+// decimals only when the second one is actually nonzero.
+function fmtScore(n) {
+  if (n === null || n === undefined || Number.isNaN(n)) return "–";
+  const twoDp = Number(n).toFixed(2);
+  return twoDp.endsWith("0") ? Number(n).toFixed(1) : twoDp;
+}
+
 function columns(data, watched) {
   const yourTeamId = getYourTeam(data.meta.slug);
   return [
@@ -47,7 +58,17 @@ function columns(data, watched) {
       fmt: (_v, p) => `<span data-opp-cell data-team="${escapeHtml(thisWeekEntry(p, data.meta.current_week).opponent || "")}" data-pos="${p.position}">${opponentCellHtml(thisWeekEntry(p, data.meta.current_week))}</span>`,
     },
     {
-      key: "_implied_total", label: "Total", sortable: false,
+      // actual is only populated once nflverse has that specific player's
+      // real stat line for the week (see engine/pipeline.py's
+      // _actual_weekly_stats) - "-" before their game's been played/ingested,
+      // the real number once it has. Naturally reverts to "-" once the site
+      // advances to the next current week, since that week's own actual
+      // hasn't been played yet either.
+      key: "_score", label: "Score",
+      fmt: (_v, p) => fmtScore(thisWeekEntry(p, data.meta.current_week).actual?.points),
+    },
+    {
+      key: "_implied_total", label: "ITT", title: "Implied Team Total", sortable: false,
       fmt: (_v, p) => impliedTotalCellHtml(p, thisWeekEntry(p, data.meta.current_week)),
     },
     { key: "espn_projected_week", label: "ESPN wk", fmt: (v) => fmt(v, 1) },
@@ -95,6 +116,10 @@ let sortState = { key: "ros_overall_rank", dir: 1 };
 
 function sortValue(p, key, data) {
   if (key === "owner") return ownerName(p, data.teamsById);
+  if (key === "_score") {
+    const pts = thisWeekEntry(p, data.meta.current_week).actual?.points;
+    return pts === undefined || pts === null ? -Infinity : pts;
+  }
   if (key === "_fa_value") {
     const yourTeamId = getYourTeam(data.meta.slug);
     if (yourTeamId === null || p.fantasy_team_id !== null) return -Infinity;
@@ -106,7 +131,9 @@ function sortValue(p, key, data) {
 
 function render(container, data, filters, watched) {
   const cols = columns(data, watched);
+  const search = filters.search.trim().toLowerCase();
   let rows = data.players.filter((p) => {
+    if (search && !p.name.toLowerCase().includes(search)) return false;
     if (filters.watchedOnly && !watched.has(p.id)) return false;
     if (filters.faOnly && p.fantasy_team_id !== null) return false;
     if (filters.team !== "ALL" && p.nfl_team !== filters.team) return false;
@@ -125,7 +152,7 @@ function render(container, data, filters, watched) {
   });
 
   const header = cols
-    .map((c) => `<th data-key="${c.key}" ${c.sortable === false ? "" : ""}>${c.label}${sortState.key === c.key ? (sortState.dir === 1 ? " ▲" : " ▼") : ""}</th>`)
+    .map((c) => `<th data-key="${c.key}" ${c.title ? `title="${escapeHtml(c.title)}"` : ""}>${c.label}${sortState.key === c.key ? (sortState.dir === 1 ? " ▲" : " ▼") : ""}</th>`)
     .join("");
   const body = rows
     .slice(0, 300)
@@ -185,6 +212,7 @@ export function renderRankings(container, data, slug) {
         <select id="rankings-team-filter">${nflTeams.map((t) => `<option value="${t}">${t === "ALL" ? "All NFL teams" : t}</option>`).join("")}</select>
         <label><input type="checkbox" id="rankings-fa-only" /> Free agents only</label>
         ${yourTeamId !== null ? `<label><input type="checkbox" id="rankings-watched-only" /> Watch list only</label>` : ""}
+        <input type="search" id="rankings-search" placeholder="Search players..." autocomplete="off" />
       </div>
       <div class="table-wrap" id="rankings-table-wrap"></div>
     </div>
@@ -198,7 +226,7 @@ export function renderRankings(container, data, slug) {
   setFiltersHeightVar();
   new ResizeObserver(setFiltersHeightVar).observe(filtersEl);
 
-  const filters = { position: "ALL", faOnly: false, team: "ALL", watchedOnly: false };
+  const filters = { position: "ALL", faOnly: false, team: "ALL", watchedOnly: false, search: "" };
   let watched = new Set();
   render(container, data, filters, watched);
 
@@ -209,6 +237,10 @@ export function renderRankings(container, data, slug) {
     });
   }
 
+  container.querySelector("#rankings-search").addEventListener("input", (e) => {
+    filters.search = e.target.value;
+    render(container, data, filters, watched);
+  });
   container.querySelector("#rankings-pos-filter").addEventListener("change", (e) => {
     filters.position = e.target.value;
     render(container, data, filters, watched);

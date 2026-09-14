@@ -150,6 +150,12 @@ nav.tabs button.active {
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 th { color: var(--ink-500); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; cursor: pointer; }
+/* Grouped stat-column headers (Passing/Rushing/Receiving/Ret/etc - see
+   docs/js/statcolumns.js's groupedHeaderHtml) span multiple sub-columns via
+   colspan - center them over that span instead of the site-wide left
+   alignment, so "Rushing" reads as labeling Att/Yds/TD together rather
+   than looking stuck to just the first of the three. */
+.group-header-row th { text-align: center; }
 tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
 
 .row-meta { margin-top: 2px; line-height: 1.2; }
@@ -286,20 +292,60 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
   position: absolute; width: 2.2%; min-width: 3px; max-width: 10px;
   transform: translateX(-50%); background: var(--accent); border-radius: 2px 2px 0 0;
 }
-.play-bar-neg { background: var(--red-600); border-radius: 0 0 2px 2px; }
-.play-bar-td { background: var(--amber-500); }
+/* No red fill here on purpose - a negative play is colored by ROLE just
+   like a positive one (see docs/js/playermodal.js), since which stat
+   category it came from is exactly as true for a fumble as for a gain.
+   "This cost you points" already reads from growing DOWN off the baseline
+   instead of up, via `top:`/`height:` positioning - the flipped corner
+   radius here is just a shape echo of that same downward orientation. */
+.play-bar-neg { border-radius: 0 0 2px 2px; }
+/* A TD's bar keeps its normal role color (see docs/js/playermodal.js's
+   ROLE_COLOR) - the touchdown itself is called out by a small "TD" label
+   instead of recoloring the bar, nested as a child at the parent's own
+   `top:100%` (its bottom edge - the zero line, for a TD's always-positive
+   bar), the mirror image of .play-shortfield-marker's `bottom:100%`. Same
+   neighborhood as the incomplete-target triangles just below the baseline. */
+.play-td-label {
+  position: absolute; left: 50%; top: 100%; transform: translate(-50%, 3px);
+  font-size: 8px; font-weight: 700; line-height: 1; color: var(--amber-500);
+}
 /* Incomplete targets are always 0 points (see engine/play_log.py's
    incomplete_targets_for_player) - never a bar, since a zero-height bar
    would be invisible anyway, but still a real, time-stamped event worth
    marking. Reuses the classic 0x0-box CSS-triangle trick: with only
-   border-bottom colored, the element's own position IS the apex, and the
-   visible triangle renders BELOW that point - so `bottom: baselinePct%`
-   (the same y=0 line the real baseline sits on) puts the apex exactly on
-   the line, hanging down from it, right on the chart itself. */
+   border-bottom colored, the element's own position (per `bottom:
+   baselinePct%`) anchors its outer/bottom edge - which, for this shape, is
+   the triangle's BASE, not its apex (border-bottom renders BELOW the box's
+   own position). The translateY nudges the whole box down by exactly the
+   border height so the APEX - not the base - ends up sitting on the line. */
 .play-incomplete-marker {
-  position: absolute; width: 0; height: 0; transform: translateX(-50%);
+  position: absolute; width: 0; height: 0; transform: translateX(-50%) translateY(6px);
   border-left: 4px solid transparent; border-right: 4px solid transparent;
   border-bottom: 6px solid var(--amber-500);
+}
+/* A real carry/catch worth exactly 0 points (see engine/play_log.py's
+   zero_point_plays_for_player) - shares .play-bar's width/shape rules
+   (set inline: a small fixed height straddling the zero line, not scaled
+   to points - there's no real value to represent, and a scaled height
+   would land on the exact same floor as countless genuinely tiny real
+   plays anyway). The plain gray fill, with no role color and no TD/negative
+   modifier, is what actually keeps it from reading as a scoring play. */
+.play-zero-bar { background: var(--ink-500); border-radius: 2px; }
+/* A play that started at the opponent's 5 or closer (see engine/
+   play_log.py's _short_field_yardline) - a small dot nested INSIDE its own
+   bar/marker (not a chart-level sibling pinned to a fixed height), so it
+   automatically sits right above whichever specific play it belongs to -
+   `bottom: 100%` lands at the parent's own top edge (a bar's real height
+   for .play-bar, or the parent's own anchor point for the 0-height zero/
+   incomplete markers, where 100% of a 0px box is the same point as 0%) -
+   and automatically travels with it if resolveBarOverlap nudges the
+   parent apart from a neighbor. No color of its own (reuses --ink-900,
+   already the page's base text/ink shade), and doesn't need to fit a bar's
+   own overflow:hidden bounds since .play-chart's TOP_MARGIN_PCT reserves
+   room above the tallest possible bar for exactly this. */
+.play-shortfield-marker {
+  position: absolute; left: 50%; bottom: 100%; width: 5px; height: 5px;
+  border-radius: 50%; background: var(--ink-900); transform: translate(-50%, -4px);
 }
 /* Y-axis scale reference - just the two endpoints (0 at the baseline, the
    game's own highest-scoring play at the top of the positive region)
@@ -370,6 +416,16 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 
 .select-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
 .select-row select { padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--ink-900); }
+/* margin-left: auto pushes just this control (and nothing before it) to
+   the far right of the row, leaving the position/team/checkbox filters
+   left-aligned as before - the input's own text stays left-justified
+   inside it (the default for text inputs), only the BOX itself is pinned
+   to the right edge of the panel. */
+.select-row input[type="search"] {
+  padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--card); color: var(--ink-900); min-width: 0; width: 140px;
+  margin-left: auto;
+}
 
 /* Start/Sit's Team/Week row is much narrower than the (now centered,
    still fairly wide) card it sits in - center the controls within that

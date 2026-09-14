@@ -115,7 +115,7 @@ from engine.faab_estimate import FANTASY_RELEVANT_SNAP_PCT, NO_BID_MIN_PRIOR_POI
 from engine.scoring import ScoringRules
 from ingest import nfl_data as nd
 from ingest.ids import build_id_map
-from league_profile import fetch_settings, profile_settings, scoring_format_items
+from tools.faab_history.league_profile import fetch_settings, profile_settings, scoring_format_items
 
 O_LEAGUE_ID = 355398
 BIDS_PATH = Path(__file__).parent / "o-league-bids.json"

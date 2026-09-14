@@ -94,7 +94,7 @@ function lineupSection(roster, week, lineupWeek, currentWeek, allPlayersById) {
   return `
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Slot</th><th>Player</th><th class="desktop-col">Opp</th><th class="desktop-col">Total</th><th>Proj</th></tr></thead>
+        <thead><tr><th>Slot</th><th>Player</th><th class="desktop-col">Opp</th><th class="desktop-col" title="Implied Team Total">ITT</th><th>Proj</th></tr></thead>
         <tbody>${rows}</tbody>
         <tfoot>
           <tr class="totals-row">
@@ -109,7 +109,7 @@ function lineupSection(roster, week, lineupWeek, currentWeek, allPlayersById) {
     <h3>Bench</h3>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Slot</th><th>Player</th><th class="desktop-col">Opp</th><th class="desktop-col">Total</th><th>Proj</th></tr></thead>
+        <thead><tr><th>Slot</th><th>Player</th><th class="desktop-col">Opp</th><th class="desktop-col" title="Implied Team Total">ITT</th><th>Proj</th></tr></thead>
         <tbody>${benchRows}</tbody>
         <tfoot>
           <tr class="totals-row">

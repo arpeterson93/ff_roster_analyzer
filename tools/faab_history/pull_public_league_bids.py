@@ -32,8 +32,10 @@ break) - this is a much bigger request volume (potentially 200+ league-
 seasons x up to 17 weeks each), all unauthenticated, so the same courtesy
 applies.
 
-Run after check_candidate_history.py has produced some accessible years:
-    python pull_public_league_bids.py
+Run after check_candidate_history.py has produced some accessible years,
+from the repo root (needed for the pull_o_league_bids import below to
+resolve):
+    python -m tools.faab_history.pull_public_league_bids
 Expect this to take a while - let it run in your own terminal like the
 discovery scan.
 """
@@ -48,7 +50,7 @@ from pathlib import Path
 
 from espn_api.football import League
 
-from pull_o_league_bids import WEEKS, classify, collapse_contingent_bids, fetch_season
+from tools.faab_history.pull_o_league_bids import WEEKS, classify, collapse_contingent_bids, fetch_season
 
 HISTORY_PATH = Path(__file__).parent / "history_availability.json"
 RAW_OUT_PATH = Path(__file__).parent / "other-leagues-bids-raw.json"

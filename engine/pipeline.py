@@ -30,7 +30,10 @@ from engine.matchups import (
     points_by_team_week_pos,
     team_weeks_from_opponent,
 )
-from engine.play_log import build_game_play_index, game_durations_by_game_id, incomplete_targets_for_player, scoring_plays_for_player
+from engine.play_log import (
+    build_game_play_index, game_durations_by_game_id, incomplete_targets_for_player,
+    scoring_plays_for_player, zero_point_plays_for_player,
+)
 from engine.points_against import dst_points_against_detail, points_against_detail
 from engine.scoring import ScoringRules
 from engine.standings import (
@@ -800,10 +803,12 @@ def run_league(cfg: dict) -> dict:
     # just means no play-level breakdown for this build, same degrade-
     # gracefully pattern as espn_future_projections/ir_return_weeks above.
     # Each week's value is {"plays": [...scoring plays...], "incompletions":
-    # [...targets with 0 points...]} - incompletions are never scoring plays
-    # (see incomplete_targets_for_player) but are still shown, as below-axis
-    # markers rather than bars, so a string of drops/incompletions during
-    # the game is visible on the same time axis.
+    # [...targets with 0 points...], "zero_point_plays": [...real carries/
+    # catches worth 0 points...]} - neither incompletions nor zero-point
+    # plays are scoring plays (see incomplete_targets_for_player /
+    # zero_point_plays_for_player), but both are still shown, as markers
+    # rather than bars, so real usage (a stuffed goal-line carry, a drop)
+    # stays visible on the same time axis instead of vanishing entirely.
     game_log_plays_out: dict[str, dict[str, dict[str, list[dict]]]] = {}
     try:
         pbp_current = nd.play_by_play(season, current_season=season)
@@ -822,11 +827,13 @@ def run_league(cfg: dict) -> dict:
                     continue
                 scoring_plays = scoring_plays_for_player(plays_for_player, gsis_id, player_rules)
                 incompletions = incomplete_targets_for_player(plays_for_player, gsis_id)
-                if scoring_plays or incompletions:
+                zero_point_plays = zero_point_plays_for_player(plays_for_player, gsis_id, player_rules)
+                if scoring_plays or incompletions or zero_point_plays:
                     game_id = plays_for_player[0].get("game_id")
                     duration = game_durations.get(game_id, 60.0)
                     game_log_plays_out.setdefault(p["id"], {})[str(w)] = {
-                        "plays": scoring_plays, "incompletions": incompletions, "game_duration_min": round(duration, 2),
+                        "plays": scoring_plays, "incompletions": incompletions,
+                        "zero_point_plays": zero_point_plays, "game_duration_min": round(duration, 2),
                     }
     except Exception:
         logger.warning("play-by-play fetch/processing failed - Game Log per-play breakdown disabled for this build", exc_info=True)

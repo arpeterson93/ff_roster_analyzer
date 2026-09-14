@@ -50,7 +50,7 @@ export function groupedHeaderHtml(position, leadColumns) {
     .join("");
   const labelRow = blocks.flatMap(([, cols]) => cols.map(([, label]) => `<th>${escapeAttr(label)}</th>`)).join("");
   return {
-    top: `<tr>${lead}${groupRow}<th></th></tr>`,
+    top: `<tr class="group-header-row">${lead}${groupRow}<th></th></tr>`,
     bottom: `<tr>${leadColumns.map((l) => `<th>${escapeAttr(l)}</th>`).join("")}${labelRow}<th>FPts</th></tr>`,
     flatColumns: blocks.flatMap(([, cols]) => cols),
   };
