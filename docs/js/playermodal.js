@@ -12,7 +12,17 @@ import { groupedHeaderHtml, statCellsHtml } from "./statcolumns.js";
 // without fighting the layout to see it.
 // "23.45" elapsed minutes -> "2Q 5:33" (quarter + clock REMAINING in it,
 // matching how the game clock itself reads, not "minutes since kickoff").
+// Past 60 minutes (OT - see engine/play_log.py's _elapsed_minutes), there's
+// no fixed period length to count down from on the frontend (10 min in the
+// regular season, 15 in the playoffs) - so OT shows elapsed time INTO the
+// period instead, "OT 3:15" rather than a remaining-time countdown.
 function formatGameClock(elapsedMin) {
+  if (elapsedMin > 60) {
+    const otElapsed = elapsedMin - 60;
+    const mins = Math.floor(otElapsed);
+    const secs = Math.round((otElapsed - mins) * 60);
+    return `OT ${mins}:${String(secs).padStart(2, "0")}`;
+  }
   const quarter = Math.min(4, Math.floor(elapsedMin / 15) + 1);
   const remaining = Math.max(0, 15 - (elapsedMin - (quarter - 1) * 15));
   let mins = Math.floor(remaining);
@@ -41,9 +51,19 @@ function playLogDetailHtml(plays, incompletions = []) {
   // everything else - exact values are still in the tooltip/top table, this
   // only changes bar HEIGHT, not the numbers shown anywhere.
   const scaled = (v, max) => (max > 0 ? Math.sqrt(v / max) : 0);
+  // The axis is 60 minutes (4 real 15-min quarters) unless a play actually
+  // happened past that - a game that went to OT gets one more segment
+  // appended, sized by how far the real plays/incompletions reached (see
+  // engine/play_log.py's _elapsed_minutes - OT elapsed time is stacked
+  // past regulation rather than clamped to it), not a fixed guess at OT's
+  // length (10 min regular season, 15 in the playoffs).
+  const REGULATION_MIN = 60;
+  const allElapsed = [...plays, ...incompletions].map((p) => p.elapsed_min);
+  const totalMinutes = Math.max(REGULATION_MIN, ...allElapsed);
+  const hasOt = totalMinutes > REGULATION_MIN;
   const bars = plays
     .map((p) => {
-      const leftPct = (p.elapsed_min / 60) * 100;
+      const leftPct = (p.elapsed_min / totalMinutes) * 100;
       const isNeg = p.points < 0;
       // bottom/top are measured from OPPOSITE edges of the container, so
       // the same "baselinePct up from the bottom" line is `bottom:
@@ -53,7 +73,7 @@ function playLogDetailHtml(plays, incompletions = []) {
         ? Math.max(3, scaled(Math.abs(p.points), maxNeg) * baselinePct)
         : Math.max(3, scaled(p.points, maxPos) * (100 - baselinePct));
       const posStyle = isNeg ? `top:${100 - baselinePct}%; height:${heightPct}%;` : `bottom:${baselinePct}%; height:${heightPct}%;`;
-      return `<div class="play-bar ${isNeg ? "play-bar-neg" : ""}" style="left:${leftPct}%; ${posStyle}" title="${formatGameClock(p.elapsed_min)} - ${escapeHtml(p.label)}: ${p.points >= 0 ? "+" : ""}${fmt(p.points, 1)} pts"></div>`;
+      return `<div class="play-bar ${isNeg ? "play-bar-neg" : ""} ${p.is_td ? "play-bar-td" : ""}" style="left:${leftPct}%; ${posStyle}" title="${formatGameClock(p.elapsed_min)} - ${escapeHtml(p.label)}: ${p.points >= 0 ? "+" : ""}${fmt(p.points, 1)} pts"></div>`;
     })
     .join("");
   const top = plays.slice().sort((a, b) => b.points - a.points).slice(0, 5);
@@ -62,26 +82,49 @@ function playLogDetailHtml(plays, incompletions = []) {
     .join("");
   // Incomplete targets are always 0 points (see engine/play_log.py's
   // incomplete_targets_for_player) - never a bar, but still a real,
-  // time-stamped event worth marking, so they get a small triangle below
-  // the x-axis instead of competing for space in the scoring chart above it.
+  // time-stamped event worth marking. Reuses the border-bottom triangle
+  // trick: a 0-height box's own position IS the apex, and the visible
+  // triangle (the border) renders BELOW that point - so anchoring the box
+  // itself at `bottom: baselinePct%` (the same y=0 line the real baseline
+  // sits on) puts the apex exactly on the line, hanging down from it,
+  // right on the chart rather than in a separate strip beneath it.
   const incompleteMarkers = (incompletions || [])
-    .map((inc) => `<span class="play-incomplete-marker" style="left:${(inc.elapsed_min / 60) * 100}%" title="${formatGameClock(inc.elapsed_min)} - ${escapeHtml(inc.label)}"></span>`)
+    .map((inc) => `<div class="play-incomplete-marker" style="left:${(inc.elapsed_min / totalMinutes) * 100}%; bottom:${baselinePct}%" title="${formatGameClock(inc.elapsed_min)} - ${escapeHtml(inc.label)}"></div>`)
+    .join("");
+  // Segments: four fixed 15-minute quarters, plus one more (regulation to
+  // totalMinutes) only when the game actually went there. Interior
+  // boundaries (everything but the very last segment's end, which is the
+  // right edge of the chart) get a divider line, same as the existing
+  // Q1/Q2/Q3 lines - a game that reaches OT now also gets one at the 60
+  // minute mark, separating Q4 from OT.
+  const segments = [15, 30, 45, 60].map((end, i) => ({ start: i * 15, end, label: `Q${i + 1}` }));
+  if (hasOt) segments.push({ start: REGULATION_MIN, end: totalMinutes, label: "OT" });
+  const qlines = segments
+    .slice(0, -1)
+    .map((s) => `<div class="play-chart-qline" style="left:${(s.end / totalMinutes) * 100}%"></div>`)
+    .join("");
+  const axisLabels = segments
+    .map((s) => `<span style="left:${(((s.start + s.end) / 2 / totalMinutes) * 100).toFixed(2)}%">${s.label}</span>`)
     .join("");
   return `
     <div class="play-chart-wrap">
-      <div class="play-chart">
-        <div class="play-chart-yaxis-label play-chart-yaxis-max">${fmt(maxPos, 1)} pts</div>
-        <div class="play-chart-yaxis-label play-chart-yaxis-zero" style="bottom:${baselinePct}%">0</div>
-        <div class="play-chart-baseline" style="bottom:${baselinePct}%"></div>
-        <div class="play-chart-qline" style="left:25%"></div>
-        <div class="play-chart-qline" style="left:50%"></div>
-        <div class="play-chart-qline" style="left:75%"></div>
-        ${bars}
+      <div class="play-chart-row">
+        <div class="play-chart-plotcol">
+          <div class="play-chart">
+            <div class="play-chart-baseline" style="bottom:${baselinePct}%"></div>
+            ${qlines}
+            ${bars}
+            ${incompleteMarkers}
+          </div>
+          <div class="play-chart-axis">
+            ${axisLabels}
+          </div>
+        </div>
+        <div class="play-chart-yaxis">
+          <div class="play-chart-yaxis-label play-chart-yaxis-max">${fmt(maxPos, 1)} pts</div>
+          <div class="play-chart-yaxis-label play-chart-yaxis-zero" style="bottom:${baselinePct}%">0</div>
+        </div>
       </div>
-      <div class="play-chart-axis">
-        <span style="left:12.5%">Q1</span><span style="left:37.5%">Q2</span><span style="left:62.5%">Q3</span><span style="left:87.5%">Q4</span>
-      </div>
-      ${incompleteMarkers ? `<div class="play-chart-incompletions">${incompleteMarkers}</div>` : ""}
     </div>
     <table class="play-top-table">
       <thead><tr><th>Time</th><th>Play</th><th class="num">Pts</th></tr></thead>

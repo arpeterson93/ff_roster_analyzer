@@ -29,6 +29,37 @@ def test_rushing_touchdown_scores_yards_plus_td():
     assert len(plays) == 1
     assert plays[0]["points"] == 1.5 + 6  # 15*0.1 + 6
     assert "15 yd rush (TD)" == plays[0]["label"]
+    assert plays[0]["is_td"] is True
+
+
+def test_non_td_play_has_is_td_false():
+    row = _row(rusher_player_id="RB1", rushing_yards=5, rush_touchdown=False)
+    plays = scoring_plays_for_player([row], "RB1", _RULES)
+    assert plays[0]["is_td"] is False
+
+
+def test_ot_play_extends_past_regulation_instead_of_clamping_to_it():
+    row = _row(rusher_player_id="RB1", rushing_yards=5, qtr=5, season_type="REG",
+               quarter_seconds_remaining=550, game_seconds_remaining=550)
+    plays = scoring_plays_for_player([row], "RB1", _RULES)
+    # 50 seconds into a 10-minute (600s) regular-season OT period.
+    assert plays[0]["elapsed_min"] == round(60 + 50 / 60, 2)
+
+
+def test_postseason_ot_uses_a_15_minute_period():
+    row = _row(rusher_player_id="RB1", rushing_yards=5, qtr=5, season_type="POST",
+               quarter_seconds_remaining=750, game_seconds_remaining=750)
+    plays = scoring_plays_for_player([row], "RB1", _RULES)
+    # 150 seconds into a 15-minute (900s) postseason OT period.
+    assert plays[0]["elapsed_min"] == round(60 + 150 / 60, 2)
+
+
+def test_second_ot_period_stacks_after_the_first():
+    row = _row(rusher_player_id="RB1", rushing_yards=5, qtr=6, season_type="REG",
+               quarter_seconds_remaining=600, game_seconds_remaining=600)
+    plays = scoring_plays_for_player([row], "RB1", _RULES)
+    # Start of the 2nd OT period = regulation + one full 10-minute OT period.
+    assert plays[0]["elapsed_min"] == 70.0
 
 
 def test_reception_with_ppr_and_yardage():

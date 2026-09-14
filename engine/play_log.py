@@ -28,11 +28,18 @@ from __future__ import annotations
 
 from engine.scoring import ScoringRules
 
-# Elapsed time is clamped to a full regulation game for the chart's x-axis -
-# OT plays are rare enough for fantasy purposes that giving them their own
-# axis segment isn't worth the complexity; they just land at the 60-minute
-# mark instead of past it.
 _REGULATION_SECONDS = 60 * 60
+
+# nflverse's game_seconds_remaining resets to the OT period's own length
+# once a game reaches overtime (verified against real OT games - it does
+# NOT keep counting down from 3600), so OT elapsed time has to be computed
+# separately from quarter_seconds_remaining and stacked after regulation
+# rather than read straight off game_seconds_remaining like every other
+# quarter. Regular-season OT is a single untimed-in-practice 10-minute
+# period (since the 2017 rule change); the playoffs use a full 15-minute
+# period and can go to a second one.
+_OT_PERIOD_SECONDS_BY_SEASON_TYPE = {"POST": 15 * 60}
+_DEFAULT_OT_PERIOD_SECONDS = 10 * 60
 
 _FG_BUCKET_BY_DISTANCE = [
     (20, "fg_made_0_19"), (30, "fg_made_20_29"), (40, "fg_made_30_39"),
@@ -40,10 +47,23 @@ _FG_BUCKET_BY_DISTANCE = [
 ]
 
 
-def _elapsed_minutes(game_seconds_remaining: float | None) -> float:
-    if game_seconds_remaining is None:
-        return 60.0
-    remaining = max(0.0, min(_REGULATION_SECONDS, game_seconds_remaining))
+def _elapsed_minutes(row: dict) -> float:
+    """Minutes since kickoff for this play - extended past the 60-minute
+    regulation mark for overtime (one OT period's worth of minutes stacked
+    on top of the last, via `qtr` - 5 is the 1st OT, 6 the 2nd, etc.)
+    instead of clamping every OT play onto the Q4 boundary."""
+    qtr = row.get("qtr")
+    if qtr is not None and qtr > 4:
+        period_seconds = _OT_PERIOD_SECONDS_BY_SEASON_TYPE.get(row.get("season_type"), _DEFAULT_OT_PERIOD_SECONDS)
+        remaining = row.get("quarter_seconds_remaining")
+        if remaining is None:
+            remaining = row.get("game_seconds_remaining")
+        remaining = max(0.0, min(period_seconds, remaining if remaining is not None else 0.0))
+        ot_number = int(qtr) - 4
+        elapsed = _REGULATION_SECONDS + (ot_number - 1) * period_seconds + (period_seconds - remaining)
+        return round(elapsed / 60, 2)
+    remaining = row.get("game_seconds_remaining")
+    remaining = max(0.0, min(_REGULATION_SECONDS, remaining if remaining is not None else 0.0))
     return round((_REGULATION_SECONDS - remaining) / 60, 2)
 
 
@@ -72,11 +92,13 @@ def build_game_play_index(week_pbp_rows: list[dict]) -> dict[str, list[dict]]:
     return index
 
 
-def _play_stat_row_and_label(row: dict, gsis_id: str) -> tuple[dict, str] | None:
+def _play_stat_row_and_label(row: dict, gsis_id: str) -> tuple[dict, str, bool] | None:
     """(incremental stat row for ScoringRules.points_for_row, short clean
-    label) for the ONE role this player had on this specific play - a play
-    only ever earns them points for whichever role (passer/rusher/receiver/
-    kicker) their id matches, never more than one on the same play."""
+    label, is_td) for the ONE role this player had on this specific play -
+    a play only ever earns them points for whichever role (passer/rusher/
+    receiver/kicker) their id matches, never more than one on the same
+    play. is_td powers the chart's gold TD-bar highlight, kept as an
+    explicit flag rather than re-parsed from the label."""
     two_pt = row.get("two_point_conv_result") == "success"
 
     if row.get("passer_player_id") == gsis_id:
@@ -93,7 +115,7 @@ def _play_stat_row_and_label(row: dict, gsis_id: str) -> tuple[dict, str] | None
             label = "Interception thrown"
         else:
             label = f"{yards:.0f} yd pass to {_short_name(row.get('receiver_player_name'))}" + (" (TD)" if is_td else "")
-        return stat_row, label
+        return stat_row, label, is_td
 
     if row.get("rusher_player_id") == gsis_id:
         yards = row.get("rushing_yards") or 0
@@ -109,7 +131,7 @@ def _play_stat_row_and_label(row: dict, gsis_id: str) -> tuple[dict, str] | None
             label = "2pt conversion rush"
         else:
             label = f"{yards:.0f} yd rush" + (" (TD)" if is_td else "")
-        return stat_row, label
+        return stat_row, label, is_td
 
     if row.get("receiver_player_id") == gsis_id:
         is_catch = bool(row.get("complete_pass"))
@@ -129,14 +151,14 @@ def _play_stat_row_and_label(row: dict, gsis_id: str) -> tuple[dict, str] | None
             label = "2pt conversion catch"
         else:
             label = f"{yards:.0f} yd catch from {_short_name(row.get('passer_player_name'))}" + (" (TD)" if is_td else "")
-        return stat_row, label
+        return stat_row, label, is_td
 
     if row.get("kicker_player_id") == gsis_id:
         if row.get("field_goal_attempt") and row.get("field_goal_result") == "made":
             dist = row.get("kick_distance") or 0
-            return {_fg_bucket(dist): 1}, f"{dist:.0f} yd field goal"
+            return {_fg_bucket(dist): 1}, f"{dist:.0f} yd field goal", False
         if row.get("extra_point_attempt") and row.get("extra_point_result") == "good":
-            return {"pat_made": 1}, "Extra point"
+            return {"pat_made": 1}, "Extra point", False
     return None
 
 
@@ -152,7 +174,7 @@ def incomplete_targets_for_player(plays: list[dict], gsis_id: str) -> list[dict]
         if row.get("receiver_player_id") != gsis_id or row.get("complete_pass"):
             continue
         out.append({
-            "elapsed_min": _elapsed_minutes(row.get("game_seconds_remaining")),
+            "elapsed_min": _elapsed_minutes(row),
             "label": f"Incomplete target from {_short_name(row.get('passer_player_name'))}",
         })
     out.sort(key=lambda p: p["elapsed_min"])
@@ -160,24 +182,25 @@ def incomplete_targets_for_player(plays: list[dict], gsis_id: str) -> list[dict]
 
 
 def scoring_plays_for_player(plays: list[dict], gsis_id: str, rules: ScoringRules) -> list[dict]:
-    """[{elapsed_min, points, label}, ...] ordered by game time, for every
-    play in `plays` (this player's own subset from build_game_play_index)
-    where they earned a nonzero fantasy-point contribution - a routine
-    incomplete target/non-scoring carry contributes 0 and is dropped, not
-    shown as a zero-height bar."""
+    """[{elapsed_min, points, label, is_td}, ...] ordered by game time, for
+    every play in `plays` (this player's own subset from
+    build_game_play_index) where they earned a nonzero fantasy-point
+    contribution - a routine incomplete target/non-scoring carry
+    contributes 0 and is dropped, not shown as a zero-height bar."""
     out = []
     for row in plays:
         result = _play_stat_row_and_label(row, gsis_id)
         if result is None:
             continue
-        stat_row, label = result
+        stat_row, label, is_td = result
         points = rules.points_for_row(stat_row)
         if points == 0:
             continue
         out.append({
-            "elapsed_min": _elapsed_minutes(row.get("game_seconds_remaining")),
+            "elapsed_min": _elapsed_minutes(row),
             "points": round(points, 2),
             "label": label,
+            "is_td": is_td,
         })
     out.sort(key=lambda p: p["elapsed_min"])
     return out
