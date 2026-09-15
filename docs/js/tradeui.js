@@ -1,5 +1,7 @@
-import { fmt, escapeHtml } from "./state.js";
+import { fmt, escapeHtml, getYourTeam } from "./state.js";
 import { POSITION_COLOR, sortByPositionOrder, teamLabel } from "./colors.js";
+import { openPlayerModal } from "./playermodal.js";
+import { compareCheckboxHtml, wireCompareCheckboxes } from "./compare.js";
 
 function buildPlayersMap(data) {
   const map = {};
@@ -17,11 +19,12 @@ function rosterIds(data, teamId) {
   return data.players.filter((p) => p.fantasy_team_id === teamId).map((p) => p.id);
 }
 
-// Value = lineup-delta w/ waivers (next-man-down), not raw ROS points - a
+// Value = lineup-delta (next-man-down, already waiver-inclusive - see
+// engine/team_strength.py's depth_values_by_week), not raw ROS points - a
 // player's value to a trade is what your lineup would actually lose without
 // them, not just their season point total.
 function nmdValue(p) {
-  return p.value_delta_ww ?? 0;
+  return p.value_delta ?? 0;
 }
 
 function sortedRoster(players, sortMode) {
@@ -32,6 +35,11 @@ function sortedRoster(players, sortMode) {
   return list.sort((a, b) => nmdValue(b) - nmdValue(a));
 }
 
+// Row click opens the player modal (same convention as Rankings/Start-Sit -
+// see compareCheckboxHtml's own stopPropagation, which keeps that checkbox
+// independent of it) - trade "gives" selection stays a dedicated checkbox
+// in its own leading column instead, so the two clickable purposes never
+// fight over the same click.
 function rosterTable(side, playersList, selected, sortMode) {
   const rows = sortedRoster(playersList, sortMode)
     .map((p) => {
@@ -39,7 +47,7 @@ function rosterTable(side, playersList, selected, sortMode) {
       const color = POSITION_COLOR[p.position] || "#888";
       return `<tr class="clickable-row ${isSelected ? "selected-row" : ""}" data-side="${side}" data-id="${p.id}">
         <td><input type="checkbox" ${isSelected ? "checked" : ""} data-side="${side}" data-id="${p.id}" /></td>
-        <td><span class="pos-tag" style="background:${color}">${p.position}</span> ${escapeHtml(p.name)}</td>
+        <td>${compareCheckboxHtml(p)}<span class="pos-tag" style="background:${color}">${p.position}</span> ${escapeHtml(p.name)}</td>
         <td class="muted small">#${p.ros_pos_rank ?? "–"}</td>
         <td>${fmt(p.ros_total, 0)}</td>
         <td>${fmt(nmdValue(p), 0)}</td>
@@ -133,8 +141,15 @@ function renderResult(container, result, teamAName, teamBName, ctx) {
 export function renderTrade(container, data) {
   const teams = data.teams;
   const playersById = data.playersById;
+  // Team A defaults to the viewer's own team (the trade you're actually
+  // considering almost always involves you) - falls back to the first team
+  // if this browser hasn't picked one for this league yet (see
+  // state.js's getYourTeam).
+  const yourTeamId = getYourTeam(data.meta.slug);
+  const defaultTeamA = teams.find((t) => t.team_id === yourTeamId)?.team_id ?? teams[0].team_id;
+  const defaultTeamB = teams.find((t) => t.team_id !== defaultTeamA)?.team_id ?? defaultTeamA;
   const state = {
-    teamA: teams[0].team_id, teamB: teams[1] ? teams[1].team_id : teams[0].team_id,
+    teamA: defaultTeamA, teamB: defaultTeamB,
     givesA: new Set(), givesB: new Set(), sortMode: "position", expandedWeek: null,
   };
 
@@ -186,15 +201,22 @@ export function renderTrade(container, data) {
       draw();
     });
 
+    wireCompareCheckboxes(container, data);
+
     function toggle(side, id) {
       const set = side === "a" ? state.givesA : state.givesB;
       set.has(id) ? set.delete(id) : set.add(id);
       draw();
     }
+    // Row click opens the player modal (same as Rankings/Start-Sit) - trade
+    // "gives" selection is now the dedicated leading checkbox's job only
+    // (see rosterTable's comment), and the compare checkbox already stops
+    // its own click from bubbling here (see compareCheckboxHtml).
     container.querySelectorAll("#trade-picker-a tr[data-id], #trade-picker-b tr[data-id]").forEach((row) => {
       row.addEventListener("click", (e) => {
-        if (e.target.tagName === "INPUT") return; // checkbox handles its own toggle below
-        toggle(row.dataset.side, row.dataset.id);
+        if (e.target.tagName === "INPUT") return; // checkboxes handle their own click below
+        const player = playersById.get(row.dataset.id);
+        if (player) openPlayerModal(player, data);
       });
     });
     container.querySelectorAll('input[type="checkbox"][data-id]').forEach((cb) => {

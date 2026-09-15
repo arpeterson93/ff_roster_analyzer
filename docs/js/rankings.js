@@ -21,6 +21,10 @@ function thisWeekEntry(p, currentWeek) {
   return (p.weekly || []).find((w) => w.week === currentWeek) || {};
 }
 
+function lastWeekEntry(p, currentWeek) {
+  return (p.weekly || []).find((w) => w.week === currentWeek - 1) || {};
+}
+
 // This league's passing scoring is precise enough (e.g. 0.04/yard) that
 // rounding every score to 1 decimal can hide real differences a QB's stat
 // line actually earned - but always showing 2 decimals would put a
@@ -68,6 +72,13 @@ function columns(data, watched) {
       fmt: (_v, p) => fmtScore(thisWeekEntry(p, data.meta.current_week).actual?.points),
     },
     {
+      // The PRIOR week's actual - same _actual_weekly_stats gating as
+      // Score above, just one week back (week 1 of the season has none,
+      // same as Score has none before the current week's games are played).
+      key: "_last", label: "Last",
+      fmt: (_v, p) => fmtScore(lastWeekEntry(p, data.meta.current_week).actual?.points),
+    },
+    {
       key: "_implied_total", label: "ITT", title: "Implied Team Total", sortable: false,
       fmt: (_v, p) => impliedTotalCellHtml(p, thisWeekEntry(p, data.meta.current_week)),
     },
@@ -83,7 +94,7 @@ function columns(data, watched) {
     },
     { key: "owner", label: "Owner", fmt: (v) => escapeHtml(v) },
     {
-      key: "_faab_est", label: "FAAB Est.", sortable: false,
+      key: "_faab_est", label: "FAAB Est.",
       fmt: (_v, p) => {
         const est = (data.faabEstimates || {})[p.id];
         if (!est) return "–";
@@ -119,6 +130,19 @@ function sortValue(p, key, data) {
   if (key === "_score") {
     const pts = thisWeekEntry(p, data.meta.current_week).actual?.points;
     return pts === undefined || pts === null ? -Infinity : pts;
+  }
+  if (key === "_last") {
+    const pts = lastWeekEntry(p, data.meta.current_week).actual?.points;
+    return pts === undefined || pts === null ? -Infinity : pts;
+  }
+  if (key === "_faab_est") {
+    const est = (data.faabEstimates || {})[p.id];
+    const pct = est ? (est.conditional_price || {}).comp_based : undefined;
+    // "-" (no estimate at all, or below the relevance threshold - see
+    // playermodal.js's faabEstimateSection) sorts as a literal 0%, same as
+    // a real player estimated at 0% would - not pinned to an extreme, so
+    // it interleaves naturally with genuinely low real estimates.
+    return pct === undefined || pct === null || Number.isNaN(pct) ? 0 : pct;
   }
   if (key === "_fa_value") {
     const yourTeamId = getYourTeam(data.meta.slug);

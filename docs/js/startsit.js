@@ -40,6 +40,12 @@ function playerRow(p, week, currentWeek, slotLabel, isStreamed) {
   const kickoff = formatKickoff(weekEntry.kickoff);
   const oppAttrs = `data-opp-cell data-team="${escapeHtml(weekEntry.opponent || "")}" data-pos="${p.position}"`;
   const proj = projValueFor(p, week, currentWeek);
+  // The real LAST completed week (currentWeek - 1), regardless of which
+  // week's projections `week` is currently viewing - "last week" is a fixed
+  // real-world reference point, not relative to whatever future week you're
+  // looking ahead to.
+  const lastWeekEntry = (p.weekly || []).find((w) => w.week === currentWeek - 1) || {};
+  const lastPts = lastWeekEntry.actual?.points;
   const streamBadge = isStreamed ? `<span class="pill small stream-badge" title="Your rostered starter is on bye - this is the best free agent available that week instead">FA</span>` : "";
   return `<tr data-player-id="${p.id}" class="clickable-row ${isStreamed ? "streamed-row" : ""}">
     ${slotCell}
@@ -59,6 +65,7 @@ function playerRow(p, week, currentWeek, slotLabel, isStreamed) {
     </td>
     <td class="desktop-col">${impliedTotalCellHtml(p, weekEntry)}</td>
     <td><strong>${fmt(proj, 1)}</strong></td>
+    <td class="desktop-col muted">${lastPts !== undefined && lastPts !== null ? fmt(lastPts, 1) : "–"}</td>
   </tr>`;
 }
 
@@ -94,7 +101,7 @@ function lineupSection(roster, week, lineupWeek, currentWeek, allPlayersById) {
   return `
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Slot</th><th>Player</th><th class="desktop-col">Opp</th><th class="desktop-col" title="Implied Team Total">ITT</th><th>Proj</th></tr></thead>
+        <thead><tr><th>Slot</th><th>Player</th><th class="desktop-col">Opp</th><th class="desktop-col" title="Implied Team Total">ITT</th><th>Proj</th><th class="desktop-col">Last</th></tr></thead>
         <tbody>${rows}</tbody>
         <tfoot>
           <tr class="totals-row">
@@ -102,6 +109,7 @@ function lineupSection(roster, week, lineupWeek, currentWeek, allPlayersById) {
             <td class="desktop-col"></td>
             <td class="desktop-col"></td>
             <td><strong>${fmt(ourTotal, 1)}</strong></td>
+            <td class="desktop-col"></td>
           </tr>
         </tfoot>
       </table>
@@ -109,7 +117,7 @@ function lineupSection(roster, week, lineupWeek, currentWeek, allPlayersById) {
     <h3>Bench</h3>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Slot</th><th>Player</th><th class="desktop-col">Opp</th><th class="desktop-col" title="Implied Team Total">ITT</th><th>Proj</th></tr></thead>
+        <thead><tr><th>Slot</th><th>Player</th><th class="desktop-col">Opp</th><th class="desktop-col" title="Implied Team Total">ITT</th><th>Proj</th><th class="desktop-col">Last</th></tr></thead>
         <tbody>${benchRows}</tbody>
         <tfoot>
           <tr class="totals-row">
@@ -117,6 +125,7 @@ function lineupSection(roster, week, lineupWeek, currentWeek, allPlayersById) {
             <td class="desktop-col"></td>
             <td class="desktop-col"></td>
             <td><strong>${fmt(benchTotal, 1)}</strong></td>
+            <td class="desktop-col"></td>
           </tr>
         </tfoot>
       </table>

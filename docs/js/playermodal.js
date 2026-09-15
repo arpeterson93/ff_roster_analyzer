@@ -338,6 +338,15 @@ function wireGameLogRows(scopeEl) {
   });
 }
 
+function wirePriceCompRows(scopeEl) {
+  scopeEl.querySelectorAll("tr[data-price-comp-row].clickable-row").forEach((row) => {
+    row.addEventListener("click", () => {
+      const detail = scopeEl.querySelector(`tr.price-comp-detail[data-price-comp-detail="${row.dataset.priceCompRow}"]`);
+      if (detail) detail.hidden = !detail.hidden;
+    });
+  });
+}
+
 // ESPN wk is a second, independent number shown alongside our own Proj/SD -
 // never blended into it (see engine/pipeline.py's espn_future_projections).
 // The current week's own ESPN number lives on the player record itself
@@ -355,8 +364,13 @@ function projectionTable(player, currentWeek) {
   // to ESPN for the current week (weeklyProjection, same rule Start/Sit and
   // Schedule use) - SD is only ever ours (ESPN doesn't publish one), so it
   // stays w.sd regardless of week.
+  // !w.actual alone isn't enough to mean "still to come" - a past bye week
+  // or a past week where this player had no stat row (inactive, hadn't
+  // joined the league yet) also has no actual, but it already happened -
+  // see engine/pipeline.py's weekly-array comment. w.week >= currentWeek
+  // is what actually means "remaining".
   const rows = (player.weekly || [])
-    .filter((w) => !w.actual)
+    .filter((w) => !w.actual && w.week >= currentWeek)
     .map((w) => `<tr><td>${w.week}</td><td>${opponentCellHtml(w)}</td><td>${fmt(weeklyProjection(player, w.week, currentWeek), 1)}</td><td>${fmt(w.sd, 1)}</td><td>${fmt(espnWeekProjection(player, w, currentWeek), 1)}</td></tr>`)
     .join("");
   // Only a total-points projection is computed for future weeks (not a full
@@ -384,11 +398,6 @@ function weightedPercentileJs(samples, pct) {
   return ordered[ordered.length - 1][0];
 }
 
-const SIG_LABEL = { won: "won", outbid: "outbid", other_failure: "failed", no_bid: "no bid" };
-function sigChipHtml(signal) {
-  return `<span class="sig-chip sig-${signal}">${SIG_LABEL[signal] || signal}</span>`;
-}
-
 // Rank/recency-average pairs stacked in one cell (see styles.css's
 // .comp-rank-cell) rather than four separate columns - a comp table with
 // player/when/signal/bid/%/pts/snap/rank/recent/flags would run to 9-10
@@ -406,6 +415,15 @@ function recentCellHtml(pts, trailing, season) {
 function flagsCellHtml(ownInjury, teammateInjury) {
   const flags = [ownInjury ? `<span class="comp-flag">inj</span>` : "", teammateInjury ? `<span class="comp-flag tm">tm inj</span>` : ""].join("");
   return flags || `<span class="muted small">–</span>`;
+}
+// Binary per-league count, not a weighted blend - of the leagues we have
+// real data for this exact event (a real bid, or roster data confirming he
+// was a free agent there - see consolidate_cross_league_events), how many
+// saw ANY bid at all.
+function bidRateCellHtml(leaguesWithBid, leaguesEligible) {
+  if (leaguesEligible === null || leaguesEligible === undefined) return `<span class="muted small">–</span>`;
+  const pct = leaguesEligible > 0 ? fmt((leaguesWithBid / leaguesEligible) * 100, 0) + "%" : "–";
+  return `<span class="comp-recent-cell">${leaguesWithBid}/${leaguesEligible}<span class="sub">${pct} of leagues</span></span>`;
 }
 
 const INTEREST_LABEL = { high: "High", medium: "Med", low: "Low" };
@@ -489,31 +507,67 @@ function faabEstimateSection(player, data) {
       ? `<div class="muted small">The O League: won $${fmt(detail.bid_dollars, 2)}</div>`
       : `<div class="muted small">The O League: ${detail.signal.replace("_", " ")}</div>`;
 
+  // bid_distribution (see engine/faab_estimate.py's _price_comp_bid_distribution)
+  // is every real bid tied to this comp's own event - every pooled league
+  // that also won it, plus each of those leagues' own real losing rivals,
+  // all in %-of-budget units so they're meaningfully comparable across
+  // leagues with different budgets, each tagged with its own
+  // source_league_id. A small dot-plot, reusing the same .faab-dist-track
+  // look as the top-level distribution above, with this comp's own value
+  // picked out from the rest, AND (generalized to whichever site league is
+  // currently loaded, via data.meta.league_id - not hardcoded to any one
+  // league) the site's own league picked out too, so "what happened in MY
+  // league for this historical event" is visible at a glance even when
+  // it's neither the representative comp row nor The O League.
+  function priceCompDistributionHtml(c) {
+    const values = c.bid_distribution || [];
+    const max = Math.max(...values.map((v) => v.value), 0.001);
+    const dots = values
+      .map((v) => {
+        const isSelf = Math.abs(v.value - c.pct_of_remaining_budget) < 1e-9;
+        const isMine = data.meta.league_id !== null && data.meta.league_id !== undefined && v.source_league_id === data.meta.league_id;
+        const label = isSelf ? " (this comp)" : isMine ? " (your league)" : "";
+        const cls = ["faab-dist-dot", isSelf ? "faab-dist-dot-self" : "", isMine ? "faab-dist-dot-mine" : ""].filter(Boolean).join(" ");
+        return `<div class="${cls}" style="left:${(v.value / max) * 100}%" title="${fmt(v.value * 100, 1)}%${v.is_winner ? "" : " (losing bid)"}${label}"></div>`;
+      })
+      .join("");
+    return `
+      <div class="faab-dist">
+        <div class="faab-dist-track">${dots}</div>
+        <div class="faab-dist-labels">
+          <span>0%</span>
+          <span class="muted">${values.length} real bid${values.length === 1 ? "" : "s"} across every league that saw this event</span>
+          <span>${fmt(max * 100, 1)}%</span>
+        </div>
+      </div>
+    `;
+  }
+
   const priceComps = (est.comps || [])
-    .map((c) => {
-      const rivals = c.competing_bids || [];
-      const competition = rivals.length
-        ? `<div class="muted small">vs ${rivals.map((b) => `$${fmt(b.bid_dollars, 2)}`).join(", ")}</div>`
-        : c.signal === "won"
-        ? `<div class="muted small">uncontested</div>`
-        : "";
-      return `<tr>
-        <td>${escapeHtml(c.name)}<div class="muted small">${c.season} wk${c.week}</div></td>
-        <td>${sigChipHtml(c.signal)}${competition}${oLeagueTag(c.o_league_detail)}</td>
-        <td>$${fmt(c.bid_dollars, 2)}</td>
+    .map((c, i) => {
+      const hasDist = (c.bid_distribution || []).length > 1;
+      const rowId = `price-comp-${i}`;
+      const mainRow = `<tr class="${hasDist ? "clickable-row" : ""}" data-price-comp-row="${rowId}">
+        <td class="num">${fmt(c.weight * 100, 1)}%</td>
+        <td>${escapeHtml(c.name)}<div class="muted small">${c.season} wk${c.week}</div>${oLeagueTag(c.o_league_detail)}</td>
         <td>${fmt(c.pct_of_remaining_budget * 100, 1)}%</td>
         <td>${recentCellHtml(c.prior_week_actual_points, c.trailing_2_3_avg_points, c.season_avg_points)}</td>
         <td>${rankCellHtml(c.weekly_rank, c.ros_rank)}</td>
         <td>${flagsCellHtml(c.own_injury_flag, c.teammate_position_injury_flag)}</td>
       </tr>`;
+      const detailRow = hasDist
+        ? `<tr class="price-comp-detail" data-price-comp-detail="${rowId}" hidden><td colspan="6">${priceCompDistributionHtml(c)}</td></tr>`
+        : "";
+      return mainRow + detailRow;
     })
     .join("");
 
   const interestComps = (est.interest_comps || [])
     .map(
       (c) => `<tr>
-        <td>${escapeHtml(c.name)}<div class="muted small">${c.season} wk${c.week}</div></td>
-        <td>${sigChipHtml(c.signal)}${oLeagueTag(c.o_league_detail)}</td>
+        <td class="num">${fmt(c.weight * 100, 1)}%</td>
+        <td>${escapeHtml(c.name)}<div class="muted small">${c.season} wk${c.week}</div>${oLeagueTag(c.o_league_detail)}</td>
+        <td>${bidRateCellHtml(c.leagues_with_bid, c.leagues_eligible)}</td>
         <td>${recentCellHtml(c.prior_week_actual_points, c.trailing_2_3_avg_points, c.season_avg_points)}</td>
         <td>${rankCellHtml(c.weekly_rank, c.ros_rank)}</td>
         <td>${flagsCellHtml(c.own_injury_flag, c.teammate_position_injury_flag)}</td>
@@ -562,7 +616,7 @@ function faabEstimateSection(player, data) {
                 <span class="faab-confidence-bid" data-confidence-bid>${fmt(defaultBid * 100, 1)}%</span>
               </div>
               <input type="range" min="50" max="99" value="${defaultConfidence}" class="faab-confidence-slider" data-confidence-slider>
-              <p class="muted small">The bid that would have beaten about this share of comparable historical bids - <b>every real bid</b> placed in a similar spot, not just the ones that won, pooled from ${samples.length} real bids behind the comps below. Not a guaranteed win chance: this is what similar bidding wars have looked like before, not a forecast of what anyone else bids this specific week.</p>
+              <p class="muted small">The bid that would have WON about this share of comparable historical auctions - pooled from ${samples.length} real winning prices behind the comps below. Not a guaranteed win chance: this is what similar bidding wars have actually taken to win before, not a forecast of what anyone else bids this specific week.</p>
             </div>
           `
             : ""}
@@ -596,10 +650,10 @@ function faabEstimateSection(player, data) {
     ${teamInterestSection(est.team_interest, data)}
 
     <h3>Price comps <span class="muted small">- won only, drives the price-if-contested estimate above</span></h3>
-    <div class="table-wrap"><table><thead><tr><th>Player</th><th>Outcome</th><th>Real bid</th><th>% of budget</th><th>Recent pts</th><th>Rank</th><th>Flags</th></tr></thead><tbody>${priceComps || `<tr><td colspan="7" class="muted small">No comparable winning bids found.</td></tr>`}</tbody></table></div>
+    <div class="table-wrap"><table><thead><tr><th title="This comp's share of the total weight behind the weighted-average estimate above - every comp's weight sums to 100%. Derived from 1/(distance+0.05), so a closer comp counts for more. Comps are already listed highest-weight-first.">Weight</th><th>Player</th><th>% of budget</th><th>Recent pts</th><th>Rank</th><th>Flags</th></tr></thead><tbody>${priceComps || `<tr><td colspan="6" class="muted small">No comparable winning bids found.</td></tr>`}</tbody></table></div>
 
     <h3>Interest comps <span class="muted small">- won + outbid + no-bid, drives the "chance you'll even need to bid" estimate</span></h3>
-    <div class="table-wrap"><table><thead><tr><th>Player</th><th>Outcome</th><th>Recent pts</th><th>Rank</th><th>Flags</th></tr></thead><tbody>${interestComps || `<tr><td colspan="5" class="muted small">No comparable situations found.</td></tr>`}</tbody></table></div>
+    <div class="table-wrap"><table><thead><tr><th title="This comp's share of the total weight behind the weighted-average bid_probability above - every comp's weight sums to 100%. Derived from 1/(distance+0.05), so a closer comp counts for more. Comps are already listed highest-weight-first.">Weight</th><th>Player</th><th title="Of the leagues we have real data for this exact player/week (a real bid, or roster data confirming he was a genuine free agent there), how many actually saw a bid - not weighted, one binary count per league.">Leagues bid</th><th>Recent pts</th><th>Rank</th><th>Flags</th></tr></thead><tbody>${interestComps || `<tr><td colspan="6" class="muted small">No comparable situations found.</td></tr>`}</tbody></table></div>
   `;
 }
 
@@ -613,55 +667,53 @@ function overviewTabHtml(player, data) {
 }
 
 // NMD week-by-week (see engine/team_strength.py's depth_values_by_week/
-// fa_values) - for a ROSTERED player, the same "Value (w/ waivers)" number
-// already shown as a single stat tile above, broken out week by week and
-// naming which specific free agent it's computed against (a single pick
-// for the whole series, not re-chosen week to week - see that function's
-// docstring). For a WAIVER player, the mirror image: your own team's
-// specific add/drop swing week by week, and who it would replace - scoped
-// to "your team" only (same as the Rankings NMD column and the stat-grid
-// tile above), since fa_values_detail.json only carries this level of
-// detail for candidates that clear the same real bar (gain > 0) for
-// EVERY team, and showing one team's numbers on a click that could be
-// anyone's would be misleading rather than just incomplete.
+// fa_values) - for a ROSTERED player, the same "Value" number already
+// shown as a single stat tile above, broken out week by week and naming
+// which specific player it's computed against - a real bench teammate OR
+// the best available free agent, whichever the optimizer actually
+// prefers, re-picked fresh every week (not one fixed pick for the whole
+// series - see that function's docstring). For a WAIVER player, the
+// mirror image: your own team's specific add/drop swing week by week, and
+// who it would replace - scoped to "your team" only (same as the Rankings
+// NMD column and the stat-grid tile above), since fa_values_detail.json
+// only carries this level of detail for candidates that clear the same
+// real bar (gain > 0) for EVERY team, and showing one team's numbers on a
+// click that could be anyone's would be misleading rather than just
+// incomplete.
 function nmdDetailSection(player, data) {
   if (player.fantasy_team_id !== null) {
     const team = data.teamsById.get(player.fantasy_team_id);
     const entry = (team?.depth?.[player.position] || []).find((d) => d.id === player.id);
     if (!entry) return "";
     const currentWeek = data.meta.current_week;
-    // BOTH replacements are picked fresh every week (see engine/
-    // team_strength.py's depth_values_by_week) - a real bench teammate can
-    // be a different specific player week to week (byes/matchups), and so
-    // can the best available free agent, so this shows the actual name
-    // AND the two raw point values behind each week's delta, not just the
-    // resulting number.
-    const replacementCell = (pid, week) => {
-      if (!pid) return `<span class="muted small">&ndash;</span>`;
-      const p = data.playersById.get(pid);
-      if (!p) return `<span class="muted small">${escapeHtml(pid)}</span>`;
-      return `${escapeHtml(p.name)} <span class="muted small">(${fmt(weeklyProjection(p, week, currentWeek), 1)})</span>`;
-    };
     const rows = entry.weekly
       .map((w) => {
         const ownPts = fmt(weeklyProjection(player, w.week, currentWeek), 1);
-        return `<tr>
+        const replacement = w.replacement_id ? data.playersById.get(w.replacement_id) : null;
+        // Not on ANY team's roster - a free agent pickup, not an existing
+        // teammate stepping in. Same highlight Start/Sit uses for a
+        // streamed bye-week fill-in (see startsit.js's isStreamed).
+        const isFreeAgent = !!replacement && replacement.fantasy_team_id === null;
+        const replacementCell = !w.replacement_id
+          ? `<span class="muted small">&ndash;</span>`
+          : replacement
+          ? `${escapeHtml(replacement.name)} <span class="muted small">(${fmt(weeklyProjection(replacement, w.week, currentWeek), 1)})</span>${isFreeAgent ? ` <span class="pill small stream-badge" title="Not on your roster - a free agent pickup">FA</span>` : ""}`
+          : `<span class="muted small">${escapeHtml(w.replacement_id)}</span>`;
+        return `<tr class="${isFreeAgent ? "streamed-row" : ""}">
           <td>Wk ${w.week}</td>
           <td>${fmt(w.value_delta, 1)}</td>
-          <td>${ownPts} vs ${replacementCell(w.replacement_id, w.week)}</td>
-          <td>${fmt(w.value_delta_ww, 1)}</td>
-          <td>${ownPts} vs ${replacementCell(w.ww_replacement_id, w.week)}</td>
+          <td>${ownPts} vs ${replacementCell}</td>
         </tr>`;
       })
       .join("");
     return `
       <h3>NMD week-by-week</h3>
-      <p class="muted small">"Value" is the lineup points your team loses if he's dropped outright that week - "Replaced by" names whichever teammate's own promotion into his slot produces that number, straight from your own roster's real depth that week. "Value (w/ waivers)" is the same drop, backfilled instead by whichever free agent projects best at his position THAT SPECIFIC WEEK. Both replacements are re-picked every week, not fixed for the season - a real reflection of how byes, matchups, and the waiver wire actually shift week to week, so don't be surprised if the name changes row to row.</p>
+      <p class="muted small">"Value" is the lineup points your team loses if he's dropped outright that week - "Replace by" names whichever player's promotion into his slot produces that number, a real bench teammate OR the best available free agent, whichever actually projects best THAT SPECIFIC WEEK (highlighted when it's a free agent pickup, not an existing teammate). Re-picked every week, not fixed for the season - a real reflection of how byes, matchups, and the waiver wire actually shift week to week, so don't be surprised if the name changes row to row.</p>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Week</th><th>Value</th><th>Replaced by (own roster)</th><th>Value (w/ waivers)</th><th>Replaced by (FA)</th></tr></thead>
+          <thead><tr><th>Week</th><th>Value</th><th>Replace by</th></tr></thead>
           <tbody>${rows}</tbody>
-          <tfoot><tr class="totals-row"><td>Total</td><td>${fmt(entry.value_delta, 1)}</td><td></td><td>${fmt(entry.value_delta_ww, 1)}</td><td></td></tr></tfoot>
+          <tfoot><tr class="totals-row"><td>Total</td><td>${fmt(entry.value_delta, 1)}</td><td></td></tr></tfoot>
         </table>
       </div>
     `;
@@ -713,7 +765,7 @@ function playerModalContentHtml(player, data) {
       <div class="stat-tile"><div class="stat-label">Baseline</div><div class="stat-value">${fmt(player.baseline_ppg, 1)} ppg</div></div>
       <div class="stat-tile"><div class="stat-label">ROS total</div><div class="stat-value">${fmt(player.ros_total, 1)}</div></div>
       <div class="stat-tile"><div class="stat-label">Reg / Playoff</div><div class="stat-value">${fmt(player.reg_total, 1)} / ${fmt(player.playoff_total, 1)}</div></div>
-      <div class="stat-tile"><div class="stat-label">Value (w/ waivers)</div><div class="stat-value">${player.value_delta_ww !== null ? fmt(player.value_delta_ww, 1) : "–"}</div></div>
+      <div class="stat-tile"><div class="stat-label">Value</div><div class="stat-value">${player.value_delta !== null ? fmt(player.value_delta, 1) : "–"}</div></div>
     </div>
   `;
 
@@ -774,6 +826,7 @@ export function openPlayerModal(player, data) {
   wirePlayerModalTabs(scope);
   wireFaabConfidenceSlider(scope, player, data);
   wireGameLogRows(scope);
+  wirePriceCompRows(scope);
 }
 
 // Side-by-side on a wide screen (see .compare-grid/.modal-overlay-wide in
@@ -798,6 +851,7 @@ export function openComparePlayerModal(playerA, playerB, data) {
   wireFaabConfidenceSlider(modalContent.querySelector('[data-compare-col="a"]'), playerA, data);
   wireFaabConfidenceSlider(modalContent.querySelector('[data-compare-col="b"]'), playerB, data);
   modalContent.querySelectorAll(".compare-col").forEach((col) => wireGameLogRows(col));
+  modalContent.querySelectorAll(".compare-col").forEach((col) => wirePriceCompRows(col));
   modalContent.querySelectorAll(".compare-side-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       modalContent.querySelectorAll(".compare-side-btn").forEach((b) => b.classList.toggle("active", b === btn));

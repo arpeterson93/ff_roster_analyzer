@@ -71,13 +71,13 @@ function computeTotalStrength(data, team) {
 
 function trendSparkline(weekly) {
   if (!weekly || !weekly.length) return "";
-  const values = weekly.map((w) => w.value_delta_ww);
+  const values = weekly.map((w) => w.value_delta);
   const maxAbs = Math.max(1, ...values.map((v) => Math.abs(v)));
   const bars = weekly
     .map((w) => {
-      const heightPct = Math.max(4, (Math.abs(w.value_delta_ww) / maxAbs) * 100);
-      const ratio = 0.5 + (w.value_delta_ww / maxAbs) * 0.5;
-      return `<div class="spark-bar" style="height:${heightPct}%; background:${colorForRatio(ratio)}" title="Wk ${w.week}: ${fmt(w.value_delta_ww, 1)}"></div>`;
+      const heightPct = Math.max(4, (Math.abs(w.value_delta) / maxAbs) * 100);
+      const ratio = 0.5 + (w.value_delta / maxAbs) * 0.5;
+      return `<div class="spark-bar" style="height:${heightPct}%; background:${colorForRatio(ratio)}" title="Wk ${w.week}: ${fmt(w.value_delta, 1)}"></div>`;
     })
     .join("");
   return `<div class="sparkline">${bars}</div>`;
@@ -90,7 +90,7 @@ function depthTable(depth, playersById) {
       depth[pos]
         .map(
           (d, i) =>
-            `<tr data-player-id="${d.id}" class="clickable-row"><td>${pos}${i + 1}</td><td>${escapeHtml((playersById.get(d.id) || {}).name || d.id)}</td><td>${fmt(d.value_delta, 1)}</td><td>${fmt(d.value_delta_ww, 1)}</td><td>${trendSparkline(d.weekly)}</td></tr>`
+            `<tr data-player-id="${d.id}" class="clickable-row"><td>${pos}${i + 1}</td><td>${escapeHtml((playersById.get(d.id) || {}).name || d.id)}</td><td>${fmt(d.value_delta, 1)}</td><td>${trendSparkline(d.weekly)}</td></tr>`
         )
         .join("")
     )
@@ -188,7 +188,7 @@ export function renderStrength(container, data, slug) {
       <h2>Starting Lineup vs. League Avg</h2>
       ${positionBars(team.slot_strength, computeTotalStrength(data, team))}
       <h3>Depth (next-man-down value)</h3>
-      <div class="table-wrap"><table><thead><tr><th>Slot</th><th>Player</th><th>Value</th><th>Value (w/ waivers)</th><th>Weekly trend</th></tr></thead><tbody>${depthTable(team.depth, data.playersById)}</tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>Slot</th><th>Player</th><th title="Lineup points your team loses if he's dropped outright, backfilled by whichever teammate OR available free agent projects best in his slot that week - whichever the optimizer actually prefers.">Value</th><th>Weekly trend</th></tr></thead><tbody>${depthTable(team.depth, data.playersById)}</tbody></table></div>
       <h3>Suggested pickups</h3>
       <div class="table-wrap">${pickupsTable(team.pickups, data.playersById)}</div>
       <h3>Trade targets</h3>

@@ -94,9 +94,21 @@ def fetch_season(league: League, year: int, *, cents_scale: bool = True) -> list
 
 
 def collapse_contingent_bids(rows: list[dict]) -> list[dict]:
+    """Scoped by source_league_id (r.get(), not r[] - this league's own
+    single-league pull never sets it, so every one of its own rows shares
+    the same None and collapsing is unaffected there). Without it, this
+    function silently merged contingent-variant rows from DIFFERENT real
+    leagues whenever they happened to share a team_id - ESPN team ids are
+    small integers (1-20ish) that collide constantly across leagues, so
+    pull_public_league_bids.py calling this on rows pooled from 100+
+    leagues at once was discarding the vast majority of those leagues' real
+    distinct bids on any popular player, not just genuine same-team
+    contingent duplicates. Confirmed live 2026-09-15: Kayshon Boutte,
+    2025 wk2 - 334 raw rows collapsed to 26 with the old key, 295 with this
+    one (see the conversation this was built from)."""
     groups: dict[tuple, list[dict]] = {}
     for r in rows:
-        key = (r["season"], r["week"], r["team_id"], r["add_player_id"])
+        key = (r.get("source_league_id"), r["season"], r["week"], r["team_id"], r["add_player_id"])
         groups.setdefault(key, []).append(r)
 
     result = []

@@ -759,9 +759,39 @@ def run_league(cfg: dict) -> dict:
                 "rank_std": ros_row["rank_std"] if ros_row else None, "week_pos_rank": week_pos_rank,
                 "baseline_ppg": proj.baseline_ppg, "ros_total": proj.ros_total, "reg_total": proj.reg_total,
                 "playoff_total": proj.playoff_total, "this_week": proj.this_week,
-                "value_delta": None, "value_delta_ww": None,
+                "value_delta": None,
                 "position_avg_ratio": (proj.baseline_ppg / position_avg) if position_avg else None,
+                # project_player only ever projects weeks >= current_week
+                # (see its own "5-step ROS valuation" docstring - it has no
+                # reason to "project" a week that's already happened), so
+                # proj.weekly alone never carries a played week's real stat
+                # line. Past weeks (1..current_week-1) are built here
+                # separately, straight from real per-week data (opponent/
+                # home/kickoff/game_context are already computed off the
+                # FULL season schedule, not just the remaining one, so
+                # reusing them for a past week is safe) with no projected/
+                # sd/espn_projected (nothing to project once it's already
+                # happened) - just the real actual, when there is one (None
+                # for a bye or a week with no stat row, same as any other
+                # week). This is what powers the Game Log tab/chart AND
+                # every FAAB "prior week" feature (prior_week_actual_points,
+                # trailing_2_3_avg_points, season_avg_points in
+                # _compute_faab_estimates below) - before this, a played
+                # week fell out of `weekly` the moment current_week advanced
+                # past it, silently starving both of real recent data.
                 "weekly": [
+                    {
+                        "week": w, "opponent": opponent.get((p.nfl_team, w)), "home": is_home.get((p.nfl_team, w)),
+                        "kickoff": kickoff.get((p.nfl_team, w)),
+                        "index": None, "rank": None, "projected": None, "sd": None,
+                        "espn_projected": None,
+                        "actual": _actual_weekly_stats(p.position, p.nfl_team, res.id, w, weeks_played, actual_offense_by_id_week, actual_dst_by_team_week),
+                        "implied_total": (game_context.get((p.nfl_team, w)) or {}).get("implied_total"),
+                        "opponent_implied_total": (game_context.get((p.nfl_team, w)) or {}).get("opponent_implied_total"),
+                        "weather": None,
+                    }
+                    for w in range(1, current_week)
+                ] + [
                     {
                         "week": wp.week, "opponent": wp.opponent, "home": is_home.get((p.nfl_team, wp.week)),
                         "kickoff": kickoff.get((p.nfl_team, wp.week)),
@@ -895,35 +925,29 @@ def run_league(cfg: dict) -> dict:
         depth_by_week = depth_values_by_week(roster_ids, players_ctx, free_agents_ctx, weeks, settings.slots, settings.slot_eligibility)
         for pid, vals in depth_by_week.items():
             players_by_id[pid]["value_delta"] = sum(vals["value_delta"].values())
-            players_by_id[pid]["value_delta_ww"] = sum(vals["value_delta_ww"].values())
 
         depth_table: dict[str, list[dict]] = {pos: [] for pos in settings.positions}
         for pid in roster_ids:
             pos = players_by_id[pid]["position"]
-            vals = depth_by_week.get(pid, {"value_delta": {}, "replacement_id": {}, "value_delta_ww": {}, "ww_replacement_id": {}})
+            vals = depth_by_week.get(pid, {"value_delta": {}, "replacement_id": {}})
             depth_table.setdefault(pos, []).append(
                 {
                     "id": pid,
                     "value_delta": sum(vals["value_delta"].values()),
-                    "value_delta_ww": sum(vals["value_delta_ww"].values()),
-                    # Both replacements are picked FRESH each week (see
-                    # depth_values_by_week) - a real teammate who'd start in
-                    # pid's place, and the best streaming free agent, can
-                    # each be a different specific player week to week, so
-                    # both live in the per-week list below, not as one
-                    # season-long name at the top level.
+                    # The replacement is picked FRESH each week (see
+                    # depth_values_by_week) - a real teammate OR the best
+                    # streaming free agent, whichever the optimizer actually
+                    # prefers, can be a different specific player week to
+                    # week, so it lives in the per-week list below, not as
+                    # one season-long name at the top level.
                     "weekly": [
-                        {
-                            "week": w,
-                            "value_delta": vals["value_delta"].get(w, 0.0), "replacement_id": vals["replacement_id"].get(w),
-                            "value_delta_ww": vals["value_delta_ww"].get(w, 0.0), "ww_replacement_id": vals["ww_replacement_id"].get(w),
-                        }
+                        {"week": w, "value_delta": vals["value_delta"].get(w, 0.0), "replacement_id": vals["replacement_id"].get(w)}
                         for w in weeks
                     ],
                 }
             )
         for pos_list in depth_table.values():
-            pos_list.sort(key=lambda x: x["value_delta_ww"], reverse=True)
+            pos_list.sort(key=lambda x: x["value_delta"], reverse=True)
 
         team_ir_ids = frozenset(pid for pid in roster_ids if pid in ir_ids)
         # Compute once and derive both the "recommended pickups" shortlist and
@@ -1275,7 +1299,11 @@ def run_league(cfg: dict) -> dict:
 
     # --- meta ---
     for pid, entries in players_by_id.items():
-        weekly_sum = sum(w["projected"] for w in entries["weekly"])
+        # ros_total is only ever computed over the PROJECTED weeks (see
+        # project_player's weeks = range(current_week, final_week+1)) - a
+        # played week's entry in "weekly" (see above) has projected=None by
+        # design, nothing to include in this sum.
+        weekly_sum = sum(w["projected"] for w in entries["weekly"] if w["projected"] is not None)
         if abs(weekly_sum - entries["ros_total"]) > 0.01:
             warnings.append(f"player {pid} weekly sum {weekly_sum:.2f} != ros_total {entries['ros_total']:.2f}")
     if unmapped:
@@ -1283,6 +1311,11 @@ def run_league(cfg: dict) -> dict:
 
     meta = {
         "slug": slug,
+        # The real ESPN league id behind this site league - lets client JS
+        # pick "my league" out of cross-league pooled data (e.g. the FAAB
+        # bid_distribution dot-plot's source_league_id per bid) without
+        # hardcoding any one league, generalizing beyond just The O League.
+        "league_id": cfg["league_id"],
         "season": season, "current_week": current_week, "weeks_played": weeks_played, "final_week": final_week,
         "reg_season_count": reg_season_count, "generated_at": datetime.now(timezone.utc).isoformat(),
         "rankings_source": rankings_source, "curve_seasons": val_cfg["curve_seasons"],

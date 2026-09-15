@@ -405,6 +405,20 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
    accent-colored conditional_price marker) on the SAME track, moved live
    by the range input below it rather than a separately-scaled widget. */
 .faab-dist-marker-confidence { background: var(--blue-500); }
+/* Per-price-comp click-to-expand distribution (see docs/js/playermodal.js's
+   priceCompDistributionHtml) - every real bid tied to that comp's own
+   event, plotted as dots rather than an IQR band since there's no "middle
+   half" framing here, just individual real data points. The comp's own
+   value gets a bigger, accent-colored dot so it's findable among the rest. */
+.faab-dist-dot {
+  position: absolute; top: 1px; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--ink-500); transform: translateX(-50%);
+}
+.faab-dist-dot-self { top: -1px; width: 10px; height: 10px; background: var(--accent); z-index: 1; }
+/* Whichever real league the viewer is currently looking at the site as -
+   generalized via data.meta.league_id, not hardcoded to one league. A ring,
+   not a fill swap, so it still reads when the same dot is also -self. */
+.faab-dist-dot-mine { box-shadow: 0 0 0 2px var(--amber-500); z-index: 2; }
 .faab-confidence { margin-top: 12px; }
 .faab-confidence-row { display: flex; justify-content: space-between; align-items: baseline; font-size: 12.5px; margin-bottom: 4px; }
 .faab-confidence-bid { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--blue-500); }
@@ -698,18 +712,6 @@ details[open] summary { margin-bottom: 8px; }
 .modal-tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
 .modal-tabpanel { display: none; }
 .modal-tabpanel.active { display: block; }
-
-/* FAAB signal chips - won/outbid/other_failure/no_bid, reusing the site's
-   existing semantic colors (accent=good/won, amber=contested, red=failed,
-   muted=no interest) rather than inventing a parallel palette. */
-.sig-chip {
-  display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 10px;
-  font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; white-space: nowrap;
-}
-.sig-chip.sig-won { background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent); }
-.sig-chip.sig-outbid { background: color-mix(in srgb, var(--amber-500) 22%, transparent); color: var(--amber-500); }
-.sig-chip.sig-other_failure { background: color-mix(in srgb, var(--red-600) 18%, transparent); color: var(--red-600); }
-.sig-chip.sig-no_bid { background: color-mix(in srgb, var(--ink-500) 16%, transparent); color: var(--ink-500); }
 
 /* Comp tables' rank/flags cells stack two related numbers/badges on top of
    each other rather than adding two more columns - keeps the table from

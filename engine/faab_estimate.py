@@ -229,9 +229,22 @@ def build_event_won_rows_index(trainable_rows: list[dict]) -> dict[tuple, list[d
     """(season, week, add_player_id) -> every league's own WON row for that
     SAME real-world event - the cross-league analog of
     build_competing_bids_index (which is scoped to one league's own losing
-    bids). Built from trainable_rows (already excludes FREEAGENT
-    uncontested pickups and known-bad fat-fingered bids - see
-    load_trainable_rows) so this never needs to duplicate those exclusions.
+    bids). Callers should pass trainable_rows AFTER add_synthetic_price_wins
+    has already run on it (FaabModel.__init__ does this once, upstream, for
+    every trainable_rows consumer - see that function) - this filters to
+    signal == "won", which by then includes both real wins and each
+    league's own synthetic won-equivalent (the highest real bid in a league
+    where every real attempt on this event failed for a non-competitive
+    reason, e.g. contingency/roster-limit logistics - see
+    add_synthetic_price_wins' docstring). Without that upstream step, a
+    league whose own claim never executed but was still a real,
+    meaningfully-priced attempt would have its bid silently dropped from
+    this event's expansion any time some OTHER pooled league happened to
+    have a genuine win for the same event (the `or [r]` single-row fallback
+    in _price_comp_bid_distribution/price_confidence_samples only kicks in
+    when NO league is in this index at all) - real evidence lost precisely
+    when there was other league data to compare it against, not just when
+    there wasn't.
 
     Used by price_confidence_samples to expand a k-NN neighbor that
     consolidate_cross_league_events collapsed into one representative row
@@ -398,14 +411,19 @@ def consolidate_cross_league_events(rows: list[dict], *, is_price: bool) -> list
     The three points-based features differ by each league's own scoring
     rules and are averaged across every league involved.
 
-    is_price=False (interest pool): a deliberately simple "did the broader
-    market show interest at ALL" read - if any involved league's row isn't
-    no_bid, keep one such row (same won > outbid > other_failure priority
-    as dedupe_events_for_interest); otherwise keep a no_bid row. This does
-    NOT weight by how MANY of the involved leagues actually bid (a
-    documented simplification, not a claim that 1-of-20 leagues bidding is
-    as meaningful as 15-of-20) - a fractional-vote version would be a
-    reasonable future enhancement.
+    is_price=False (interest pool): the representative row's own signal is
+    still a deliberately simple "did the broader market show interest at
+    ALL" read - if any involved league's row isn't no_bid, keep one such
+    row (same won > outbid > other_failure priority as
+    dedupe_events_for_interest); otherwise keep a no_bid row. The fractional
+    picture IS captured separately though, via leagues_with_bid (count of
+    distinct leagues in the group whose own row isn't no_bid) and
+    leagues_eligible (len(group) - every league we have real data for this
+    event from, i.e. a real bid OR roster data confirming he was a free
+    agent there that week - see build_no_bid_rows). 1-of-20 leagues bidding
+    and 15-of-20 leagues bidding both still collapse to the same "won"/
+    "outbid" representative signal, but a UI can tell them apart via these
+    two counts instead of only the single collapsed signal.
 
     is_price=True (price pool): every row here is already a real "won" row
     (see build_price_rows) - one per league that won this event. Averages
@@ -433,7 +451,12 @@ def consolidate_cross_league_events(rows: list[dict], *, is_price: bool) -> list
     out = []
     for group in by_event.values():
         if len(group) == 1:
-            out.append(group[0])
+            row = group[0]
+            if not is_price:
+                row = dict(row)
+                row["leagues_with_bid"] = 0 if row["signal"] == "no_bid" else 1
+                row["leagues_eligible"] = 1
+            out.append(row)
             continue
         representative = dict(min(group, key=lambda r: signal_priority.get(r["signal"], 99)))
         for f in _CROSS_LEAGUE_POINTS_FEATURES:
@@ -442,6 +465,9 @@ def consolidate_cross_league_events(rows: list[dict], *, is_price: bool) -> list
         representative["consolidated_from_leagues"] = sorted({r["source_league_id"] for r in group})
         if is_price:
             representative["consolidated_target_pct"] = sum(target_pct(r) for r in group) / len(group)
+        else:
+            representative["leagues_with_bid"] = len({r["source_league_id"] for r in group if r["signal"] != "no_bid"})
+            representative["leagues_eligible"] = len(representative["consolidated_from_leagues"])
         o_league_row = next((r for r in group if r["source_league_id"] == O_LEAGUE_ID), None)
         representative["o_league_detail"] = (
             {"signal": o_league_row["signal"], "bid_dollars": o_league_row["bid_amount_dollars"] if o_league_row["signal"] == "won" else None}
@@ -452,27 +478,44 @@ def consolidate_cross_league_events(rows: list[dict], *, is_price: bool) -> list
     return out
 
 
-def build_price_rows(trainable_rows: list[dict]) -> list[dict]:
-    """The PRICE-stage training pool: every real won row, plus one
-    synthetic won-equivalent per event that has real bidding activity but
-    NO won or outbid row at all (an event whose only rows are
-    "other_failure" - see dedupe_events_for_interest) - that event's
-    HIGHEST other_failure bid_amount_dollars, treated as its
+def add_synthetic_price_wins(trainable_rows: list[dict]) -> list[dict]:
+    """trainable_rows PLUS one synthetic won-equivalent per (league, event)
+    that had real bidding activity in that league but NO won or outbid row
+    there at all (that league's own rows for this event are ALL
+    "other_failure" - see dedupe_events_for_interest) - that league's
+    HIGHEST other_failure bid_amount_dollars for this event, treated as its
     effective_cost_dollars (target_pct reads effective_cost_dollars, not
     bid_amount_dollars, so this is what actually makes it price like a won
     row). It never won, but it also never lost to a rival bid (that's
     "outbid", excluded from price for the censoring reason in the module
-    docstring) - it's the closest thing this event has to "what someone was
-    willing to pay," so on balance it's a better price observation than
-    dropping the event's price signal entirely.
+    docstring) - it's the closest thing this league had to "what someone
+    was willing to pay" for this event, so on balance it's a better price
+    observation than dropping this league's price signal for the event
+    entirely. Exactly one synthetic row per (source_league_id, season,
+    week, add_player_id) - never more, and never for a league that already
+    has a real won or outbid row for that same event.
 
-    Backtested against the alternative (drop these events from price
-    entirely, same as an outbid row) under the same event-grouped holdout:
-    a clear net win - overall MAE $7.63->$6.79, outbid-row MAE $50.62->
-    $31.60, RB MAE $19.09->$14.75, no_bid MAE $2.84->$2.50 - with won-row
-    MAE essentially flat ($44.46->$44.85, <1% - noise, not a real cost)."""
-    won = [r for r in trainable_rows if r["signal"] == "won"]
+    A pure ADDITION to trainable_rows, not a filter - callers needing just
+    the price-stage pool (every real+synthetic won row) should further
+    filter the result to signal == "won" (see build_price_rows). Doing the
+    promotion here, upstream of that filter, means every consumer of
+    trainable_rows sees these rows consistently - the interest stage
+    (dedupe_events_for_interest/consolidate_cross_league_events, is_price=
+    False) already treated the ORIGINAL other_failure row as real "someone
+    bid" interest evidence identically to a synthetic won row (both count
+    as signal != no_bid - see TRAINABLE_SIGNALS), so promoting it here
+    changes nothing for interest, but it DOES fix real cross-league price
+    provenance: build_event_won_rows_index built from trainable_rows
+    BEFORE this step ran would never see a league's own synthetic win at
+    all (see that function's docstring on the resulting data loss).
 
+    Backtested (as the price-stage won + synthetic split this produces via
+    build_price_rows) against the alternative (drop these events from
+    price entirely, same as an outbid row) under the same event-grouped
+    holdout: a clear net win - overall MAE $7.63->$6.79, outbid-row MAE
+    $50.62->$31.60, RB MAE $19.09->$14.75, no_bid MAE $2.84->$2.50 - with
+    won-row MAE essentially flat ($44.46->$44.85, <1% - noise, not a real
+    cost)."""
     by_event: dict[tuple, list[dict]] = defaultdict(list)
     for r in trainable_rows:
         by_event[(r.get("source_league_id"), r["season"], r["week"], r["add_player_id"])].append(r)
@@ -487,7 +530,15 @@ def build_price_rows(trainable_rows: list[dict]) -> list[dict]:
         best = max(other_failure_rows, key=lambda r: r["bid_amount_dollars"])
         synthetic.append({**best, "signal": "won", "effective_cost_dollars": best["bid_amount_dollars"]})
 
-    return won + synthetic
+    return trainable_rows + synthetic
+
+
+def build_price_rows(trainable_rows: list[dict]) -> list[dict]:
+    """The PRICE-stage training pool: every won row - real AND synthetic
+    (see add_synthetic_price_wins, which should already have run on
+    trainable_rows by the time this is called - this is just the filter,
+    not the promotion)."""
+    return [r for r in trainable_rows if r["signal"] == "won"]
 
 
 def feature_vector(r: dict) -> dict[str, float]:
@@ -613,8 +664,14 @@ def _feature_stats(rows: list[dict]) -> dict[str, tuple[float, float]]:
 
 def _knn(query: dict, pool: list[dict], stats: dict[str, tuple[float, float]], k: int) -> tuple[list[dict], list[float]]:
     """The k nearest same-position rows in pool, by standardized Euclidean
-    distance, plus their 1/(dist+0.05) weights - the one distance routine
-    both the interest and price k-NN searches share."""
+    distance, plus their raw 1/(dist+0.05) weights - the one distance
+    routine both the interest and price k-NN searches share. scored is
+    already sorted nearest-first (== highest-weight-first), so a caller
+    displaying comps in this same order needs no separate re-sort. These
+    are the SAME (unnormalized) weights callers use for the weighted-
+    average bid_probability/conditional_price - see _normalized_weights for
+    the display-friendly, sums-to-1 version _price_comp_dicts/
+    _interest_comp_dicts expose per comp."""
     same_pos = [r for r in pool if r["position"] == query["position"]]
 
     def vec(r):
@@ -622,9 +679,22 @@ def _knn(query: dict, pool: list[dict], stats: dict[str, tuple[float, float]], k
         return np.array([(fv[f] - stats[f][0]) / stats[f][1] for f in FEATURE_NAMES])
 
     qv = vec(query)
-    scored = sorted(same_pos, key=lambda r: np.linalg.norm(vec(r) - qv))[:k]
-    weights = [1.0 / (np.linalg.norm(vec(r) - qv) + 0.05) for r in scored]
+    all_dists = [float(np.linalg.norm(vec(r) - qv)) for r in same_pos]
+    order = sorted(range(len(same_pos)), key=lambda i: all_dists[i])[:k]
+    scored = [same_pos[i] for i in order]
+    weights = [1.0 / (all_dists[i] + 0.05) for i in order]
     return scored, weights
+
+
+def _normalized_weights(weights: list[float]) -> list[float]:
+    """weights rescaled to sum to 1 - a weighted-average result is
+    invariant to this (only the relative ratios between weights matter), so
+    this is purely a display transform for _price_comp_dicts/
+    _interest_comp_dicts: "this comp was 18% of the vote" reads a lot more
+    directly than the raw, unbounded 1/(dist+0.05) value it's derived
+    from."""
+    total = sum(weights)
+    return [w / total for w in weights] if total else weights
 
 
 def _comp_rank_and_injury_fields(r: dict) -> dict:
@@ -647,49 +717,106 @@ def _comp_rank_and_injury_fields(r: dict) -> dict:
     }
 
 
-def _price_comp_dicts(scored: list[dict], competing_bids_index: dict[tuple, list[dict]] | None) -> list[dict]:
+def _price_comp_bid_distribution(
+    r: dict, competing_bids_index: dict[tuple, list[dict]] | None, event_won_rows_index: dict[tuple, list[dict]] | None
+) -> list[dict]:
+    """{value, source_league_id, is_winner} for every REAL bid tied to this
+    comp's same real-world event (season, week, add_player_id) - every
+    pooled league's own winning price for it (via event_won_rows_index, the
+    same cross-league expansion price_confidence_samples uses for the
+    aggregate confidence slider) PLUS each of those leagues' own real
+    losing rival bids (via competing_bids_index) - both, not just the wins:
+    a rival's real losing bid is still a genuine data point about what that
+    same auction actually took to win. Degrades to just this row's own win
+    + its own rivals when the event was never actually cross-league (dollar
+    amounts from different leagues' own budgets were never comparable on
+    their own - see target_pct - this is what makes a real cross-league
+    distribution meaningful at all). This row's own pct_of_remaining_budget
+    is always one of the values returned, since its own league's win is
+    always part of its own event. source_league_id lets a caller pick out
+    "what happened in MY league" for any league, not just a hardcoded one -
+    see oLeagueTag in playermodal.js for the one case (o_league_detail) this
+    module still hardcodes, kept only because o_league_detail additionally
+    carries the raw un-normalized bid_dollars. Note this can't surface a
+    rival bid from a league where NO row here ever won this exact event
+    (competing_bids_index is only consulted per WINNING league, via
+    per_league_wins below) - a real gap, but ESPN's own outbid/won pairing
+    means that should only happen when the winning row itself is missing
+    from the data, not as a matter of course. Powers the price comp row's
+    click-to-expand view."""
+    key = (r["season"], r["week"], r["add_player_id"])
+    per_league_wins = (event_won_rows_index or {}).get(key) or [r]
+    values: list[dict] = []
+    for lr in per_league_wins:
+        budget = lr.get("effective_starting_budget")
+        if not budget:
+            continue
+        values.append({"value": lr["effective_cost_dollars"] / budget, "source_league_id": lr.get("source_league_id"), "is_winner": True})
+        rivals = [
+            b for b in (competing_bids_index or {}).get((lr.get("source_league_id"), lr["season"], lr["week"], lr["add_player_id"]), [])
+            if b["team_id"] != lr["team_id"]
+        ]
+        values.extend({"value": b["bid_dollars"] / budget, "source_league_id": lr.get("source_league_id"), "is_winner": False} for b in rivals)
+    return sorted(values, key=lambda v: v["value"])
+
+
+def _price_comp_dicts(
+    scored: list[dict],
+    weights: list[float],
+    competing_bids_index: dict[tuple, list[dict]] | None,
+    event_won_rows_index: dict[tuple, list[dict]] | None,
+) -> list[dict]:
     return [
         {
             "season": r["season"], "week": r["week"], "name": r["add_player_name"],
-            "signal": r["signal"], "bid_dollars": r["bid_amount_dollars"],
             # Same pct-of-remaining-budget transform behind the headline
-            # conditional_price, per comp - this is what a "distribution"
-            # actually means here: not a modeled confidence interval, but
-            # the real spread of what the K nearest WINNING comps actually
-            # cost their own bidder, as a % of what that bidder had left,
-            # in the same units as the point estimate (which is just this
-            # array's weighted average).
+            # conditional_price, per comp - this is what "% of budget" means
+            # here: not a modeled confidence interval, but the real cost
+            # this comp's own bidder(s) actually paid, as a % of what they
+            # had to spend. Deliberately no raw $ amount alongside it - a
+            # dollar figure from an unfamiliar pooled league's own budget
+            # scale isn't meaningfully comparable to anything a reader
+            # already knows, unlike this normalized %.
             "pct_of_remaining_budget": target_pct(r),
+            "bid_distribution": _price_comp_bid_distribution(r, competing_bids_index, event_won_rows_index),
             "prior_week_actual_points": r.get("prior_week_actual_points"),
             "snap_pct_prior_week": r.get("snap_pct_prior_week"),
             **_comp_rank_and_injury_fields(r),
-            # Other real bids that lost this SAME historical auction -
-            # context on how contested it was, not part of the price
-            # estimate itself (see module docstring).
-            "competing_bids": [
-                b for b in (competing_bids_index or {}).get((r.get("source_league_id"), r["season"], r["week"], r["add_player_id"]), [])
-                if b["team_id"] != r["team_id"]
-            ],
             # See consolidate_cross_league_events - real specificity from
             # The O League itself when this comp is actually a cross-league
             # consolidated event that included it.
             "o_league_detail": r.get("o_league_detail"),
+            # This comp's share (0-1, sums to 1 across every comp in this
+            # list) of the total weight behind the weighted-average
+            # bid_probability/conditional_price calc - see
+            # _normalized_weights. scored is already sorted nearest-first
+            # (== highest-weight-first).
+            "weight": w,
         }
-        for r in scored
+        for r, w in zip(scored, weights)
     ]
 
 
-def _interest_comp_dicts(scored: list[dict]) -> list[dict]:
+def _interest_comp_dicts(scored: list[dict], weights: list[float]) -> list[dict]:
     return [
         {
             "season": r["season"], "week": r["week"], "name": r["add_player_name"],
-            "signal": r["signal"],
             "prior_week_actual_points": r.get("prior_week_actual_points"),
             "snap_pct_prior_week": r.get("snap_pct_prior_week"),
             **_comp_rank_and_injury_fields(r),
             "o_league_detail": r.get("o_league_detail"),
+            # See _price_comp_dicts's identical field - same normalized weight.
+            "weight": w,
+            # See consolidate_cross_league_events - of the leagues we have
+            # real data for this exact (season, week, player) event (either
+            # a real bid, or roster data confirming he was a free agent
+            # there), how many actually saw a bid. Always present on a real
+            # interest_rows row (consolidate_cross_league_events sets both
+            # unconditionally); .get() only guards direct callers in tests.
+            "leagues_with_bid": r.get("leagues_with_bid"),
+            "leagues_eligible": r.get("leagues_eligible"),
         }
-        for r in scored
+        for r, w in zip(scored, weights)
     ]
 
 
@@ -702,39 +829,37 @@ def price_confidence_samples(
     competing_bids_index: dict[tuple, list[dict]] | None,
     event_won_rows_index: dict[tuple, list[dict]] | None = None,
 ) -> list[tuple[float, float]]:
-    """(value, weight) pairs - the raw material for a "bid $X for an
-    N% historical win rate" confidence slider. Two poolings happen here,
-    nested:
+    """(value, weight) pairs - the raw material for a "bid $X would have
+    won about N% of comparable historical auctions" confidence slider.
+    WINNERS ONLY: reuses _price_comp_bid_distribution's own per-comp
+    expansion (every pooled league's real winning price for that comp's
+    event - a k-NN neighbor that consolidate_cross_league_events collapsed
+    into one representative row gets expanded back out via
+    event_won_rows_index into every one of those leagues' own real winning
+    price, not just the single averaged consolidated_target_pct the point
+    estimate uses), filtered to is_winner.
 
-    1. ACROSS LEAGUES: a k-NN neighbor that consolidate_cross_league_events
-       collapsed into one representative row (because the same real-world
-       trigger - e.g. a real RB injury - was visible and bid on across many
-       pooled leagues) gets expanded back out via event_won_rows_index into
-       every one of those leagues' own real winning price, not just the
-       single averaged consolidated_target_pct the point estimate uses. If
-       a real event happened to be visible in 40 pooled leagues, this
-       neighbor contributes up to 40 real per-league outcomes, not 1.
-    2. WITHIN each of those per-league outcomes: that SAME league's own
-       real LOSING bids (see build_competing_bids_index) get pooled in too
-       - a losing bid is still a genuine data point about what a
-       comparable bidder was actually willing to pay.
-
-    Either pooling degrades gracefully to the plain single-row behavior
-    when event_won_rows_index is omitted, or when an event was never
-    actually cross-league (event_won_rows_index[key] == [r] - just itself).
+    Deliberately excludes real losing rival bids, unlike that function's
+    own dot-plot (which shows them for context) - a rival's amount is
+    never the real win/lose threshold for a candidate bid: the actual
+    winner's price is always >= any rival's in the same auction, so a
+    rival's amount can only ever UNDERSTATE what a bid needed to clear.
+    Treating it as a threshold anyway would make a bid look more likely to
+    win than it really was - worst in exactly the case where it matters
+    most, a real event whose actual winning row is missing from the data
+    (see _price_comp_bid_distribution's own docstring on that gap): the
+    only "threshold" left would be a rival's bid, understating the truth
+    rather than just having less data.
 
     Each NEIGHBOR's total weight is its own k-NN weight, split EVENLY
-    across every real bid it expands into across BOTH poolings combined -
-    not one full k-NN weight per bid, and not one full share per league
-    either. Without this, a real trigger visible in 100 leagues (or one
-    single-league auction with 5 real bidders) would get proportionally
-    more influence over the resulting distribution purely by virtue of
-    being pooled from more leagues or drawing more bids, not because it's
-    more relevant to the query - the exact same "one real event should be
-    one vote" failure mode dedupe_events_for_interest/
-    consolidate_cross_league_events already guard against elsewhere in
-    this file for the point estimate, just showing up in a new place for
-    the distribution.
+    across every real per-league WIN it expands into - not one full k-NN
+    weight per league, and (now that rivals are excluded) no longer diluted
+    by how many rivals happened to also bid in any of those leagues either:
+    a heavily-contested auction's real winning price shouldn't count for
+    LESS in this pool just because more people happened to lose it. Same
+    "one real event should be one vote" principle
+    dedupe_events_for_interest/consolidate_cross_league_events already
+    enforce elsewhere in this file for the point estimate.
 
     Every dollar amount is converted to %-of-budget units using ITS OWN
     row's effective_starting_budget - a real per-(league, season) constant
@@ -743,23 +868,11 @@ def price_confidence_samples(
     leagues' own budgets at once."""
     samples: list[tuple[float, float]] = []
     for r, w in zip(scored_price_comps, price_weights):
-        key = (r["season"], r["week"], r["add_player_id"])
-        per_league_wins = (event_won_rows_index or {}).get(key) or [r]
-        values: list[float] = []
-        for lr in per_league_wins:
-            budget = lr.get("effective_starting_budget")
-            if not budget:
-                continue
-            values.append(lr["effective_cost_dollars"] / budget)
-            rivals = [
-                b for b in (competing_bids_index or {}).get((lr.get("source_league_id"), lr["season"], lr["week"], lr["add_player_id"]), [])
-                if b["team_id"] != lr["team_id"]
-            ]
-            values.extend(b["bid_dollars"] / budget for b in rivals)
-        if not values:
+        wins = [v["value"] for v in _price_comp_bid_distribution(r, competing_bids_index, event_won_rows_index) if v["is_winner"]]
+        if not wins:
             continue
-        share = w / len(values)
-        samples.extend((v, share) for v in values)
+        share = w / len(wins)
+        samples.extend((v, share) for v in wins)
     return samples
 
 
@@ -813,27 +926,32 @@ def comp_based_estimate(
     real, useful context ("but you may not even need to bid"), shown
     separately, not multiplied in.
 
-    price_k (defaults to k when omitted) can widen the PRICE search
-    specifically, independent of the interest search's own k - see
-    price_confidence_samples: estimating a tail percentile for the
-    confidence-slider feature wants a bigger pool than a plain weighted
-    average needs to already be stable, and the two searches have no reason
-    to share one k just because they happened to default to the same
-    number historically."""
+    price_k (defaults to k when omitted) widens the PRICE search's
+    underlying neighbor pool specifically, independent of the interest
+    search's own k - but ONLY for price_confidence_samples: estimating a
+    tail percentile for the confidence-slider feature wants a bigger base
+    pool than a plain weighted average needs to already be stable. The
+    weighted-average conditional_price AND the displayed price comps table
+    both use just the nearest k of that wider pool (a k-NN search is
+    already sorted nearest-first, so the nearest k of a k-NN(price_k) call
+    IS exactly what a separate k-NN(k) call would return) - showing a
+    reader the same k comps that actually produced the number above it,
+    not a wider pool they never see most of."""
     stats = _feature_stats(interest_rows)
 
     interest_scored, interest_weights = _knn(query, interest_rows, stats, k)
     bid_probability = sum(w * (1.0 if r["signal"] != "no_bid" else 0.0) for w, r in zip(interest_weights, interest_scored)) / sum(interest_weights)
 
-    price_scored, price_weights = _knn(query, price_rows, stats, price_k or k)
+    price_scored_all, price_weights_all = _knn(query, price_rows, stats, price_k or k)
+    price_scored, price_weights = price_scored_all[:k], price_weights_all[:k]
     conditional_pct = sum(w * target_pct(r) for w, r in zip(price_weights, price_scored)) / sum(price_weights) if price_scored else 0.0
 
     return {
         "bid_probability": bid_probability,
         "conditional_price": conditional_pct,
-        "comps": _price_comp_dicts(price_scored, competing_bids_index),
-        "interest_comps": _interest_comp_dicts(interest_scored),
-        "price_confidence_samples": price_confidence_samples(price_scored, price_weights, competing_bids_index, event_won_rows_index),
+        "comps": _price_comp_dicts(price_scored, _normalized_weights(price_weights), competing_bids_index, event_won_rows_index),
+        "interest_comps": _interest_comp_dicts(interest_scored, _normalized_weights(interest_weights)),
+        "price_confidence_samples": price_confidence_samples(price_scored_all, price_weights_all, competing_bids_index, event_won_rows_index),
     }
 
 
@@ -991,12 +1109,23 @@ class FaabModel:
     def __init__(self, training_table_path: Path = TRAINING_TABLE_PATH):
         all_rows = json.loads(training_table_path.read_text())
         annotate_position_competition(all_rows)
-        trainable = load_trainable_rows(all_rows)
+        # add_synthetic_price_wins runs BEFORE any other trainable_rows
+        # consumer sees this data - every league's own synthetic won-
+        # equivalent (the highest other_failure bid for an event with no
+        # real won/outbid row in that league - see that function's
+        # docstring on why this is still a real price signal, just one
+        # that didn't execute) is baked in here once, so interest_rows,
+        # price_rows, and event_won_rows_index below all see it
+        # consistently instead of needing their own separate plumbing.
+        trainable = add_synthetic_price_wins(load_trainable_rows(all_rows))
         self.competing_bids_index = build_competing_bids_index(all_rows)
-        # Every league's own WON row per real event - see
-        # build_event_won_rows_index/price_confidence_samples. From
-        # trainable, not all_rows, so this never needs its own copy of
-        # load_trainable_rows' FREEAGENT/known-bad-bid exclusions.
+        # Every league's own WON (real or synthetic) row per real event -
+        # see build_event_won_rows_index/price_confidence_samples. A league
+        # whose own claim never executed (contingency, roster limit, etc.)
+        # but WAS the highest real attempt still has a real bid price worth
+        # keeping in this event's expansion, not silently dropped just
+        # because some OTHER pooled league happened to have a genuine win
+        # for the same real-world event.
         self.event_won_rows_index = build_event_won_rows_index(trainable)
         # consolidate_cross_league_events collapses the SAME real event
         # (season, week, add_player_id) won/seen across MULTIPLE pooled

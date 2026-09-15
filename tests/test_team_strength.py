@@ -59,22 +59,46 @@ def test_depth_values_by_week_spikes_on_starters_bye():
 
 
 def test_depth_values_waiver_backfill_reduces_value_delta():
+    # A rostered player's own consolidated value already accounts for the
+    # waiver wire - compare against the SAME roster with no free agents
+    # available at all, rather than two parallel fields on one call.
     players = {
         "rb1": _player("rb1", "RB", 20.0),
         "rb2": _player("rb2", "RB", 15.0),
     }
     fa = _player("fa1", "RB", 18.0)  # a strong free agent backfill option
-    free_agents = {"RB": [fa]}
-    values = depth_values(["rb1", "rb2"], players, free_agents, WEEKS, SLOTS, ELIGIBILITY)
+    values_no_fa = depth_values(["rb1", "rb2"], players, {}, WEEKS, SLOTS, ELIGIBILITY)
+    values_with_fa = depth_values(["rb1", "rb2"], players, {"RB": [fa]}, WEEKS, SLOTS, ELIGIBILITY)
     # losing rb1 (20 ppw starter) without backfill costs the full 20ppw*2wk;
     # with an 18ppw free agent available, the loss is much smaller.
-    assert values["rb1"]["value_delta_ww"] < values["rb1"]["value_delta"]
+    assert values_with_fa["rb1"]["value_delta"] < values_no_fa["rb1"]["value_delta"]
 
 
-def test_depth_values_by_week_names_a_replacement_that_can_change_weekly():
+def test_depth_values_by_week_prefers_bench_over_a_weaker_free_agent():
+    # A weak free agent is available, but the bench teammate outscores him
+    # every week - the free agent is only ADDED to the candidate pool, never
+    # forced into the lineup, so the bench teammate must still be named.
+    slots = {"RB": 1}
+    eligibility = {"RB": {"RB"}}
+    weeks = [1, 2]
+    players = {
+        "rb1": PlayerCtx(id="rb1", position="RB", ros_total=40.0, weekly={1: 20.0, 2: 20.0}),
+        "rb2": PlayerCtx(id="rb2", position="RB", ros_total=13.0, weekly={1: 5.0, 2: 8.0}),
+    }
+    free_agents = {"RB": [PlayerCtx(id="fa_weak", position="RB", ros_total=2.0, weekly={1: 1.0, 2: 1.0})]}
+    by_week = depth_values_by_week(["rb1", "rb2"], players, free_agents, weeks, slots, eligibility)
+    rb1 = by_week["rb1"]
+    assert rb1["replacement_id"] == {1: "rb2", 2: "rb2"}
+    assert rb1["value_delta"][1] == pytest.approx(15.0)  # 20 - rb2's wk1 5
+    assert rb1["value_delta"][2] == pytest.approx(12.0)  # 20 - rb2's wk2 8
+
+
+def test_depth_values_by_week_names_a_free_agent_replacement_that_can_change_weekly():
     # Two free agents whose better week flips: FA-A the better play in
-    # week 1, FA-B in week 2 - the NAMED replacement must flip with it,
-    # not stay pinned to whichever one wins by season-long ros_total.
+    # week 1, FA-B in week 2, both stronger than the bench teammate every
+    # week - the NAMED replacement must flip with it, not stay pinned to
+    # whichever one wins by season-long ros_total, and not fall back to the
+    # (weaker) bench teammate.
     slots = {"RB": 1}
     eligibility = {"RB": {"RB"}}
     weeks = [1, 2]
@@ -90,15 +114,24 @@ def test_depth_values_by_week_names_a_replacement_that_can_change_weekly():
     }
     by_week = depth_values_by_week(["rb1", "rb2"], players, free_agents, weeks, slots, eligibility)
     rb1 = by_week["rb1"]
-    # The bench teammate (rb2) absorbs rb1's vacated slot both weeks - the
-    # roster's only other RB, so no ambiguity there.
-    assert rb1["replacement_id"] == {1: "rb2", 2: "rb2"}
-    assert rb1["value_delta"][1] == pytest.approx(15.0)  # 20 - rb2's wk1 5
-    assert rb1["value_delta"][2] == pytest.approx(12.0)  # 20 - rb2's wk2 8
-    # The waiver replacement DOES flip week to week, picked fresh each time.
-    assert rb1["ww_replacement_id"] == {1: "fa_a", 2: "fa_b"}
-    assert rb1["value_delta_ww"][1] == pytest.approx(11.0)  # 20 - fa_a's wk1 9
-    assert rb1["value_delta_ww"][2] == pytest.approx(11.0)  # 20 - fa_b's wk2 9
+    assert rb1["replacement_id"] == {1: "fa_a", 2: "fa_b"}
+    assert rb1["value_delta"][1] == pytest.approx(11.0)  # 20 - fa_a's wk1 9
+    assert rb1["value_delta"][2] == pytest.approx(11.0)  # 20 - fa_b's wk2 9
+
+
+def test_depth_values_by_week_value_delta_floored_at_zero():
+    # A free agent who genuinely beats a mediocre rostered player can make
+    # the candidate lineup score HIGHER than the real one even with that
+    # player gone - a real negative raw delta, floored to 0 rather than
+    # shown as a negative "value".
+    slots = {"RB": 1}
+    eligibility = {"RB": {"RB"}}
+    weeks = [1]
+    players = {"rb1": PlayerCtx(id="rb1", position="RB", ros_total=5.0, weekly={1: 5.0})}
+    free_agents = {"RB": [PlayerCtx(id="fa_better", position="RB", ros_total=12.0, weekly={1: 12.0})]}
+    by_week = depth_values_by_week(["rb1"], players, free_agents, weeks, slots, eligibility)
+    assert by_week["rb1"]["value_delta"][1] == pytest.approx(0.0)
+    assert by_week["rb1"]["replacement_id"][1] == "fa_better"
 
 
 def test_depth_values_by_week_replacement_id_none_when_bench_too_thin():
