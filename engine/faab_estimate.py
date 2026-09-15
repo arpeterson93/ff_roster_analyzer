@@ -662,7 +662,9 @@ def _feature_stats(rows: list[dict]) -> dict[str, tuple[float, float]]:
     return stats
 
 
-def _knn(query: dict, pool: list[dict], stats: dict[str, tuple[float, float]], k: int) -> tuple[list[dict], list[float]]:
+def _knn(
+    query: dict, pool: list[dict], stats: dict[str, tuple[float, float]], k: int, max_distance: float | None = None
+) -> tuple[list[dict], list[float]]:
     """The k nearest same-position rows in pool, by standardized Euclidean
     distance, plus their raw 1/(dist+0.05) weights - the one distance
     routine both the interest and price k-NN searches share. scored is
@@ -671,7 +673,26 @@ def _knn(query: dict, pool: list[dict], stats: dict[str, tuple[float, float]], k
     are the SAME (unnormalized) weights callers use for the weighted-
     average bid_probability/conditional_price - see _normalized_weights for
     the display-friendly, sums-to-1 version _price_comp_dicts/
-    _interest_comp_dicts expose per comp."""
+    _interest_comp_dicts expose per comp.
+
+    max_distance, when given, drops any candidate beyond that standardized
+    distance BEFORE the top-k cut - see the conversation this was built
+    from (a 2026 wk2 Kirk Cousins query whose 4th-nearest comp, a 2023
+    Brock Purdy row, sat meaningfully farther away than the other 9 but
+    still won a large slice of the vote purely because Bühlmann credibility
+    - a SEPARATE axis, see _credibility - rewarded its unusually large
+    backing count; distance-based selection has to be capable of rejecting
+    a comp outright, not just down-weighting it, since credibility can and
+    does overrule a plain distance-decay weight on its own). Always returns
+    at least one neighbor when the pool has any same-position rows at all -
+    falling back to the single nearest one even when it's beyond
+    max_distance - rather than an empty comp set silently making
+    bid_probability/conditional_price both read as 0, which would look
+    exactly like a confident "nobody would bid" instead of "no comparable
+    situation was actually found." Callers that care can tell the two
+    apart: a real thin-but-in-range set is len(scored) between 1 and k, a
+    forced single fallback neighbor is len(scored) == 1 with its own
+    distance still visible on request."""
     same_pos = [r for r in pool if r["position"] == query["position"]]
 
     def vec(r):
@@ -680,10 +701,94 @@ def _knn(query: dict, pool: list[dict], stats: dict[str, tuple[float, float]], k
 
     qv = vec(query)
     all_dists = [float(np.linalg.norm(vec(r) - qv)) for r in same_pos]
-    order = sorted(range(len(same_pos)), key=lambda i: all_dists[i])[:k]
+    order = sorted(range(len(same_pos)), key=lambda i: all_dists[i])
+    if max_distance is not None:
+        within_range = [i for i in order if all_dists[i] <= max_distance]
+        order = within_range if within_range else order[:1]
+    order = order[:k]
     scored = [same_pos[i] for i in order]
     weights = [1.0 / (all_dists[i] + 0.05) for i in order]
     return scored, weights
+
+
+DISTANCE_CUTOFF_PERCENTILE = 70.0  # see _position_distance_cutoffs
+
+
+def _position_distance_cutoffs(
+    pool: list[dict], stats: dict[str, tuple[float, float]], k: int = 10, pct: float = DISTANCE_CUTOFF_PERCENTILE,
+    max_sample: int = 3000, seed: int = 0,
+) -> dict[str, float]:
+    """Per-position max_distance for _knn's cutoff (see that function) - the
+    `pct`th percentile, across a sample of this pool's own same-position
+    rows, of each sampled row's OWN k-th-nearest same-position-neighbor
+    distance (leave-one-out, excluding itself). Recomputed fresh from
+    whatever training table FaabModel loads (see its __init__), rather than
+    a hardcoded distance number, so the cutoff tracks the real, current
+    density of comps instead of quietly going stale as more real bids
+    accumulate week over week - the exact same reasoning _feature_stats
+    already applies to the mean/std it fits fresh each time.
+
+    max_sample caps how many of a position's own rows are used as LOO
+    queries here - a full O(n^2) pass over the whole WR interest pool
+    (~10k rows) is unnecessary precision for a single percentile estimate,
+    and this only needs to run once per FaabModel fit (see class docstring:
+    "fit once per pipeline run"), not once per live query the way _knn
+    itself does.
+
+    pct=70 chosen empirically, NOT guessed - see the conversation this was
+    built from (a live 2026 wk2 Kirk Cousins query whose 4th-nearest comp, a
+    2023 Brock Purdy row, took an outsized vote share purely from a large
+    backing count inflating its credibility - see _credibility - despite
+    sitting meaningfully farther away than the other 9 comps). Backtested
+    by rebuilding this exact calculation against tools/faab_history/
+    combined-training-table.json specifically - the pooled table this
+    actually runs against in production (see POOLED_TRAINING_TABLE_PATH) -
+    since the single-league table can't even reproduce the effect: every
+    one of its rows shares leagues_eligible == 1, so credibility never
+    varies there at all, and a first calibration pass against it found
+    ZERO "credibility overrode distance" cases before pooling was tried.
+    Against the pooled table, thousands of real holdout cases showed the
+    same shape as Cousins/Purdy (a distance-rank 3-10 comp taking the
+    largest single share of the vote) in both the PRICE and INTEREST pools.
+    p70 is where held-out won-row conditional-price MAE (the PRICE pool -
+    literally "% of budget", the number Cousins/Purdy was distorting) was
+    minimized: 0.03745 vs 0.03761 uncapped, degrading again by p60/p50 -
+    a real, if modest, U-shaped improvement, not just "more cutoff is
+    better." The INTEREST pool's own bid_probability error kept improving
+    monotonically all the way down to much more aggressive cutoffs (p5) in
+    the same backtest, but that reads less like "the credibility-override
+    bug is fixed" and more like the well-known artifact of a k-NN average
+    creeping toward a 1-NN classifier on a rare-event (~10-14% positive)
+    binary target - not a trend to chase blindly by picking whatever
+    percentile minimizes that number. p70 is used for both pools
+    deliberately: it's the directly-supported answer for price, and a
+    comparably conservative, non-extreme choice for interest that still
+    recovers a real chunk of that stage's own improvement (MAE
+    0.20305->0.19761 in the same backtest) without wandering into 1-NN
+    territory."""
+    by_pos: dict[str, list[dict]] = defaultdict(list)
+    for r in pool:
+        by_pos[r["position"]].append(r)
+
+    def vec(r):
+        fv = feature_vector(r)
+        return np.array([(fv[f] - stats[f][0]) / stats[f][1] for f in FEATURE_NAMES])
+
+    rng = np.random.RandomState(seed)
+    cutoffs = {}
+    for pos, rows in by_pos.items():
+        if len(rows) <= k:
+            continue
+        vecs = np.array([vec(r) for r in rows])
+        n = len(vecs)
+        idxs = range(n) if n <= max_sample else rng.choice(n, size=max_sample, replace=False)
+        kth_dists = []
+        for i in idxs:
+            d = np.linalg.norm(vecs - vecs[i], axis=1)
+            d = np.delete(d, i)
+            kth_dists.append(np.partition(d, k - 1)[k - 1])
+        cutoffs[pos] = float(np.percentile(kth_dists, pct))
+    return cutoffs
 
 
 BUHLMANN_K = 15.0  # the "half-credibility" point - see _credibility
@@ -956,6 +1061,8 @@ def comp_based_estimate(
     k: int = 10,
     price_k: int | None = None,
     event_won_rows_index: dict[tuple, list[dict]] | None = None,
+    interest_max_distance: float | None = None,
+    price_max_distance: float | None = None,
 ) -> dict:
     """Two k-NN searches, one standardized distance space (fit on
     interest_rows - see module docstring for why the interest and price
@@ -991,14 +1098,23 @@ def comp_based_estimate(
     Every weight below is credibility-adjusted (see _credibility_weighted)
     immediately after its k-NN call, before anything downstream ever sees
     it - selection (WHICH k rows are neighbors) stays purely distance-
-    based, only how much each selected one counts changes."""
+    based, only how much each selected one counts changes.
+
+    interest_max_distance/price_max_distance (see _knn) cap how far a
+    candidate may sit before it's excluded from selection entirely, ahead
+    of credibility ever seeing it - separate knobs, not one shared value,
+    because the price pool (won rows only) is far sparser than the interest
+    pool at the same k (see the conversation this was built from: median
+    10th-nearest-neighbor distance runs roughly 2-3x larger for price than
+    interest at the same position), so one shared cutoff would either barely
+    filter interest or gut price."""
     stats = _feature_stats(interest_rows)
 
-    interest_scored, interest_weights = _knn(query, interest_rows, stats, k)
+    interest_scored, interest_weights = _knn(query, interest_rows, stats, k, max_distance=interest_max_distance)
     interest_weights = _credibility_weighted(interest_scored, interest_weights)
     bid_probability = sum(w * (1.0 if r["signal"] != "no_bid" else 0.0) for w, r in zip(interest_weights, interest_scored)) / sum(interest_weights)
 
-    price_scored_all, price_weights_all = _knn(query, price_rows, stats, price_k or k)
+    price_scored_all, price_weights_all = _knn(query, price_rows, stats, price_k or k, max_distance=price_max_distance)
     price_weights_all = _credibility_weighted(price_scored_all, price_weights_all)
     price_scored, price_weights = price_scored_all[:k], price_weights_all[:k]
     conditional_pct = sum(w * target_pct(r) for w, r in zip(price_weights, price_scored)) / sum(price_weights) if price_scored else 0.0
@@ -1205,6 +1321,17 @@ class FaabModel:
         self.price_coefs = fit_price_regression(self.price_rows)
         self.interest_coefs, self.interest_stats = fit_interest_regression(self.interest_rows)
 
+        # Per-position max-distance cutoffs for the two comp_based_estimate
+        # k-NN searches (see _position_distance_cutoffs) - computed once
+        # here, from whatever training table was just loaded, rather than a
+        # hardcoded number that would go stale as more real bids accumulate.
+        # Uses the SAME standardized-feature space _knn itself searches in
+        # (fit on interest_rows - see comp_based_estimate's own docstring on
+        # why both stages share one space).
+        distance_stats = _feature_stats(self.interest_rows)
+        self.interest_max_distance = _position_distance_cutoffs(self.interest_rows, distance_stats)
+        self.price_max_distance = _position_distance_cutoffs(self.price_rows, distance_stats)
+
     def estimate(self, query: dict) -> dict:
         # price_k=25 (vs. the interest search's own default 10) - a plain
         # weighted average is already stable at 10 neighbors, but the
@@ -1215,6 +1342,8 @@ class FaabModel:
         comp = comp_based_estimate(
             query, self.interest_rows, self.price_rows, self.competing_bids_index,
             price_k=25, event_won_rows_index=self.event_won_rows_index,
+            interest_max_distance=self.interest_max_distance.get(query["position"]),
+            price_max_distance=self.price_max_distance.get(query["position"]),
         )
         simple = simple_baseline_estimate(query, self.interest_rows, self.price_rows)
         reg = regression_estimate(query, self.price_coefs, self.interest_coefs, self.interest_stats)

@@ -4,8 +4,11 @@ from engine.faab_estimate import (
     _backing_count,
     _credibility,
     _credibility_weighted,
+    _feature_stats,
     _interest_comp_dicts,
+    _knn,
     _normalized_weights,
+    _position_distance_cutoffs,
     _price_comp_bid_distribution,
     _price_comp_dicts,
     add_synthetic_price_wins,
@@ -478,3 +481,70 @@ def test_comp_based_estimate_favors_a_well_backed_comp_over_an_equally_close_thi
     # 40-league comp should pull the blended result well below 0.5, not
     # leave it at the equal-weight midpoint.
     assert out["bid_probability"] < 0.3
+
+
+def test_knn_max_distance_excludes_neighbors_beyond_the_cutoff():
+    query = _bid_row(0, add_player_id=0, prior_week_actual_points=10.0)
+    near = [_bid_row(1, add_player_id=i, prior_week_actual_points=10.0 + i * 0.1) for i in range(5)]
+    far = _bid_row(1, add_player_id=99, prior_week_actual_points=500.0)
+    pool = near + [far]
+    stats = _feature_stats(pool)
+    scored, _ = _knn(query, pool, stats, k=10, max_distance=0.5)
+    assert far not in scored
+    assert len(scored) == 5
+
+
+def test_knn_max_distance_none_matches_uncapped_behavior():
+    # Default (None) must reproduce today's plain nearest-k behavior exactly -
+    # this is the existing production default, so adding the cutoff must be
+    # a no-op unless a caller opts in.
+    query = _bid_row(0, add_player_id=0, prior_week_actual_points=10.0)
+    pool = [_bid_row(1, add_player_id=i, prior_week_actual_points=float(i)) for i in range(20)]
+    stats = _feature_stats(pool)
+    uncapped = _knn(query, pool, stats, k=10)
+    capped_none = _knn(query, pool, stats, k=10, max_distance=None)
+    assert uncapped == capped_none
+
+
+def test_knn_max_distance_falls_back_to_single_nearest_rather_than_empty():
+    # Never an empty comp set - see _knn's docstring: an empty set would
+    # read exactly like a confident "nobody would bid"/"$0", not "no
+    # comparable situation was found."
+    query = _bid_row(0, add_player_id=0, prior_week_actual_points=10.0)
+    pool = [_bid_row(1, add_player_id=i, prior_week_actual_points=200.0 + i) for i in range(5)]
+    stats = _feature_stats(pool)
+    scored, weights = _knn(query, pool, stats, k=10, max_distance=1e-9)
+    assert len(scored) == 1
+    assert len(weights) == 1
+
+
+def test_comp_based_estimate_forwards_max_distance_and_never_returns_empty_comps():
+    query = _bid_row(0, add_player_id=0, prior_week_actual_points=10.0)
+    interest_rows = [_bid_row(1, add_player_id=i, prior_week_actual_points=float(i)) for i in range(9)]
+    price_rows = [
+        _bid_row(1, add_player_id=i, prior_week_actual_points=float(i), effective_cost_dollars=5.0, effective_starting_budget=50.0)
+        for i in range(9)
+    ]
+    out = comp_based_estimate(query, interest_rows, price_rows, k=10, interest_max_distance=1e-9, price_max_distance=1e-9)
+    # An impossibly tight cutoff still yields exactly one neighbor each (the
+    # guaranteed single-nearest fallback - see _knn), not an empty set.
+    assert len(out["interest_comps"]) == 1
+    assert len(out["comps"]) == 1
+
+
+def test_position_distance_cutoffs_returns_a_percentile_per_position():
+    rows = [_bid_row(1, add_player_id=i, position="RB", prior_week_actual_points=float(i)) for i in range(20)]
+    stats = _feature_stats(rows)
+    cutoffs = _position_distance_cutoffs(rows, stats, k=5, pct=50.0)
+    assert "RB" in cutoffs
+    assert cutoffs["RB"] > 0
+    # A stricter (lower) percentile must never produce a LARGER cutoff.
+    tighter = _position_distance_cutoffs(rows, stats, k=5, pct=10.0)
+    assert tighter["RB"] <= cutoffs["RB"]
+
+
+def test_position_distance_cutoffs_skips_a_position_with_too_few_rows_for_k():
+    rows = [_bid_row(1, add_player_id=i, position="TE", prior_week_actual_points=float(i)) for i in range(3)]
+    stats = _feature_stats(rows)
+    cutoffs = _position_distance_cutoffs(rows, stats, k=5)
+    assert "TE" not in cutoffs
