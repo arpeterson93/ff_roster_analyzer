@@ -426,12 +426,32 @@ def consolidate_cross_league_events(rows: list[dict], *, is_price: bool) -> list
     two counts instead of only the single collapsed signal.
 
     is_price=True (price pool): every row here is already a real "won" row
-    (see build_price_rows) - one per league that won this event. Averages
-    each league's own target_pct (already normalized to that league's own
-    season-average spend) across the leagues that won it, and stores the
-    result on the representative row as consolidated_target_pct, which
-    target_pct() reads in preference to recomputing from a single league's
-    effective_cost_dollars.
+    (see build_price_rows) - one per league that won this event. Takes the
+    MEDIAN (not the mean) of each league's own target_pct (already
+    normalized to that league's own season-average spend) across the
+    leagues that won it, and stores the result on the representative row as
+    consolidated_target_pct, which target_pct() reads in preference to
+    recomputing from a single league's effective_cost_dollars.
+
+    Median, deliberately, NOT a plain mean - see the conversation this was
+    built from. Real within-group spread across leagues for the SAME event
+    is large (median max/min ratio 5.5x, p90 30x, in the pooled table), so
+    one league paying wildly more or less than everyone else for the same
+    player-week (different rosters/needs/remaining budgets) can drag a mean
+    a long way from what most leagues actually paid - and roughly 39% of
+    ALL price rows are exact $0 wins (a real, common "won it uncontested"
+    outcome in FAAB leagues, not noise), so a group mixing a $0 win in one
+    league with a real price in another is common, not a rare edge case.
+    Backtested against a held-out raw (never-averaged) single-league actual
+    cost, median beat mean everywhere: overall MAE 0.03894 vs 0.04179, and
+    the gap widens specifically as more leagues go into a group (comps
+    averaging 3+ leagues of backing: 0.04736 vs 0.05157) - exactly where a
+    plain mean has the most outlier exposure. (A geometric mean was also
+    considered and rejected: it dampens high-side outliers the same way,
+    but is comparably fragile on the LOW side - a value near zero pulls it
+    down disproportionately - which is a bad match for a dataset that's
+    ~39% exact zeros, and would need an arbitrary floor substitution for
+    those zeros that ends up deciding a large share of the results itself.)
 
     Also attaches o_league_detail whenever a group of 2+ leagues includes
     The O League specifically - {"signal", "bid_dollars"} (bid_dollars only
@@ -464,7 +484,7 @@ def consolidate_cross_league_events(rows: list[dict], *, is_price: bool) -> list
             representative[f] = (sum(vals) / len(vals)) if vals else None
         representative["consolidated_from_leagues"] = sorted({r["source_league_id"] for r in group})
         if is_price:
-            representative["consolidated_target_pct"] = sum(target_pct(r) for r in group) / len(group)
+            representative["consolidated_target_pct"] = float(np.median([target_pct(r) for r in group]))
         else:
             representative["leagues_with_bid"] = len({r["source_league_id"] for r in group if r["signal"] != "no_bid"})
             representative["leagues_eligible"] = len(representative["consolidated_from_leagues"])

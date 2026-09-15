@@ -83,11 +83,13 @@ def test_consolidate_cross_league_events_passes_through_single_league_events():
     assert len(out) == 2
 
 
-def test_consolidate_cross_league_events_averages_price_across_leagues():
+def test_consolidate_cross_league_events_medians_price_across_leagues():
     # Same real event (season, week, player) won in two different leagues,
     # at different dollar amounts and different effective budgets - must
-    # collapse to ONE row whose consolidated_target_pct is the average of
-    # each league's own target_pct, not either league's raw dollars.
+    # collapse to ONE row whose consolidated_target_pct is the MEDIAN of
+    # each league's own target_pct, not either league's raw dollars. At n=2
+    # the median IS the mean of the two values - see the next test for a
+    # case where they diverge.
     rows = [
         _bid_row(1, effective_cost_dollars=10.0, effective_starting_budget=40.0),  # target_pct = 10/40 = 0.25
         _bid_row(2, effective_cost_dollars=6.0, effective_starting_budget=20.0),  # target_pct = 6/20 = 0.30
@@ -96,6 +98,23 @@ def test_consolidate_cross_league_events_averages_price_across_leagues():
     assert len(out) == 1
     assert target_pct(out[0]) == pytest.approx((0.25 + 0.30) / 2)
     assert out[0]["consolidated_from_leagues"] == [1, 2]
+
+
+def test_consolidate_cross_league_events_price_median_resists_a_single_outlier_league():
+    # Three leagues won the same real event: two paid a similar, modest
+    # price and one paid far more (a real, common pattern - see the
+    # conversation this was built from: median max/min ratio within a
+    # group is 5.5x at the pooled-table median, 30x at p90). A mean would
+    # get dragged a long way toward the outlier; the median should land on
+    # the middle (unaffected) value instead.
+    rows = [
+        _bid_row(1, effective_cost_dollars=2.0, effective_starting_budget=40.0),  # target_pct = 0.05
+        _bid_row(2, effective_cost_dollars=3.0, effective_starting_budget=40.0),  # target_pct = 0.075
+        _bid_row(3, effective_cost_dollars=36.0, effective_starting_budget=40.0),  # target_pct = 0.90 - the outlier
+    ]
+    out = consolidate_cross_league_events(rows, is_price=True)
+    assert len(out) == 1
+    assert target_pct(out[0]) == pytest.approx(0.075)  # the middle value, not the mean (~0.34)
 
 
 def test_consolidate_cross_league_events_averages_points_features():
