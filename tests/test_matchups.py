@@ -2,10 +2,12 @@ import polars as pl
 import pytest
 
 from engine.matchups import (
+    MatchupIndex,
     _index_for_basis,
     _rank_positions,
     allowed_by_team_week_pos,
     compute_matchup_index,
+    compute_schedule_strength,
     dst_points_by_team_week_pos,
     points_by_team_week_pos,
     team_weeks_from_opponent,
@@ -248,3 +250,64 @@ def test_prior_season_fallback_weight():
     cur_index_1wk, _ = _index_for_basis(cur_points, OPPONENT, week1_only, ["WR"], lambda ws: ws)
     w = 1 / 3
     assert half_a == pytest.approx(w * cur_index_1wk["WR"]["A"] + (1 - w) * prior_a, abs=1e-6)
+
+
+# Reuses OPPONENT's 4-team round robin (week1: A-B/C-D, week2: A-C/B-D,
+# week3: A-D/B-C) with a hand-picked, all-distinct index so averaging over
+# the full 3-week window has no ties to arbitrate.
+_SCHEDULE_INDEX = {"WR": {"A": 1.0, "B": 1.5, "C": 0.5, "D": 2.0}}
+
+
+def test_compute_schedule_strength_averages_the_opponents_index_over_the_window():
+    mi = MatchupIndex(index=_SCHEDULE_INDEX)
+    result = compute_schedule_strength(
+        mi, OPPONENT, ["A", "B", "C", "D"], ["WR"], {"reg": [1, 2, 3]}, index_clamp=(0.0, 10.0)
+    )
+    # A's opponents weeks 1-3: B(1.5), C(0.5), D(2.0).
+    assert result.avg_index["reg"]["WR"]["A"] == pytest.approx((1.5 + 0.5 + 2.0) / 3)
+    # C's opponents: D(2.0), A(1.0), B(1.5) - the best average of the four.
+    assert result.avg_index["reg"]["WR"]["C"] == pytest.approx((2.0 + 1.0 + 1.5) / 3)
+
+
+def test_compute_schedule_strength_ranks_highest_average_index_as_1():
+    mi = MatchupIndex(index=_SCHEDULE_INDEX)
+    result = compute_schedule_strength(
+        mi, OPPONENT, ["A", "B", "C", "D"], ["WR"], {"reg": [1, 2, 3]}, index_clamp=(0.0, 10.0)
+    )
+    ranks = result.rank["reg"]["WR"]
+    assert ranks["C"] == 1  # highest average index (1.5) = best remaining schedule
+    assert ranks["A"] == 2
+    assert ranks["B"] == 3
+    assert ranks["D"] == 4  # lowest average index (1.0) = toughest remaining schedule
+
+
+def test_compute_schedule_strength_supports_independent_timeframes():
+    # "reg" = week 1 only (A faces B, index 1.5); "playoffs" = week 3 only
+    # (A faces D, index 2.0) - each timeframe's window is independent.
+    mi = MatchupIndex(index=_SCHEDULE_INDEX)
+    result = compute_schedule_strength(
+        mi, OPPONENT, ["A", "B", "C", "D"], ["WR"], {"reg": [1], "playoffs": [3]}, index_clamp=(0.0, 10.0)
+    )
+    assert result.avg_index["reg"]["WR"]["A"] == pytest.approx(1.5)
+    assert result.avg_index["playoffs"]["WR"]["A"] == pytest.approx(2.0)
+
+
+def test_compute_schedule_strength_omits_a_team_with_no_weeks_in_the_window():
+    # A team already past reg_season_count has no "reg" weeks left at all -
+    # it should be absent from that window's rank/avg_index rather than
+    # given an arbitrary rank (see the function's own docstring).
+    mi = MatchupIndex(index=_SCHEDULE_INDEX)
+    result = compute_schedule_strength(mi, OPPONENT, ["A", "B", "C", "D"], ["WR"], {"reg": []}, index_clamp=(0.0, 10.0))
+    assert result.avg_index["reg"]["WR"] == {}
+    assert result.rank["reg"]["WR"] == {}
+
+
+def test_compute_schedule_strength_clamps_before_averaging():
+    # An index value outside the clamp bounds must be clamped BEFORE it goes
+    # into the average - same clamping project_player applies per week.
+    mi = MatchupIndex(index={"WR": {"A": 1.0, "B": 5.0}})  # B way outside (0.5, 1.5)
+    result = compute_schedule_strength(
+        mi, OPPONENT, ["A", "B", "C", "D"], ["WR"], {"reg": [1]}, index_clamp=(0.5, 1.5)
+    )
+    # A's week-1 opponent is B (raw index 5.0, clamped to 1.5).
+    assert result.avg_index["reg"]["WR"]["A"] == pytest.approx(1.5)

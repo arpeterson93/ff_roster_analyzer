@@ -147,6 +147,59 @@ def _rank_positions(index: dict[str, dict[str, float]]) -> dict[str, dict[str, i
     return rank
 
 
+@dataclass
+class ScheduleStrength:
+    """1-32 rank (and the raw averaged index behind it) per (timeframe,
+    position, team) - see compute_schedule_strength."""
+
+    rank: dict[str, dict[str, dict[str, int]]] = field(default_factory=dict)
+    avg_index: dict[str, dict[str, dict[str, float]]] = field(default_factory=dict)
+
+
+def compute_schedule_strength(
+    matchup_index: MatchupIndex,
+    opponent: dict[tuple[str, int], str | None],
+    teams: list[str],
+    positions: list[str],
+    weeks_by_timeframe: dict[str, list[int]],
+    index_clamp: tuple[float, float],
+) -> ScheduleStrength:
+    """How favorable a TEAM's own remaining schedule is, per position, over
+    a given window of weeks (e.g. "reg" = remaining regular-season weeks,
+    "playoffs" = the fantasy-playoff weeks) - the "best remaining schedule"
+    view, as opposed to MatchupIndex's own single-week matchup rank.
+
+    Reuses the exact per-week opponent-index lookup project_player already
+    uses for a single week (matchup_index.index[pos].get(opponent), clamped
+    the same way), just averaged across a whole window of weeks instead of
+    one, then ranked across all 32 teams in the same direction
+    _rank_positions already uses for a single week: 1 = highest average
+    index = that team's offense facing the weakest defenses on average over
+    this window = the best fantasy schedule. A team with no weeks in a
+    given window (already past reg_season_count when "reg" is asked for,
+    say) is simply absent from that window's rank/avg_index, rather than
+    given an arbitrary rank - there's no real schedule left to rank."""
+    result = ScheduleStrength()
+    for timeframe, weeks in weeks_by_timeframe.items():
+        result.rank[timeframe] = {}
+        result.avg_index[timeframe] = {}
+        for pos in positions:
+            avg_by_team: dict[str, float] = {}
+            for team in teams:
+                vals = []
+                for w in weeks:
+                    opp = opponent.get((team, w))
+                    if opp is None:  # bye
+                        continue
+                    vals.append(_clamp(matchup_index.index.get(pos, {}).get(opp, 1.0), index_clamp))
+                if vals:
+                    avg_by_team[team] = float(np.mean(vals))
+            result.avg_index[timeframe][pos] = avg_by_team
+            ordered = sorted(avg_by_team.items(), key=lambda kv: kv[1], reverse=True)
+            result.rank[timeframe][pos] = {team: i + 1 for i, (team, _) in enumerate(ordered)}
+    return result
+
+
 def compute_matchup_index(
     current_points: dict[tuple[str, int, str], float],
     prior_points: dict[tuple[str, int, str], float],

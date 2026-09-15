@@ -1,5 +1,5 @@
 import { fmt, escapeHtml, getYourTeam } from "./state.js";
-import { POSITION_COLOR, opponentCellHtml, teamLabel, playerPhotoHtml, weeklyProjection } from "./colors.js";
+import { POSITION_COLOR, opponentCellHtml, teamLabel, playerPhotoHtml, weeklyProjection, colorForRatio, ratioForRank } from "./colors.js";
 import { openModal } from "./modal.js";
 import { groupedHeaderHtml, statCellsHtml } from "./statcolumns.js";
 
@@ -757,6 +757,22 @@ function nmdDetailSection(player, data) {
   `;
 }
 
+// A single "best remaining schedule" rank pill (1-32, 1 = best), colored the
+// same way every other matchup rank on the site is (see colors.js's
+// ratioForRank/colorForRatio - the same 0-1 spread opponentCellHtml uses for
+// a single week's matchup, just applied to this player's team's whole
+// remaining-schedule average instead of one week). avgIndex (the raw
+// averaged opponent-adjustment factor behind the rank) rides along as the
+// hover tooltip, same pattern as opponentCellHtml's own rank tooltip.
+function scheduleRankPillHtml(rank, avgIndex, timeframeLabel) {
+  if (rank === null || rank === undefined) return `<span class="muted">&ndash;</span>`;
+  const color = colorForRatio(ratioForRank(rank));
+  const title = avgIndex !== null && avgIndex !== undefined
+    ? `title="${timeframeLabel} schedule rank ${rank} of 32 (1 = best) - opponents allow ${(avgIndex * 100).toFixed(0)}% of an average defense's rate, on average, over this span"`
+    : `title="${timeframeLabel} schedule rank ${rank} of 32 (1 = best)"`;
+  return `<span class="pill" style="background:${color}" ${title}>${rank}</span>`;
+}
+
 // The single-player modal's full inner HTML: header/stat-grid, then always
 // two tabs (Weekly projections, Week-to-week NMD) plus a third (FAAB Lab)
 // only for players on ESPN "WAIVERS" status this week (see engine/
@@ -779,9 +795,10 @@ function playerModalContentHtml(player, data) {
       </div>
     </div>
     <div class="player-stat-grid">
-      <div class="stat-tile"><div class="stat-label">Baseline</div><div class="stat-value">${fmt(player.baseline_ppg, 1)} ppg</div></div>
-      <div class="stat-tile"><div class="stat-label">ROS total</div><div class="stat-value">${fmt(player.ros_total, 1)}</div></div>
-      <div class="stat-tile"><div class="stat-label">Reg / Playoff</div><div class="stat-value">${fmt(player.reg_total, 1)} / ${fmt(player.playoff_total, 1)}</div></div>
+      <div class="stat-tile">
+        <div class="stat-label">Reg / Playoff sched</div>
+        <div class="stat-value">${scheduleRankPillHtml(player.reg_schedule_rank, player.reg_schedule_index, "Regular season")} / ${scheduleRankPillHtml(player.playoff_schedule_rank, player.playoff_schedule_index, "Fantasy playoff")}</div>
+      </div>
       <div class="stat-tile"><div class="stat-label">Value</div><div class="stat-value">${player.value_delta !== null ? fmt(player.value_delta, 1) : "–"}</div></div>
     </div>
   `;

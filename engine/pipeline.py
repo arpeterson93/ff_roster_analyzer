@@ -26,6 +26,7 @@ from engine.faab_estimate import (
 from engine.matchups import (
     allowed_by_team_week_pos,
     compute_matchup_index,
+    compute_schedule_strength,
     dst_points_by_team_week_pos,
     points_by_team_week_pos,
     team_weeks_from_opponent,
@@ -663,6 +664,20 @@ def run_league(cfg: dict) -> dict:
     prior_all_weeks = sorted({w for (_, w) in prior_opponent.keys()})
     prior_team_weeks = team_weeks_from_opponent(prior_opponent, all_nfl_teams, prior_all_weeks)
 
+    # "Best remaining schedule" per team/position, over the REMAINING regular
+    # season and separately over the fantasy playoff weeks - a team already
+    # past reg_season_count (mid-playoffs) simply has no "reg" weeks left, so
+    # it's absent from that window's rank rather than assigned an arbitrary
+    # one (see compute_schedule_strength).
+    schedule_strength = compute_schedule_strength(
+        matchup_index, opponent, all_nfl_teams, matchup_positions,
+        {
+            "reg": list(range(current_week, reg_season_count + 1)),
+            "playoffs": list(range(reg_season_count + 1, final_week + 1)),
+        },
+        tuple(val_cfg["index_clamp"]),
+    )
+
     current_allowed = allowed_by_team_week_pos(current_points, opponent, current_team_weeks, matchup_positions)
     prior_allowed = allowed_by_team_week_pos(prior_points, prior_opponent, prior_team_weeks, matchup_positions)
 
@@ -748,6 +763,12 @@ def run_league(cfg: dict) -> dict:
                 ir_ids.add(res.id)
 
         position_avg = curve.position_avg.get(p.position, 0.0)
+        # This player's NFL team's own 1-32 "best remaining schedule" rank at
+        # his position (see compute_schedule_strength) - None if that window
+        # has no weeks left for his team (e.g. already past reg_season_count
+        # for "reg"), same as any other not-yet-ranked field on this site.
+        reg_schedule_rank = schedule_strength.rank.get("reg", {}).get(p.position, {}).get(p.nfl_team)
+        playoff_schedule_rank = schedule_strength.rank.get("playoffs", {}).get(p.position, {}).get(p.nfl_team)
         players_out.append(
             {
                 "id": res.id, "espn_id": p.espn_id, "fp_id": ros_row["fp_id"] if ros_row else None,
@@ -759,6 +780,9 @@ def run_league(cfg: dict) -> dict:
                 "rank_std": ros_row["rank_std"] if ros_row else None, "week_pos_rank": week_pos_rank,
                 "baseline_ppg": proj.baseline_ppg, "ros_total": proj.ros_total, "reg_total": proj.reg_total,
                 "playoff_total": proj.playoff_total, "this_week": proj.this_week,
+                "reg_schedule_rank": reg_schedule_rank, "playoff_schedule_rank": playoff_schedule_rank,
+                "reg_schedule_index": schedule_strength.avg_index.get("reg", {}).get(p.position, {}).get(p.nfl_team),
+                "playoff_schedule_index": schedule_strength.avg_index.get("playoffs", {}).get(p.position, {}).get(p.nfl_team),
                 "value_delta": None,
                 "position_avg_ratio": (proj.baseline_ppg / position_avg) if position_avg else None,
                 # project_player only ever projects weeks >= current_week
