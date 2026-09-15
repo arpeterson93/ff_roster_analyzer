@@ -697,7 +697,26 @@ details[open] summary { margin-bottom: 8px; }
 .stat-tile .stat-label { font-size: 11px; color: var(--ink-500); text-transform: uppercase; letter-spacing: 0.03em; }
 .stat-tile .stat-value { font-size: 17px; font-weight: 600; margin-top: 2px; }
 
-/* Player modal's own small tab bar (Overview / FAAB Bid) - visually related
+/* FAAB Lab's per-method cards (Comp-based / Similar-usage avg / Regression)
+   - same tile look as .stat-tile above, but each carries TWO numbers (the
+   FAAB % and that method's own Interest %) side by side instead of one. */
+.faab-method-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+.faab-method-card {
+  background: color-mix(in srgb, var(--ink-500) 8%, transparent);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+.faab-method-label { font-size: 11px; color: var(--ink-500); text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 4px; }
+.faab-method-values { display: flex; gap: 16px; }
+.faab-method-num { display: block; font-size: 17px; font-weight: 600; }
+.faab-method-sub { display: block; font-size: 10.5px; color: var(--ink-500); text-transform: uppercase; letter-spacing: 0.03em; }
+
+/* Player modal's own small tab bar (Overview / FAAB Lab) - visually related
    to the page-level nav.tabs but deliberately a separate, smaller class:
    this one lives inside a fixed-width .modal-box rather than a full-width
    sticky header, and only ever has 1-2 tabs. Only rendered at all when a

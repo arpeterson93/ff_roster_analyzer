@@ -470,30 +470,16 @@ function faabEstimateSection(player, data) {
       ${teamInterestSection(est.team_interest, data)}
     `;
   }
-  const snapPct = inputs.snap_pct_prior_week;
-  const inputSummary = [
-    `Week ${inputs.week}`,
-    inputs.prior_week_had_stat_row ? `${fmt(inputs.prior_week_actual_points, 1)} pts last week` : "no stat line last week",
-    inputs.trailing_2_3_avg_points !== null && inputs.trailing_2_3_avg_points !== undefined ? `${fmt(inputs.trailing_2_3_avg_points, 1)} pts/wk (2-3 wks ago)` : null,
-    inputs.season_avg_points !== null && inputs.season_avg_points !== undefined ? `${fmt(inputs.season_avg_points, 1)} pts/wk season avg` : null,
-    snapPct !== null && snapPct !== undefined ? `${fmt(snapPct * 100, 0)}% snap share` : "no recent snap data",
-    inputs.own_injury_flag ? "own injury flag" : "no own injury flag",
-    inputs.teammate_position_injury_flag ? "a relevant teammate is banged up" : "no relevant teammate injury",
-    inputs.had_weekly_rank ? `#${Math.round(inputs.weekly_rank)} weekly rank` : null,
-    inputs.had_ros_rank ? `#${Math.round(inputs.ros_rank)} ROS rank` : null,
-    // best_position_competitor_ros_rank - see engine/faab_estimate.py's
-    // annotate_position_competition: the best (lowest) ROS rank among every
-    // OTHER same-position free agent this week, a "hot commodity" crowding-
-    // out signal. Shown either way (unlike the other optional chips above,
-    // which are silently omitted when missing) - "nobody notable else is
-    // on the wire" is itself a meaningful, worth-surfacing read, not an
-    // absence of data.
-    inputs.had_position_competitor_rank
-      ? `best competing FA on wire: #${Math.round(inputs.best_position_competitor_ros_rank)} ROS rank`
-      : "no highly-ranked competing FA on the wire",
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  // best_position_competitor_ros_rank - see engine/faab_estimate.py's
+  // annotate_position_competition: the best (lowest) ROS rank among every
+  // OTHER same-position free agent this week, a "hot commodity" crowding-
+  // out signal. Shown either way (unlike a comp row's optional chips,
+  // which are silently omitted when missing) - "nobody notable else is on
+  // the wire" is itself a meaningful, worth-surfacing read, not an absence
+  // of data.
+  const competingFaNote = inputs.had_position_competitor_rank
+    ? `Best competing FA on wire: #${Math.round(inputs.best_position_competitor_ros_rank)} ROS rank`
+    : "No highly-ranked competing FA on the wire";
 
   // o_league_detail is only set when this comp is a cross-league
   // consolidated event (see engine/faab_estimate.py's
@@ -628,26 +614,57 @@ function faabEstimateSection(player, data) {
   // deliberately NOT shown as one blended P(bid) x price number - that
   // product is an ex-ante expected cost, not "what to bid if you want him".
   // The headline per method is conditional_price (price IF contested);
-  // bid_probability is separate context underneath, never multiplied in.
+  // bid_probability is separate context, shown right alongside it per
+  // method's own card rather than multiplied in.
   const bidProb = est.bid_probability || {};
   const condPriceByMethod = est.conditional_price || {};
-  const stageBreakdown = (key) =>
-    bidProb[key] !== undefined
-      ? `<div class="muted small">${fmt(bidProb[key] * 100, 0)}% chance you'll even need to bid</div>`
-      : "";
+  const METHOD_LABELS = { comp_based: "Comp-based", simple_baseline: "Similar-usage avg", regression: "Regression" };
+  const methodCards = Object.entries(METHOD_LABELS)
+    .map(([key, label]) => {
+      const faabPct = condPriceByMethod[key];
+      const interestPct = bidProb[key];
+      return `
+        <div class="faab-method-card">
+          <div class="faab-method-label">${label}</div>
+          <div class="faab-method-values">
+            <div class="faab-method-value"><span class="faab-method-num">${faabPct !== undefined && faabPct !== null ? fmt(faabPct * 100, 1) + "%" : "–"}</span><span class="faab-method-sub">FAAB</span></div>
+            <div class="faab-method-value"><span class="faab-method-num">${interestPct !== undefined && interestPct !== null ? fmt(interestPct * 100, 0) + "%" : "–"}</span><span class="faab-method-sub">Interest</span></div>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+
+  // The actual query inputs driving every method/comp above, formatted the
+  // SAME way a Price/Interest comp row is (see recentCellHtml/rankCellHtml/
+  // flagsCellHtml below) so this player reads as directly comparable to
+  // the historical comps rather than a separate wall of text - placed
+  // right above Price comps, the first table it's feeding.
+  const thisPlayerSection = `
+    <h3>This player</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Player</th><th>Recent pts</th><th>Rank</th><th>Flags</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>${escapeHtml(player.name)}<div class="muted small">Week ${inputs.week}</div><div class="muted small">${competingFaNote}</div></td>
+            <td>${recentCellHtml(inputs.prior_week_had_stat_row ? inputs.prior_week_actual_points : null, inputs.trailing_2_3_avg_points, inputs.season_avg_points)}</td>
+            <td>${rankCellHtml(inputs.had_weekly_rank ? inputs.weekly_rank : null, inputs.had_ros_rank ? inputs.ros_rank : null)}</td>
+            <td>${flagsCellHtml(inputs.own_injury_flag, inputs.teammate_position_injury_flag)}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  `;
 
   return `
-    <p class="muted small">% of your league's effective starting FAAB budget to bid IF you want to win him - see the % chance below each for how likely a contest even is.</p>
-    <div class="bar-row"><div class="bar-label">Comp-based</div><div class="bar-value">${fmt(condPriceByMethod.comp_based * 100, 1)}%</div></div>
-    ${stageBreakdown("comp_based")}
-    <div class="bar-row"><div class="bar-label">Similar-usage avg</div><div class="bar-value">${fmt(condPriceByMethod.simple_baseline * 100, 1)}%</div></div>
-    ${stageBreakdown("simple_baseline")}
-    <div class="bar-row"><div class="bar-label">Regression</div><div class="bar-value">${fmt(condPriceByMethod.regression * 100, 1)}%</div></div>
-    ${stageBreakdown("regression")}
+    <p class="muted small">% of your league's effective starting FAAB budget to bid IF you want to win him, alongside each method's own read on how likely a contest even is.</p>
+    <div class="faab-method-grid">${methodCards}</div>
     ${distHtml}
-    <p class="muted small">Inputs considered: ${inputSummary}</p>
 
     ${teamInterestSection(est.team_interest, data)}
+
+    ${thisPlayerSection}
 
     <h3>Price comps <span class="muted small">- won only, drives the price-if-contested estimate above</span></h3>
     <div class="table-wrap"><table><thead><tr><th title="This comp's share of the total weight behind the weighted-average estimate above - every comp's weight sums to 100%. Derived from 1/(distance+0.05), so a closer comp counts for more. Comps are already listed highest-weight-first.">Weight</th><th>Player</th><th>% of budget</th><th>Recent pts</th><th>Rank</th><th>Flags</th></tr></thead><tbody>${priceComps || `<tr><td colspan="6" class="muted small">No comparable winning bids found.</td></tr>`}</tbody></table></div>
@@ -741,7 +758,7 @@ function nmdDetailSection(player, data) {
 }
 
 // The single-player modal's full inner HTML: header/stat-grid, then always
-// two tabs (Weekly projections, Week-to-week NMD) plus a third (FAAB Bid)
+// two tabs (Weekly projections, Week-to-week NMD) plus a third (FAAB Lab)
 // only for players on ESPN "WAIVERS" status this week (see engine/
 // pipeline.py's _compute_faab_estimates) - everyone else just doesn't get
 // a third tab, rather than an empty one. Factored out of openPlayerModal
@@ -772,7 +789,7 @@ function playerModalContentHtml(player, data) {
   const tabs = [
     { key: "projections", label: "Weekly Projections", html: overviewTabHtml(player, data) },
     { key: "nmd", label: "Week-to-Week NMD", html: nmdHtml || `<p class="muted small">No roster-value context available for this player.</p>` },
-    ...(faabHtml ? [{ key: "faab", label: "FAAB Bid", html: faabHtml }] : []),
+    ...(faabHtml ? [{ key: "faab", label: "FAAB Lab", html: faabHtml }] : []),
   ];
 
   return `

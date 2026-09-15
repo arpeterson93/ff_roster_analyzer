@@ -91,13 +91,19 @@ def main():
         raw_rows = json.loads(RAW_OUT_PATH.read_text())
     done_league_seasons = {(r["source_league_id"], r["season"]) for r in raw_rows}
 
+    # Flat (league, season) counter, not just a leagues-remaining one - most
+    # candidates have several accessible_years each, so "league 12/58" would
+    # badly understate how much work is actually left.
+    total = sum(len(c["accessible_years"]) for c in candidates)
+    i = 0
     weeks_requested = 0
     for cand in candidates:
         lid = cand["league_id"]
         for year in cand["accessible_years"]:
+            i += 1
             if (lid, year) in done_league_seasons:
                 continue
-            print(f"league {lid} ({cand['name']!r}) season {year}...", file=sys.stderr)
+            print(f"[{i}/{total}] league {lid} ({cand['name']!r}) season {year}...", file=sys.stderr)
             try:
                 league = League(league_id=lid, year=year)
             except Exception as exc:

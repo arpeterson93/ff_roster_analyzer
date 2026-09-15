@@ -5,10 +5,16 @@ a sane addition to the training set.
 
 Being public + FAAB today isn't enough on its own - a 6-team IDP league
 scored entirely off return yardage would only add noise to a 12-team
-standard-scoring model. Hard filters: team count within [--min-size,
---max-size] of ours, same scoring_type (points vs categories/roto), not an
-IDP league, and has recognizable standard offensive TD scoring. PPR format
-is reported but never disqualifying - useful context, not a hard requirement.
+standard-scoring model. Hard filters: team count EXACTLY equal to
+baseline's own size (a 10-team league's FAAB market genuinely isn't the
+same game as a 12-team one's - see league_profile.compare_to_baseline),
+same scoring_type (points vs categories/roto), not an IDP league, has
+recognizable standard offensive TD scoring, and a comparable
+starting-lineup roster construction (see league_profile.py's
+ROSTER_SLOT_RANGES - no superflex/2-QB slot, RB/WR/TE/FLEX/K/DST counts in
+range - a league whose lineup shape differs enough makes positional
+scarcity, and so FAAB pricing, genuinely incomparable). PPR format is
+reported but never disqualifying - useful context, not a hard requirement.
 
 Run after discover_public_leagues.py has found some FAAB candidates, from
 the repo root (needed for the league_profile import below to resolve):
@@ -37,8 +43,6 @@ DELAY_RANGE = (0.6, 1.8)
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--year", type=int, default=2026, help="current season - the one every candidate is guaranteed public in")
-    parser.add_argument("--min-size", type=int, default=10)
-    parser.add_argument("--max-size", type=int, default=16)
     parser.add_argument(
         "--reverify", action="store_true",
         help="re-fetch settings and re-run compare_to_baseline (including the scoring ledger check) for EVERY "
@@ -76,18 +80,19 @@ def main():
     by_id = {r["league_id"]: r for r in results}
 
     compatible_count = sum(1 for r in results if r.get("compatible"))
-    for cand in candidates:
+    total = len(candidates)
+    for i, cand in enumerate(candidates, start=1):
         lid = cand["league_id"]
         if lid in by_id and not args.reverify:
             continue
         status, raw = fetch_settings(lid, args.year)
         if status != "ok":
-            print(f"{lid} ({cand['name']!r}): couldn't re-fetch settings ({status}), skipping", file=sys.stderr)
+            print(f"[{i}/{total}] {lid} ({cand['name']!r}): couldn't re-fetch settings ({status}), skipping", file=sys.stderr)
             time.sleep(random.uniform(*DELAY_RANGE))
             continue
         profile = profile_settings(raw)
         scoring_items = scoring_format_items(raw)
-        verdict = compare_to_baseline(profile, baseline, scoring_items=scoring_items, ledger=ledger, min_size=args.min_size, max_size=args.max_size)
+        verdict = compare_to_baseline(profile, baseline, scoring_items=scoring_items, ledger=ledger)
         was_compatible = by_id.get(lid, {}).get("compatible")
         row = {"league_id": lid, **profile, **verdict}
         by_id[lid] = row
@@ -95,16 +100,16 @@ def main():
             if was_compatible is not True:
                 compatible_count += 1
             print(
-                f"{lid} ({profile['name']!r}): COMPATIBLE - {profile['size']} teams, {profile['ppr_label']} "
+                f"[{i}/{total}] {lid} ({profile['name']!r}): COMPATIBLE - {profile['size']} teams, {profile['ppr_label']} "
                 f"[{compatible_count} compatible so far]",
                 file=sys.stderr,
             )
         else:
             if was_compatible is True:
                 compatible_count -= 1
-                print(f"{lid} ({profile['name']!r}): now REJECTED (was compatible) - {'; '.join(verdict['reasons'])}", file=sys.stderr)
+                print(f"[{i}/{total}] {lid} ({profile['name']!r}): now REJECTED (was compatible) - {'; '.join(verdict['reasons'])}", file=sys.stderr)
             else:
-                print(f"{lid} ({profile['name']!r}): rejected - {'; '.join(verdict['reasons'])}", file=sys.stderr)
+                print(f"[{i}/{total}] {lid} ({profile['name']!r}): rejected - {'; '.join(verdict['reasons'])}", file=sys.stderr)
         results = list(by_id.values())
         OUT_PATH.write_text(json.dumps(results, indent=2))
         time.sleep(random.uniform(*DELAY_RANGE))

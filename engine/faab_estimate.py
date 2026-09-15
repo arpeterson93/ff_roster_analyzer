@@ -686,6 +686,56 @@ def _knn(query: dict, pool: list[dict], stats: dict[str, tuple[float, float]], k
     return scored, weights
 
 
+BUHLMANN_K = 15.0  # the "half-credibility" point - see _credibility
+
+
+def _credibility(n: int, k: float = BUHLMANN_K) -> float:
+    """Bühlmann credibility: n/(n+k), the standard actuarial shrinkage
+    formula for how much a single estimate should count given how many
+    independent real observations back it - see the conversation this was
+    built from. Asymptotically approaches full credibility as n grows but
+    never literally reaches 1.0 (unlike a hard cap at some fixed n) - even
+    a comp backed by 100 leagues is still, honestly, not INFINITELY
+    trustworthy. k=15 means a comp backed by exactly 15 leagues counts for
+    half of what one with unlimited backing would.
+
+    This is a SEPARATE axis from the existing distance-based k-NN weight
+    (see _knn) - relevance (how similar is this situation) and credibility
+    (how much real evidence backs THIS row's own reading of it) aren't the
+    same thing. A comp identical in distance to two different queries
+    should count the same either way; a comp backed by 1 league's single
+    data point and one backed by 40 leagues' real outcomes should NOT,
+    even at identical distance. Applied multiplicatively on top of the
+    existing weight, never replacing it, and never used to change WHICH
+    comps get selected (that stays purely distance-based, via _knn) - only
+    how much each selected comp counts once chosen."""
+    return n / (n + k) if n > 0 else 0.0
+
+
+def _backing_count(r: dict) -> int:
+    """How many distinct real leagues' own data went into this row - the
+    credibility signal _credibility uses. Works for both interest rows
+    (leagues_eligible, set unconditionally by consolidate_cross_league_events
+    for every interest-pool row - see that function) and price rows
+    (consolidated_from_leagues, only set there for an actual multi-league
+    group; a single-league price row never gets that field at all, so it
+    defaults to 1 - just its own one league backing it)."""
+    if "leagues_eligible" in r:
+        return r["leagues_eligible"]
+    from_leagues = r.get("consolidated_from_leagues")
+    return len(from_leagues) if from_leagues else 1
+
+
+def _credibility_weighted(scored: list[dict], weights: list[float]) -> list[float]:
+    """weights, each multiplied by its own row's Bühlmann credibility (see
+    _credibility/_backing_count) - the one place every comp_based_estimate
+    caller applies this, so bid_probability/conditional_price, the
+    displayed per-comp "weight" column, and price_confidence_samples (which
+    is handed these same weights) all stay consistent with each other
+    automatically rather than needing separate credibility logic each."""
+    return [w * _credibility(_backing_count(r)) for w, r in zip(weights, scored)]
+
+
 def _normalized_weights(weights: list[float]) -> list[float]:
     """weights rescaled to sum to 1 - a weighted-average result is
     invariant to this (only the relative ratios between weights matter), so
@@ -936,13 +986,20 @@ def comp_based_estimate(
     already sorted nearest-first, so the nearest k of a k-NN(price_k) call
     IS exactly what a separate k-NN(k) call would return) - showing a
     reader the same k comps that actually produced the number above it,
-    not a wider pool they never see most of."""
+    not a wider pool they never see most of.
+
+    Every weight below is credibility-adjusted (see _credibility_weighted)
+    immediately after its k-NN call, before anything downstream ever sees
+    it - selection (WHICH k rows are neighbors) stays purely distance-
+    based, only how much each selected one counts changes."""
     stats = _feature_stats(interest_rows)
 
     interest_scored, interest_weights = _knn(query, interest_rows, stats, k)
+    interest_weights = _credibility_weighted(interest_scored, interest_weights)
     bid_probability = sum(w * (1.0 if r["signal"] != "no_bid" else 0.0) for w, r in zip(interest_weights, interest_scored)) / sum(interest_weights)
 
     price_scored_all, price_weights_all = _knn(query, price_rows, stats, price_k or k)
+    price_weights_all = _credibility_weighted(price_scored_all, price_weights_all)
     price_scored, price_weights = price_scored_all[:k], price_weights_all[:k]
     conditional_pct = sum(w * target_pct(r) for w, r in zip(price_weights, price_scored)) / sum(price_weights) if price_scored else 0.0
 

@@ -1,9 +1,12 @@
 """Shared league-settings profiling: pulls full mSettings for a league/year
 and extracts the handful of fields relevant to deciding whether that
 league's FAAB data belongs in the same training set as The O League's -
-team count, PPR format, whether it's IDP, and whether its scoring looks
-like a normal points league at all rather than some novelty format (e.g.
-scored entirely off return yardage).
+team count, PPR format, whether it's IDP, whether its scoring looks like a
+normal points league at all rather than some novelty format (e.g. scored
+entirely off return yardage), and its starting-lineup roster construction
+(see ROSTER_SLOT_RANGES - a superflex/2-QB league or a meaningfully
+different RB/WR/FLEX allocation shifts positional scarcity and FAAB
+pricing in ways that make its bids incomparable to a real 1-QB market).
 
 The scoring-format stat id map (SETTINGS_SCORING_FORMAT_MAP) and lineup slot
 map (POSITION_MAP) come straight from the espn_api package already used
@@ -40,6 +43,49 @@ HEADERS = {
 # individual defensive players, which is a different game from a standard
 # team-D/ST league and shouldn't share a FAAB model with one.
 IDP_SLOT_IDS = {8, 9, 10, 11, 12, 13, 14, 15}
+
+# Starting-lineup slot ids per position group - see POSITION_MAP. FLEX
+# unions every multi-eligible non-QB/non-OP variant (RB/WR, WR/TE,
+# RB/WR/TE) since leagues configure this differently but they all serve
+# the same "extra flex spot(s)" role. OP ("Offensive Player") is kept
+# separate from QB, not folded in - it's QB/RB/WR/TE-eligible, the classic
+# superflex mechanism, and its mere presence (not just its own count)
+# is what makes a league's QB market incomparable to a 1-QB league, even
+# if QB itself still shows exactly 1 slot.
+QB_SLOT_IDS = {0, 1}  # QB, TQB (legacy "this spot can hold a QB")
+OP_SLOT_IDS = {7}
+RB_SLOT_IDS = {2}
+WR_SLOT_IDS = {4}
+TE_SLOT_IDS = {6}
+FLEX_SLOT_IDS = {3, 5, 23}  # RB/WR, WR/TE, RB/WR/TE
+K_SLOT_IDS = {17}
+DST_SLOT_IDS = {16}
+
+# Acceptable starting-lineup slot COUNT range per group (inclusive) - see
+# the conversation this was built from. A superflex/2-QB league (any OP
+# slot at all, or a real QB-slot count outside this range) makes QB
+# scarcity and FAAB QB pricing incomparable to The O League's real 1-QB
+# market; a meaningfully different RB/WR/FLEX allocation shifts positional
+# scarcity everywhere else too. K/DST both allow 0 - plenty of real,
+# otherwise-normal leagues run offense-only.
+ROSTER_SLOT_RANGES: dict[str, tuple[int, int]] = {
+    "QB": (1, 1), "RB": (1, 2), "WR": (2, 3), "TE": (1, 1), "FLEX": (1, 2), "K": (0, 1), "DST": (0, 1),
+}
+
+_ROSTER_SLOT_GROUPS = {
+    "QB": QB_SLOT_IDS, "RB": RB_SLOT_IDS, "WR": WR_SLOT_IDS, "TE": TE_SLOT_IDS,
+    "FLEX": FLEX_SLOT_IDS, "K": K_SLOT_IDS, "DST": DST_SLOT_IDS, "OP": OP_SLOT_IDS,
+}
+
+
+def _lineup_slot_group_counts(slot_counts: dict) -> dict[str, int]:
+    """{"QB": n, "RB": n, ..., "OP": n} - slot_counts is rosterSettings.
+    lineupSlotCounts (str slot id -> count) straight off raw ESPN settings.
+    OP is its own group, deliberately not merged into QB - see
+    ROSTER_SLOT_RANGES."""
+    counts = {int(k): v for k, v in slot_counts.items()}
+    return {name: sum(counts.get(sid, 0) for sid in ids) for name, ids in _ROSTER_SLOT_GROUPS.items()}
+
 
 # ESPN's settings list two statIds that both mean "each reception" (53 is
 # the one real leagues use; 41 shows up in some older-format responses) -
@@ -109,6 +155,7 @@ def profile_settings(settings: dict) -> dict[str, Any]:
         "is_idp": bool(idp_slots),
         "idp_slots": idp_slots,
         "has_core_offense_scoring": any(items_by_stat.get(sid, 0) > 0 for sid in CORE_TD_STAT_IDS),
+        "roster_slot_groups": _lineup_slot_group_counts(slot_counts),
         "matchup_period_count": settings.get("scheduleSettings", {}).get("matchupPeriodCount"),
         "scoring_item_labels": sorted(
             SETTINGS_SCORING_FORMAT_MAP.get(sid, {}).get("abbr", str(sid)) for sid in items_by_stat
@@ -220,11 +267,20 @@ def check_scoring_ledger(scoring_items: list[dict], ledger: dict[str, dict]) -> 
 
 def compare_to_baseline(
     candidate: dict, baseline: dict, scoring_items: list[dict] | None = None,
-    ledger: dict[str, dict] | None = None, min_size: int = 10, max_size: int = 16,
+    ledger: dict[str, dict] | None = None,
 ) -> dict:
     """Hard-filter reasons decide `compatible`; PPR mismatch is reported but
     never disqualifying, per the human call that team count/scoring format/
     sanity matter but exact PPR match doesn't.
+
+    Team count must EXACTLY match baseline's own size, not just fall within
+    some fixed absolute range - a 10-team league's FAAB market (more
+    talent per roster spot, thinner waiver wire) genuinely isn't the same
+    game as baseline's own 12-team one. Since baseline is whichever league
+    the caller is actually vetting against (BASELINE_LEAGUE_ID in
+    vet_candidates.py), this automatically re-centers on that league's own
+    size rather than needing a hardcoded/CLI-configured range kept in sync
+    with it by hand.
 
     scoring_items/ledger (see check_scoring_ledger) are optional so existing
     callers/tests that only care about size/scoring_type/IDP keep working
@@ -233,8 +289,9 @@ def compare_to_baseline(
     call belongs instead of an ever-growing hardcoded abbr blocklist."""
     hard_reasons = []
     size = candidate["size"] or 0
-    if not (min_size <= size <= max_size):
-        hard_reasons.append(f"size {size} outside [{min_size}, {max_size}]")
+    baseline_size = baseline["size"] or 0
+    if size != baseline_size:
+        hard_reasons.append(f"size {size} != baseline {baseline_size}")
     if candidate["scoring_type"] != baseline["scoring_type"]:
         hard_reasons.append(f"scoring_type {candidate['scoring_type']!r} != baseline {baseline['scoring_type']!r}")
     if candidate["is_idp"]:
@@ -243,6 +300,20 @@ def compare_to_baseline(
         hard_reasons.append("no standard passing/rushing/receiving TD scoring found - exotic scoring format")
     if scoring_items is not None:
         hard_reasons.extend(check_scoring_ledger(scoring_items, ledger or {}))
+
+    # Roster construction - see ROSTER_SLOT_RANGES. A superflex/2-QB league
+    # (any OP slot, or a real QB-slot count outside range) makes QB
+    # scarcity/pricing incomparable to a 1-QB market; a meaningfully
+    # different RB/WR/FLEX allocation shifts positional scarcity
+    # everywhere else too.
+    slot_groups = candidate.get("roster_slot_groups", {})
+    op_count = slot_groups.get("OP", 0)
+    if op_count:
+        hard_reasons.append(f"superflex/OP slot present ({op_count}) - QB scarcity not comparable to a 1-QB league")
+    for group, (lo, hi) in ROSTER_SLOT_RANGES.items():
+        count = slot_groups.get(group, 0)
+        if not (lo <= count <= hi):
+            hard_reasons.append(f"{group} slots {count} outside [{lo}, {hi}]")
 
     ppr_match = candidate["ppr_label"] == baseline["ppr_label"]
     soft_notes = [] if ppr_match else [f"PPR format {candidate['ppr_label']!r} != baseline {baseline['ppr_label']!r} (not disqualifying)"]

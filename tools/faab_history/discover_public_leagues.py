@@ -92,7 +92,8 @@ def main():
     checked = 0
     exists_count = 0  # leagues that exist but aren't public (401, or 200+isPublic=false) - id density signal
     faab_count = sum(1 for r in found if r["uses_faab"])
-    for lid in range(args.start, args.end + 1):
+    total = args.end - args.start + 1
+    for i, lid in enumerate(range(args.start, args.end + 1), start=1):
         if lid in seen_ids:
             continue
         status, result = check_league(lid, args.year)
@@ -103,7 +104,7 @@ def main():
                 faab_count += 1
             tag = "FAAB" if result["uses_faab"] else "non-FAAB"
             print(
-                f"{lid}: PUBLIC ({tag}) - {result['name']!r}, {result['size']} teams, "
+                f"[{i}/{total}] {lid}: PUBLIC ({tag}) - {result['name']!r}, {result['size']} teams, "
                 f"budget={result['acquisition_budget']} "
                 f"[{len(found)} public found so far, {faab_count} of those use FAAB]",
                 file=sys.stderr,
@@ -112,7 +113,7 @@ def main():
         else:
             if status.startswith("exists_but_private"):
                 exists_count += 1
-            print(f"{lid}: {status}", file=sys.stderr)
+            print(f"[{i}/{total}] {lid}: {status}", file=sys.stderr)
         if checked % 20 == 0:
             print(
                 f"...{checked} checked, {len(found)} public so far ({faab_count} FAAB), "

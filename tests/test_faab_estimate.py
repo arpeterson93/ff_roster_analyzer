@@ -1,6 +1,9 @@
 import pytest
 
 from engine.faab_estimate import (
+    _backing_count,
+    _credibility,
+    _credibility_weighted,
     _interest_comp_dicts,
     _normalized_weights,
     _price_comp_bid_distribution,
@@ -426,3 +429,52 @@ def test_comp_based_estimate_price_comps_capped_at_k_but_confidence_samples_use_
     # k=3 search - the 3 closest prior_week_actual_points to the query's
     # own 10.0 either way (ids 10, 9, 11).
     assert sorted(c["prior_week_actual_points"] for c in out["comps"]) == [9.0, 10.0, 11.0]
+
+
+def test_credibility_matches_buhlmann_formula_with_k_15():
+    assert _credibility(15) == pytest.approx(0.5)  # the half-credibility point, by definition
+    assert _credibility(1) == pytest.approx(1 / 16)
+    assert _credibility(0) == 0.0
+
+
+def test_credibility_approaches_but_never_reaches_one():
+    assert _credibility(1000) < 1.0
+    assert _credibility(1000) > _credibility(100) > _credibility(15)
+
+
+def test_backing_count_uses_leagues_eligible_for_interest_rows():
+    assert _backing_count({"leagues_eligible": 7, "consolidated_from_leagues": [1, 2, 3]}) == 7
+
+
+def test_backing_count_uses_consolidated_from_leagues_for_price_rows():
+    assert _backing_count({"consolidated_from_leagues": [1, 2, 3, 4]}) == 4
+
+
+def test_backing_count_defaults_to_one_for_a_single_league_price_row():
+    # A single-league group never gets consolidated_from_leagues at all
+    # (see consolidate_cross_league_events) - just its own one league.
+    assert _backing_count({}) == 1
+
+
+def test_credibility_weighted_multiplies_each_row_by_its_own_credibility():
+    scored = [{"leagues_eligible": 15}, {"leagues_eligible": 1}]
+    out = _credibility_weighted(scored, [10.0, 10.0])
+    assert out[0] == pytest.approx(10.0 * 0.5)
+    assert out[1] == pytest.approx(10.0 * (1 / 16))
+
+
+def test_comp_based_estimate_favors_a_well_backed_comp_over_an_equally_close_thin_one():
+    # Two interest comps, IDENTICAL distance to the query (same feature
+    # values) - one backed by 40 real leagues, one by a single one. Pure
+    # distance weighting would treat them identically; credibility must
+    # make the well-backed one count for more toward bid_probability.
+    query = _bid_row(0, add_player_id=0, prior_week_actual_points=10.0)
+    thin = _bid_row(1, add_player_id=1, prior_week_actual_points=10.0, signal="won", leagues_eligible=1, leagues_with_bid=1)
+    deep = _bid_row(1, add_player_id=2, prior_week_actual_points=10.0, signal="no_bid", leagues_eligible=40, leagues_with_bid=0)
+    price_rows = [_bid_row(1, add_player_id=1, prior_week_actual_points=10.0, effective_cost_dollars=5.0, effective_starting_budget=50.0)]
+    out = comp_based_estimate(query, [thin, deep], price_rows, k=2)
+    # thin says "won" (bid_probability=1 if it alone decided), deep says
+    # "no_bid" (0 if it alone decided) - credibility-weighting toward the
+    # 40-league comp should pull the blended result well below 0.5, not
+    # leave it at the equal-weight midpoint.
+    assert out["bid_probability"] < 0.3
