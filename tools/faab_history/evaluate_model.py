@@ -56,7 +56,6 @@ from engine.faab_estimate import (
     POSITIONS,
     TRAINING_TABLE_PATH,
     add_synthetic_price_wins,
-    annotate_position_competition,
     build_price_rows,
     consolidate_cross_league_events,
     dedupe_events_for_interest,
@@ -222,12 +221,9 @@ def main():
     args = parser.parse_args()
 
     all_rows = json.loads(args.table.read_text())
-    annotate_position_competition(all_rows)
     # add_synthetic_price_wins here, before the split, mirrors engine.
     # faab_estimate.FaabModel.__init__ (a per-(league,event) transform, not
-    # something that learns from the full dataset - same no-leakage
-    # reasoning as annotate_position_competition above already applying to
-    # all_rows pre-split).
+    # something that learns from the full dataset).
     trainable = add_synthetic_price_wins(load_trainable_rows(all_rows))
     train, test = stratified_split(trainable, SEED, TEST_FRACTION, holdout_league_id=args.holdout_league_id)
     print(f"train pool: {len(train)}  holdout: {len(test)}")

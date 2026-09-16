@@ -1,3 +1,4 @@
+import polars as pl
 import pytest
 
 from engine.faab_estimate import (
@@ -20,11 +21,16 @@ from engine.faab_estimate import (
     add_synthetic_price_wins,
     build_event_won_rows_index,
     build_price_rows,
+    build_stats_index,
     comp_based_estimate,
     consolidate_cross_league_events,
+    feature_vector,
     is_faab_relevant,
     price_confidence_samples,
+    recent_carry_share,
+    recent_target_share,
     target_pct,
+    team_position_totals,
     weighted_percentile,
 )
 
@@ -762,3 +768,72 @@ def test_is_faab_relevant_uses_each_positions_own_ros_rank_ceiling():
     # identical ROS-rank standing reads differently depending on position.
     assert is_faab_relevant(0.0, 0.0, 30, "QB") is False
     assert is_faab_relevant(0.0, 0.0, 30, "RB") is True
+
+
+def _stats_frame(rows: list[dict]) -> pl.DataFrame:
+    schema = {"player_id": pl.Utf8, "position": pl.Utf8, "team": pl.Utf8, "week": pl.Int64, "carries": pl.Int64, "targets": pl.Int64, "target_share": pl.Float64}
+    return pl.DataFrame(rows, schema=schema) if rows else pl.DataFrame(schema=schema)
+
+
+def test_team_position_totals_sums_carries_by_team_week_for_one_position_only():
+    stats = _stats_frame([
+        {"player_id": "RB1", "position": "RB", "team": "SF", "week": 5, "carries": 14, "targets": 1, "target_share": 0.03},
+        {"player_id": "RB2", "position": "RB", "team": "SF", "week": 5, "carries": 5, "targets": 0, "target_share": 0.0},
+        {"player_id": "WR1", "position": "WR", "team": "SF", "week": 5, "carries": 3, "targets": 4, "target_share": 0.1},
+    ])
+    totals = team_position_totals(stats, "RB", "carries")
+    assert totals[("SF", 5)] == 19  # the two RBs' carries only - not the WR's 3
+
+
+def test_recent_carry_share_is_this_rbs_share_of_his_teams_rb_position_carries():
+    stats = _stats_frame([
+        {"player_id": "RB1", "position": "RB", "team": "SF", "week": 5, "carries": 14, "targets": 1, "target_share": 0.03},
+        {"player_id": "RB2", "position": "RB", "team": "SF", "week": 5, "carries": 5, "targets": 0, "target_share": 0.0},
+        {"player_id": "WR1", "position": "WR", "team": "SF", "week": 5, "carries": 3, "targets": 4, "target_share": 0.1},
+    ])
+    team_rb_carries = team_position_totals(stats, "RB", "carries")
+    # week 6 has no stat row for RB1 at all - falls back to week 5 (week-1).
+    assert recent_carry_share("RB1", 6, build_stats_index(stats), team_rb_carries) == pytest.approx(14 / 19)
+
+
+def test_recent_carry_share_none_when_team_had_zero_rb_carries_that_week():
+    # A real 0/0 (e.g. a rushing QB took every carry that week) - None, not
+    # a misleading real 0% share.
+    stats = _stats_frame([{"player_id": "RB1", "position": "RB", "team": "SF", "week": 4, "carries": 0, "targets": 0, "target_share": 0.0}])
+    team_rb_carries = team_position_totals(stats, "RB", "carries")
+    assert recent_carry_share("RB1", 5, build_stats_index(stats), team_rb_carries) is None
+
+
+def test_recent_carry_share_none_without_a_gsis_id():
+    assert recent_carry_share(None, 5, build_stats_index(_stats_frame([])), {}) is None
+
+
+def test_recent_target_share_reads_nflverses_own_team_wide_column_directly():
+    # Unlike carry share, target_share is nflverse's own stat, already
+    # computed across every position on the team - used as-is, no
+    # recomputation.
+    stats = _stats_frame([{"player_id": "WR1", "position": "WR", "team": "SF", "week": 4, "carries": 0, "targets": 8, "target_share": 0.375}])
+    assert recent_target_share("WR1", 5, build_stats_index(stats)) == pytest.approx(0.375)
+
+
+def test_recent_target_share_none_without_a_gsis_id():
+    assert recent_target_share(None, 5, build_stats_index(_stats_frame([]))) is None
+
+
+def test_feature_vector_flags_disambiguate_missing_from_a_real_zero():
+    # A player with genuinely no recent data (out for weeks, hasn't
+    # debuted) - snap_pct/trailing/season all None - must NOT read
+    # identically to a player who played and genuinely produced/snapped
+    # zero. The had_X flags are what makes that distinction visible to
+    # both the k-NN distance calc and the regression fit.
+    no_data = _bid_row(1, snap_pct_prior_week=None, trailing_2_3_avg_points=None, season_avg_points=None)
+    fv = feature_vector(no_data)
+    assert fv["snap_pct_prior_week"] == 0.0 and fv["had_snap_pct_prior_week"] == 0.0
+    assert fv["trailing_2_3_avg_points"] == 0.0 and fv["had_trailing_2_3_avg_points"] == 0.0
+    assert fv["season_avg_points"] == 0.0 and fv["had_season_avg_points"] == 0.0
+
+    real_zero = _bid_row(1, snap_pct_prior_week=0.0, trailing_2_3_avg_points=0.0, season_avg_points=0.0)
+    fv_zero = feature_vector(real_zero)
+    assert fv_zero["snap_pct_prior_week"] == 0.0 and fv_zero["had_snap_pct_prior_week"] == 1.0
+    assert fv_zero["trailing_2_3_avg_points"] == 0.0 and fv_zero["had_trailing_2_3_avg_points"] == 1.0
+    assert fv_zero["season_avg_points"] == 0.0 and fv_zero["had_season_avg_points"] == 1.0

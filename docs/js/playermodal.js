@@ -412,6 +412,24 @@ function recentCellHtml(pts, trailing, season) {
   const main = pts !== null && pts !== undefined ? `${fmt(pts, 1)} pts` : "–";
   return `<span class="comp-recent-cell">${main}<span class="sub">3wk ${fmt(trailing, 1)} · szn ${fmt(season, 1)}</span></span>`;
 }
+// SNAP always shown; ATT (RB carry share of his TEAM's own RB-position
+// carries - see engine/faab_estimate.py's recent_carry_share) or TGT (WR/TE
+// target share, any position - recent_target_share) added for the one
+// position it's actually diagnostic for - see the conversation this was
+// built from: meant to help a reader spot a high-snap-share player (a
+// blocking fullback, an in-line TE) who isn't actually seeing the ball,
+// something snap share alone can't distinguish from a real featured
+// back/receiver. No % sign, no decimals, per the same conversation - these
+// read as quick relative comps, not precise figures.
+function usageCellHtml(position, snapPct, carryShare, targetShare) {
+  const pct = (v) => (v !== null && v !== undefined ? Math.round(v * 100) : null);
+  const snap = pct(snapPct);
+  const main = snap !== null ? `SNAP ${snap}` : "–";
+  const secondary =
+    position === "RB" ? { label: "ATT", value: pct(carryShare) } : position === "WR" || position === "TE" ? { label: "TGT", value: pct(targetShare) } : null;
+  const sub = secondary ? `<span class="sub">${secondary.label} ${secondary.value !== null ? secondary.value : "–"}</span>` : "";
+  return `<span class="comp-recent-cell">${main}${sub}</span>`;
+}
 function flagsCellHtml(ownInjury, teammateInjury) {
   const flags = [ownInjury ? `<span class="comp-flag">inj</span>` : "", teammateInjury ? `<span class="comp-flag tm">tm inj</span>` : ""].join("");
   return flags || `<span class="muted small">–</span>`;
@@ -451,7 +469,7 @@ function teamInterestSection(teamInterest, data) {
     })
     .join("");
   return `
-    <h3>Likely interested owners <span class="muted small">- who else in your league has a real reason to bid</span></h3>
+    <h3>Likely interested owners</h3>
     <div class="table-wrap"><table><thead><tr><th>Owner</th><th>Interest</th><th>Why</th></tr></thead><tbody>${rows}</tbody></table></div>
   `;
 }
@@ -470,17 +488,6 @@ function faabEstimateSection(player, data) {
       ${teamInterestSection(est.team_interest, data)}
     `;
   }
-  // best_position_competitor_ros_rank - see engine/faab_estimate.py's
-  // annotate_position_competition: the best (lowest) ROS rank among every
-  // OTHER same-position free agent this week, a "hot commodity" crowding-
-  // out signal. Shown either way (unlike a comp row's optional chips,
-  // which are silently omitted when missing) - "nobody notable else is on
-  // the wire" is itself a meaningful, worth-surfacing read, not an absence
-  // of data.
-  const competingFaNote = inputs.had_position_competitor_rank
-    ? `Best competing FA on wire: #${Math.round(inputs.best_position_competitor_ros_rank)} ROS rank`
-    : "No highly-ranked competing FA on the wire";
-
   // o_league_detail is only set when this comp is a cross-league
   // consolidated event (see engine/faab_estimate.py's
   // consolidate_cross_league_events) that The O League itself was also
@@ -586,11 +593,11 @@ function faabEstimateSection(player, data) {
       const hasDist = (c.bid_distribution || []).length > 1;
       const rowId = `price-comp-${i}`;
       const mainRow = `<tr class="${hasDist ? "clickable-row" : ""}" data-price-comp-row="${rowId}">
-        <td class="num">${fmt(c.weight * 100, 1)}%</td>
-        <td class="num">${c.weight_capped !== undefined ? fmt(c.weight_capped * 100, 1) + "%" : "–"}</td>
+        <td class="num">${c.weight_capped !== undefined ? fmt(c.weight_capped * 100, 1) + "%" : "–"} / ${fmt(c.weight * 100, 1)}%</td>
         <td>${escapeHtml(c.name)}<div class="muted small">${c.season} wk${c.week}</div>${oLeagueTag(c.o_league_detail)}</td>
         <td>${fmt(c.pct_of_remaining_budget * 100, 1)}%</td>
         <td>${recentCellHtml(c.prior_week_actual_points, c.trailing_2_3_avg_points, c.season_avg_points)}</td>
+        <td>${usageCellHtml(inputs.position, c.snap_pct_prior_week, c.carry_share_prior_week, c.target_share_prior_week)}</td>
         <td>${rankCellHtml(c.weekly_rank, c.ros_rank)}</td>
         <td>${flagsCellHtml(c.own_injury_flag, c.teammate_position_injury_flag)}</td>
       </tr>`;
@@ -608,6 +615,7 @@ function faabEstimateSection(player, data) {
         <td>${escapeHtml(c.name)}<div class="muted small">${c.season} wk${c.week}</div>${oLeagueTag(c.o_league_detail)}</td>
         <td>${bidRateCellHtml(c.leagues_with_bid, c.leagues_eligible)}</td>
         <td>${recentCellHtml(c.prior_week_actual_points, c.trailing_2_3_avg_points, c.season_avg_points)}</td>
+        <td>${usageCellHtml(inputs.position, c.snap_pct_prior_week, c.carry_share_prior_week, c.target_share_prior_week)}</td>
         <td>${rankCellHtml(c.weekly_rank, c.ros_rank)}</td>
         <td>${flagsCellHtml(c.own_injury_flag, c.teammate_position_injury_flag)}</td>
       </tr>`
@@ -647,7 +655,7 @@ function faabEstimateSection(player, data) {
             </div>
             <div class="faab-dist-labels">
               <span>${fmt(dist.min * 100, 1)}%</span>
-              <span class="muted">${fmt(dist.p25 * 100, 1)}%–${fmt(dist.p75 * 100, 1)}% middle half of real winning bids</span>
+              <span class="muted">${fmt(dist.p25 * 100, 1)}%–${fmt(dist.p75 * 100, 1)}% middle half of winning bids</span>
               <span>${fmt(dist.max * 100, 1)}%</span>
             </div>
           </div>
@@ -659,7 +667,7 @@ function faabEstimateSection(player, data) {
                 <span class="faab-confidence-bid" data-confidence-bid>${fmt(defaultBid * 100, 1)}%</span>
               </div>
               <input type="range" min="50" max="99" value="${defaultConfidence}" class="faab-confidence-slider" data-confidence-slider>
-              <p class="muted small">The bid that would have WON about this share of comparable historical auctions - pooled from ${samples.length} real winning prices behind the comps below. Not a guaranteed win chance: this is what similar bidding wars have actually taken to win before, not a forecast of what anyone else bids this specific week.</p>
+              <p class="muted small">Bid that would have won this share of comparable historical auctions. Pooled from ${samples.length} winning prices behind the comps below.</p>
             </div>
           `
             : ""}
@@ -691,7 +699,7 @@ function faabEstimateSection(player, data) {
       <div class="faab-method-values faab-method-values-triple">
         <div class="faab-method-value"><span class="faab-method-num">${pctOrDash(condPriceByMethod.comp_based_median, 1)}</span><span class="faab-method-sub">MED</span></div>
         <div class="faab-method-value"><span class="faab-method-num">${pctOrDash(condPriceByMethod.comp_based_mean, 1)}</span><span class="faab-method-sub">AVG</span></div>
-        <div class="faab-method-value"><span class="faab-method-num">${pctOrDash(bidProb.comp_based_median, 0)}</span><span class="faab-method-sub">Interest</span></div>
+        <div class="faab-method-value"><span class="faab-method-num">${pctOrDash(bidProb.comp_based_median, 0)}</span><span class="faab-method-sub">INT</span></div>
       </div>
     </div>
   `;
@@ -700,7 +708,7 @@ function faabEstimateSection(player, data) {
       <div class="faab-method-label">Regression</div>
       <div class="faab-method-values">
         <div class="faab-method-value"><span class="faab-method-num">${pctOrDash(condPriceByMethod.regression, 1)}</span><span class="faab-method-sub">FAAB</span></div>
-        <div class="faab-method-value"><span class="faab-method-num">${pctOrDash(bidProb.regression, 0)}</span><span class="faab-method-sub">Interest</span></div>
+        <div class="faab-method-value"><span class="faab-method-num">${pctOrDash(bidProb.regression, 0)}</span><span class="faab-method-sub">INT</span></div>
       </div>
     </div>
   `;
@@ -715,11 +723,12 @@ function faabEstimateSection(player, data) {
     <h3>This player</h3>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Player</th><th>Recent pts</th><th>Rank</th><th>Flags</th></tr></thead>
+        <thead><tr><th>Player</th><th>Recent pts</th><th>USAGE %</th><th>Rank</th><th>Flags</th></tr></thead>
         <tbody>
           <tr>
-            <td>${escapeHtml(player.name)}<div class="muted small">Week ${inputs.week}</div><div class="muted small">${competingFaNote}</div></td>
+            <td>${escapeHtml(player.name)}<div class="muted small">Week ${inputs.week}</div></td>
             <td>${recentCellHtml(inputs.prior_week_had_stat_row ? inputs.prior_week_actual_points : null, inputs.trailing_2_3_avg_points, inputs.season_avg_points)}</td>
+            <td>${usageCellHtml(inputs.position, inputs.snap_pct_prior_week, inputs.had_carry_share_prior_week ? inputs.carry_share_prior_week : null, inputs.had_target_share_prior_week ? inputs.target_share_prior_week : null)}</td>
             <td>${rankCellHtml(inputs.had_weekly_rank ? inputs.weekly_rank : null, inputs.had_ros_rank ? inputs.ros_rank : null)}</td>
             <td>${flagsCellHtml(inputs.own_injury_flag, inputs.teammate_position_injury_flag)}</td>
           </tr>
@@ -729,7 +738,7 @@ function faabEstimateSection(player, data) {
   `;
 
   return `
-    <p class="muted small">% of your league's effective starting FAAB budget to bid IF you want to win him, alongside each method's own read on how likely a contest even is.</p>
+    <p class="muted small">% of your league's starting budget</p>
     <div class="faab-method-grid">${methodCards}</div>
     ${distHtml}
 
@@ -737,11 +746,11 @@ function faabEstimateSection(player, data) {
 
     ${thisPlayerSection}
 
-    <h3>Price comps <span class="muted small">- won only, drives the price-if-contested estimates above</span></h3>
-    <div class="table-wrap"><table><thead><tr><th title="This comp's share of the total weight behind conditional_price_mean above - every comp's weight sums to 100%. Derived from 1/(distance+0.05), credibility-adjusted for how many leagues backed this comp's own price. Comps are already listed highest-weight-first.">Weight (mean)</th><th title="This comp's share of the total weight behind conditional_price_median above - the same weight, capped so no single comp can carry more than 5x any other's, so one very well-backed comp can't single-handedly drag the estimate toward an outlier price.">Weight (median)</th><th>Player</th><th>% of budget</th><th>Recent pts</th><th>Rank</th><th>Flags</th></tr></thead><tbody>${priceComps || `<tr><td colspan="7" class="muted small">No comparable winning bids found.</td></tr>`}</tbody></table></div>
+    <h3>Price comps</h3>
+    <div class="table-wrap"><table><thead><tr><th title="This comp's share of the total weight behind the price estimates above - MED first, then AVG. MED's weight is capped so no single comp can carry more than 5x any other's; AVG's isn't. Comps are already listed highest-weight-first (by AVG).">WT (MED/AVG)</th><th>Player</th><th>% of budget</th><th>Recent pts</th><th>USAGE %</th><th>Rank</th><th>Flags</th></tr></thead><tbody>${priceComps || `<tr><td colspan="7" class="muted small">No comparable winning bids found.</td></tr>`}</tbody></table></div>
 
-    <h3>Interest comps <span class="muted small">- won + outbid + no-bid, drives the "chance you'll even need to bid" estimate</span></h3>
-    <div class="table-wrap"><table><thead><tr><th title="This comp's share of the total weight behind the weighted-average bid_probability above - every comp's weight sums to 100%. Derived from 1/(distance+0.05), so a closer comp counts for more. Comps are already listed highest-weight-first.">Weight</th><th>Player</th><th title="Of the leagues we have real data for this exact player/week (a real bid, or roster data confirming he was a genuine free agent there), how many actually saw a bid - not weighted, one binary count per league.">Leagues bid</th><th>Recent pts</th><th>Rank</th><th>Flags</th></tr></thead><tbody>${interestComps || `<tr><td colspan="6" class="muted small">No comparable situations found.</td></tr>`}</tbody></table></div>
+    <h3>Interest comps</h3>
+    <div class="table-wrap"><table><thead><tr><th title="This comp's share of the total weight behind the weighted-average bid_probability above - every comp's weight sums to 100%. Derived from 1/(distance+0.05), so a closer comp counts for more. Comps are already listed highest-weight-first.">Weight</th><th>Player</th><th title="Of the leagues we have real data for this exact player/week (a real bid, or roster data confirming he was a genuine free agent there), how many actually saw a bid - not weighted, one binary count per league.">Leagues bid</th><th>Recent pts</th><th>USAGE %</th><th>Rank</th><th>Flags</th></tr></thead><tbody>${interestComps || `<tr><td colspan="7" class="muted small">No comparable situations found.</td></tr>`}</tbody></table></div>
   `;
 }
 

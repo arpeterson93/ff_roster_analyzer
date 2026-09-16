@@ -70,8 +70,8 @@ For each bid, adds:
   - teammate_position_injury_flag whether another fantasy-relevant player at
                                   his own team+position had an Out/Doubtful
                                   report that same week
-  - snap_pct_prior_week / snap_pct_two_weeks_prior
-                                  his offense snap share trend
+  - snap_pct_prior_week           his offense snap share, most recent of
+                                  week-1/week-2 that has a real row
   - trailing_2_3_avg_points      real fantasy points (this row's own
                                   league's scoring) averaged over
                                   (bid_week-2) and (bid_week-3) only
@@ -106,12 +106,23 @@ import sys
 import time
 from collections import defaultdict
 from pathlib import Path
+from typing import NamedTuple
 
 import nflreadpy as nfl
 import polars as pl
 from espn_api.football import League as EspnLeague
 
-from engine.faab_estimate import FANTASY_RELEVANT_SNAP_PCT, POSITIONS as RELEVANT_POSITIONS, is_faab_relevant
+from engine.faab_estimate import (
+    INJURY_FLAG_STATUSES,
+    POSITIONS as RELEVANT_POSITIONS,
+    build_injury_indices,
+    build_snap_pct_index,
+    is_faab_relevant,
+    recent_carry_share,
+    recent_snap_pct,
+    recent_target_share,
+    team_position_totals,
+)
 from engine.scoring import ScoringRules
 from ingest import nfl_data as nd
 from ingest.ids import build_id_map
@@ -123,8 +134,7 @@ OTHER_BIDS_PATH = Path(__file__).parent / "other-leagues-bids.json"
 VETTED_PATH = Path(__file__).parent / "vetted_candidates.json"
 OUT_PATH = Path(__file__).parent / "o-league-training-table.json"
 COMBINED_OUT_PATH = Path(__file__).parent / "combined-training-table.json"
-
-INJURY_FLAG_STATUSES = {"Out", "Doubtful"}
+UNRESOLVED_PLAYERS_PATH = Path(__file__).parent / "unresolved_players.json"
 
 ROSTERED_BY_WEEK_PATH = Path(__file__).parent / "o-league-rostered-by-week.json"
 OTHER_ROSTERED_BY_WEEK_PATH = Path(__file__).parent / "other-leagues-rostered-by-week.json"
@@ -170,19 +180,52 @@ def load_league_provenance() -> dict[int, dict]:
     return result
 
 
-def _recent_snap_pct(pfr_id: str | None, week: int, snaps: pl.DataFrame) -> float | None:
-    """This player's offense_pct in the most recent of week-1/week-2 that has
-    a row - the same short lookback used for snap_pct_prior_week below."""
-    if not pfr_id:
-        return None
-    hist = snaps.filter(pl.col("pfr_player_id") == pfr_id)
-    for wk in (week - 1, week - 2):
-        if wk < 1:
-            continue
-        row = hist.filter(pl.col("week") == wk)
-        if row.height:
-            return row.to_dicts()[0].get("offense_pct")
-    return None
+class SeasonIndex(NamedTuple):
+    """Every per-player/per-week lookup enrich_player_week and build_no_bid_
+    rows need for one season, pre-indexed ONCE (see build_season_index)
+    instead of each doing its own fresh polars .filter() per player-week -
+    see the conversation this was built from: profiling a real enrich_
+    player_week call showed ~80% of its time was pure polars query-
+    collection overhead (not any actual work), from calling .filter() on
+    the same season-long DataFrame 9+ times per row. With a training table
+    in the hundreds of thousands of rows, that overhead alone ran into
+    hours."""
+
+    stats_by_player: dict[str, dict[int, dict]]  # player_id -> week -> row
+    stats_by_week: dict[int, list[dict]]  # week -> every row that week (any player)
+    injury_by_player_week: dict[tuple[str, int], str]  # (gsis_id, week) -> report_status
+    teammates_by_team_week_pos: dict[tuple[str, int, str], list[dict]]  # (team, week, position) -> rows
+    snap_pct_by_player: dict[str, dict[int, float]]  # pfr_player_id -> week -> offense_pct
+    team_rb_carries: dict[tuple[str, int], float]  # (team, week) -> total RB-position carries
+
+
+def _build_stats_indices(stats_df: pl.DataFrame) -> tuple[dict[str, dict[int, dict]], dict[int, list[dict]]]:
+    """(stats_by_player, stats_by_week), both built from a SINGLE pass over
+    stats_df.to_dicts() - build_rows_for_source/enrich_player_week need the
+    former, build_no_bid_rows' own week-by-week scan for free-agent
+    candidates needs the latter; building each separately would convert the
+    same DataFrame to Python dicts twice for no reason."""
+    by_player: dict[str, dict[int, dict]] = defaultdict(dict)
+    by_week: dict[int, list[dict]] = defaultdict(list)
+    for row in stats_df.to_dicts():
+        by_player[row["player_id"]][row["week"]] = row
+        by_week[row["week"]].append(row)
+    return dict(by_player), dict(by_week)
+
+
+def build_season_index(
+    stats_df: pl.DataFrame, injuries_df: pl.DataFrame, snaps_df: pl.DataFrame, rosters_weekly_df: pl.DataFrame
+) -> SeasonIndex:
+    """Builds every index enrich_player_week/build_no_bid_rows need for one
+    season - see SeasonIndex's own docstring for why. A season's worth of
+    these DataFrames (a few thousand rows each) is small enough that
+    building every index up front is negligible next to the hundreds of
+    thousands of per-row lookups it replaces."""
+    stats_by_player, stats_by_week = _build_stats_indices(stats_df)
+    injury_by_player_week, teammates_by_team_week_pos = build_injury_indices(injuries_df, rosters_weekly_df)
+    snap_pct_by_player = build_snap_pct_index(snaps_df)
+    team_rb_carries = team_position_totals(stats_df, "RB", "carries")
+    return SeasonIndex(stats_by_player, stats_by_week, injury_by_player_week, teammates_by_team_week_pos, snap_pct_by_player, team_rb_carries)
 
 
 def build_gsis_to_pfr_map() -> dict[str, str]:
@@ -409,15 +452,15 @@ def _ros_ranked_candidates(rank_index: dict, idmap, position: str, season: int, 
     return out
 
 
-def _points_by_week(gsis_id: str | None, stats: pl.DataFrame, scoring: ScoringRules) -> dict[int, float]:
+def _points_by_week(gsis_id: str | None, stats_by_player: dict[str, dict[int, dict]], scoring: ScoringRules) -> dict[int, float]:
     """This player's real fantasy points for every week he has a stat row
     THIS season, under the given league's OWN scoring rules - computed once
     per (player, season, league) and reused for both the trailing-2/3 and
-    season-to-date windows below, rather than re-filtering stats per window."""
+    season-to-date windows below. stats_by_player is build_season_index's
+    own SeasonIndex.stats_by_player."""
     if not gsis_id:
         return {}
-    df = stats.filter(pl.col("player_id") == gsis_id)
-    return {row["week"]: scoring.points_for_row(row) for row in df.to_dicts()}
+    return {week: scoring.points_for_row(row) for week, row in stats_by_player.get(gsis_id, {}).items()}
 
 
 def enrich_player_week(
@@ -426,9 +469,7 @@ def enrich_player_week(
     position: str | None,
     season: int,
     week: int,
-    stats: pl.DataFrame,
-    injuries: pl.DataFrame,
-    snaps: pl.DataFrame,
+    season_index: SeasonIndex,
     scoring: ScoringRules,
     idmap,
     gsis_to_pfr: dict[str, str],
@@ -436,61 +477,87 @@ def enrich_player_week(
 ) -> dict:
     """Every nflverse-derived field shared by both a real bid row and a
     synthetic no-bid row - factored out so the two code paths can't drift.
-    `scoring` is THIS ROW'S OWN SOURCE LEAGUE's rules - see module docstring."""
+    `scoring` is THIS ROW'S OWN SOURCE LEAGUE's rules - see module docstring.
+    season_index is build_season_index's own output - see that function and
+    SeasonIndex's own docstring for why every lookup here goes through a
+    pre-built dict instead of a fresh polars .filter() per call."""
     this_week_row = None
     prior_week_row = None
     team_that_week = None
     if gsis_id:
-        this_week_df = stats.filter((pl.col("player_id") == gsis_id) & (pl.col("week") == week))
-        if this_week_df.height:
-            this_week_row = this_week_df.to_dicts()[0]
-            team_that_week = this_week_row.get("team")
-        if week > 1:
-            prior_df = stats.filter((pl.col("player_id") == gsis_id) & (pl.col("week") == week - 1))
-            if prior_df.height:
-                prior_week_row = prior_df.to_dicts()[0]
-                if team_that_week is None:
+        player_weeks = season_index.stats_by_player.get(gsis_id)
+        if player_weeks:
+            this_week_row = player_weeks.get(week)
+            if this_week_row is not None:
+                team_that_week = this_week_row.get("team")
+            if week > 1:
+                prior_week_row = player_weeks.get(week - 1)
+                if prior_week_row is not None and team_that_week is None:
                     team_that_week = prior_week_row.get("team")
 
     prior_week_actual_points = scoring.points_for_row(prior_week_row) if prior_week_row else None
 
     own_injury_status = None
     teammate_position_injury_flag = None
+    teammate_position_injury_is_new = None
     if gsis_id:
-        own_row = injuries.filter((pl.col("gsis_id") == gsis_id) & (pl.col("week") == week))
-        if own_row.height:
-            own_injury_status = own_row.to_dicts()[0].get("report_status")
+        own_injury_status = season_index.injury_by_player_week.get((gsis_id, week))
     if team_that_week and position:
-        teammates = injuries.filter(
-            (pl.col("team") == team_that_week) & (pl.col("week") == week) & (pl.col("position") == position) & (pl.col("gsis_id") != gsis_id)
-        )
+        teammates = season_index.teammates_by_team_week_pos.get((team_that_week, week, position), [])
         teammate_position_injury_flag = False
-        for row in teammates.to_dicts():
+        teammate_position_injury_is_new = False
+        for row in teammates:
+            teammate_gsis_id = row.get("gsis_id")
+            if teammate_gsis_id == gsis_id:
+                continue
             if row.get("report_status") not in INJURY_FLAG_STATUSES:
                 continue
-            teammate_pfr_id = gsis_to_pfr.get(row.get("gsis_id"))
-            snap_pct = _recent_snap_pct(teammate_pfr_id, week, snaps)
-            if snap_pct is not None and snap_pct >= FANTASY_RELEVANT_SNAP_PCT:
-                teammate_position_injury_flag = True
-                break
-
-    snap_pct_prior = None
-    snap_pct_two_prior = None
-    pfr_id = gsis_to_pfr.get(gsis_id) if gsis_id else None
-    if pfr_id:
-        snap_hist = snaps.filter(pl.col("pfr_player_id") == pfr_id)
-        for wk, target in [(week - 1, "prior"), (week - 2, "two_prior")]:
-            if wk < 1:
+            teammate_pfr_id = gsis_to_pfr.get(teammate_gsis_id)
+            snap_pct = recent_snap_pct(teammate_pfr_id, week, season_index.snap_pct_by_player)
+            # Same shared relevance gate the bid TARGET's own row already
+            # has to clear (is_faab_relevant) - a real usage bar OR a good
+            # enough ROS rank, applied here to the TEAMMATE instead: a
+            # committee back with a real, well-known ROS ranking can have a
+            # genuinely quiet recent-usage week (bye-adjacent, a timeshare)
+            # without that making his injury any less of a real crowding-
+            # out event for the backup behind him - see the conversation
+            # this was built from. None for prior_points - a teammate's own
+            # RECENT POINTS aren't computed here (only his snap share and
+            # rank are already in hand at this point in the loop), so usage_
+            # ok falls back to snap_pct alone, same as the previous version,
+            # while rank_ok is a genuinely new second path.
+            teammate_ros_rank = forward_rank_features(teammate_gsis_id, position, season, week, idmap, rank_index)["ros_rank"]
+            if not is_faab_relevant(None, snap_pct, teammate_ros_rank, position):
                 continue
-            snap_row = snap_hist.filter(pl.col("week") == wk)
-            if snap_row.height:
-                pct = snap_row.to_dicts()[0].get("offense_pct")
-                if target == "prior":
-                    snap_pct_prior = pct
-                else:
-                    snap_pct_two_prior = pct
+            teammate_position_injury_flag = True
+            # "New" this week specifically for THIS teammate - was he ALSO
+            # flagged (real practice-report status or the synthetic RESERVE
+            # tag - see build_injury_indices) the week before, or does his
+            # own trail start right here? Anecdotally, FAAB bids on the
+            # newly-relevant backup spike hardest the very first week a
+            # starter goes down (maximum uncertainty, everyone bidding at
+            # once) and cool off once the market's had a week to price the
+            # backup in - see the conversation this was built from. No
+            # `break` here (unlike the old version) - keeps scanning every
+            # qualifying teammate rather than stopping at the first, so a
+            # SECOND teammate's own fresh injury isn't missed just because
+            # an earlier one in the list happened to be an old, ongoing one.
+            if season_index.injury_by_player_week.get((teammate_gsis_id, week - 1)) not in INJURY_FLAG_STATUSES:
+                teammate_position_injury_is_new = True
 
-    points_by_week = _points_by_week(gsis_id, stats, scoring)
+    # Most recent of week-1/week-2 that has a real row - see recent_snap_pct
+    # (the SAME function, and the same fallback, the LIVE query's own
+    # snap_pct_prior_week uses). An earlier version tracked week-1 and
+    # week-2 as two separate, non-falling-back fields here, which meant a
+    # real bye in the immediate prior week produced None (later defaulting
+    # to a misleading 0.0) even when week-2 had real data sitting right
+    # there on the same row - a genuine train/predict mismatch, since the
+    # live path already fell back in this exact situation. See the
+    # conversation this was built from.
+    pfr_id = gsis_to_pfr.get(gsis_id) if gsis_id else None
+    snap_pct_prior = recent_snap_pct(pfr_id, week, season_index.snap_pct_by_player)
+
+    points_by_week = _points_by_week(gsis_id, season_index.stats_by_player, scoring)
     trailing_weeks = [wk for wk in (week - 2, week - 3) if wk >= 1 and wk in points_by_week]
     trailing_2_3_avg_points = (sum(points_by_week[wk] for wk in trailing_weeks) / len(trailing_weeks)) if trailing_weeks else None
     season_weeks = [wk for wk in points_by_week if wk < week]
@@ -502,10 +569,12 @@ def enrich_player_week(
         "team_that_week": team_that_week,
         "own_injury_status": own_injury_status,
         "teammate_position_injury_flag": teammate_position_injury_flag,
+        "teammate_position_injury_is_new": teammate_position_injury_is_new,
         "snap_pct_prior_week": snap_pct_prior,
-        "snap_pct_two_weeks_prior": snap_pct_two_prior,
         "trailing_2_3_avg_points": trailing_2_3_avg_points,
         "season_avg_points": season_avg_points,
+        "carry_share_prior_week": recent_carry_share(gsis_id, week, season_index.stats_by_player, season_index.team_rb_carries),
+        "target_share_prior_week": recent_target_share(gsis_id, week, season_index.stats_by_player),
         **forward_rank_features(gsis_id, position, season, week, idmap, rank_index),
     }
 
@@ -518,9 +587,7 @@ def build_no_bid_rows(
     idmap,
     gsis_to_pfr: dict[str, str],
     scoring: ScoringRules,
-    stats_by_season: dict[int, pl.DataFrame],
-    injuries_by_season: dict[int, pl.DataFrame],
-    snaps_by_season: dict[int, pl.DataFrame],
+    season_index_by_season: dict[int, SeasonIndex],
     rank_index: dict,
 ) -> list[dict]:
     """One row per (season, week, player) where the player was a genuine
@@ -551,11 +618,9 @@ def build_no_bid_rows(
     out = []
     for season_str, weeks in rostered_by_week.items():
         season = int(season_str)
-        if season not in stats_by_season:
+        if season not in season_index_by_season:
             continue
-        stats = stats_by_season[season]
-        injuries = injuries_by_season[season]
-        snaps = snaps_by_season[season]
+        season_index = season_index_by_season[season]
 
         for week_str, rostered_ids in weeks.items():
             week = int(week_str)
@@ -577,7 +642,7 @@ def build_no_bid_rows(
 
                 enriched = enrich_player_week(
                     gsis_id=gsis_id, position=position, season=season, week=week,
-                    stats=stats, injuries=injuries, snaps=snaps,
+                    season_index=season_index,
                     scoring=scoring, idmap=idmap, gsis_to_pfr=gsis_to_pfr, rank_index=rank_index,
                 )
                 out.append(
@@ -607,7 +672,7 @@ def build_no_bid_rows(
                     }
                 )
 
-            prior_rows = stats.filter(pl.col("week") == week - 1).to_dicts()
+            prior_rows = season_index.stats_by_week.get(week - 1, [])
             gsis_ids_with_stat_row: set[str] = set()
             for row in prior_rows:
                 position = row.get("position")
@@ -616,7 +681,7 @@ def build_no_bid_rows(
                 gsis_id = row.get("player_id")
                 gsis_ids_with_stat_row.add(gsis_id)
                 prior_points = scoring.points_for_row(row)
-                snap_pct = _recent_snap_pct(gsis_to_pfr.get(gsis_id), week, snaps)
+                snap_pct = recent_snap_pct(gsis_to_pfr.get(gsis_id), week, season_index.snap_pct_by_player)
                 ros_rank = forward_rank_features(gsis_id, position, season, week, idmap, rank_index)["ros_rank"]
                 _try_add_no_bid_row(gsis_id, position, prior_points, snap_pct, ros_rank)
 
@@ -634,7 +699,7 @@ def build_no_bid_rows(
                 for gsis_id, ros_rank in _ros_ranked_candidates(rank_index, idmap, position, season, week).items():
                     if gsis_id in gsis_ids_with_stat_row:
                         continue
-                    snap_pct = _recent_snap_pct(gsis_to_pfr.get(gsis_id), week, snaps)
+                    snap_pct = recent_snap_pct(gsis_to_pfr.get(gsis_id), week, season_index.snap_pct_by_player)
                     _try_add_no_bid_row(gsis_id, position, None, snap_pct, ros_rank)
     return out
 
@@ -810,9 +875,7 @@ def build_rows_for_source(
     idmap,
     gsis_to_pfr: dict[str, str],
     scoring: ScoringRules,
-    stats_by_season: dict[int, pl.DataFrame],
-    injuries_by_season: dict[int, pl.DataFrame],
-    snaps_by_season: dict[int, pl.DataFrame],
+    season_index_by_season: dict[int, SeasonIndex],
     bidder_counts: dict[tuple, int],
     team_season_spend: dict[tuple, float],
     league_season_spend: dict[tuple, float],
@@ -823,7 +886,7 @@ def build_rows_for_source(
     out_rows = []
     for r in bids:
         season, week, lid = r["season"], r["week"], r["source_league_id"]
-        if season not in stats_by_season:
+        if season not in season_index_by_season:
             continue  # no nflverse data loaded for this season - shouldn't happen, but don't crash the whole run over one bad row
         record = idmap.by_espn.get(r["add_player_id"])
         gsis_id = record["gsis_id"] if record else None
@@ -833,7 +896,7 @@ def build_rows_for_source(
 
         enriched = enrich_player_week(
             gsis_id=gsis_id, position=position, season=season, week=week,
-            stats=stats_by_season[season], injuries=injuries_by_season[season], snaps=snaps_by_season[season],
+            season_index=season_index_by_season[season],
             scoring=scoring, idmap=idmap, gsis_to_pfr=gsis_to_pfr, rank_index=rank_index,
         )
 
@@ -902,24 +965,32 @@ def main():
     league_season_budgets = build_effective_budgets(all_bids, provenance)
 
     # Every league except The O League is auto-discovered (see
-    # discover_public_leagues.py) - real, idiosyncratic scoring categories
-    # show up that engine/scoring.py has never needed a mapping for before
-    # (e.g. "every N yards" bonus tiers - added live 2026-09 the first time
-    # one was hit). ScoringRules.from_espn fails LOUD on those on purpose
-    # (see its own docstring) rather than silently mis-scoring - correct
-    # behavior for a single-league run, but with 100+ pooled leagues one
-    # bad apple shouldn't crash the whole build. So: skip that ONE league
-    # (and all its bids, below) with a clear warning, keep going for
-    # everyone else. The O League itself is never skipped this way - if
-    # ITS OWN scoring can't be mapped, that's a real bug worth crashing
-    # loudly for, not silently dropping our own league's data.
+    # discover_public_leagues.py) - two independent ways a single pooled
+    # league can fail here, neither of which should crash a 100+-league
+    # build over one bad apple: (1) real, idiosyncratic scoring categories
+    # engine/scoring.py has never needed a mapping for before (e.g. "every N
+    # yards" bonus tiers - added live 2026-09 the first time one was hit) -
+    # ScoringRules.from_espn fails LOUD on those on purpose (see its own
+    # docstring), raising ValueError; (2) a league that was public when
+    # discover_public_leagues.py/vet_candidates.py last checked it has since
+    # gone private or been deleted (a commissioner changed settings, the
+    # league folded) - load_scoring_rules_for_league's own settings fetch
+    # then fails, raising RuntimeError (confirmed live 2026-09-16: league
+    # 112132, "CFL", vetted as compatible earlier, came back
+    # exists_but_private(401) on a real build run months later). Skip that
+    # ONE league (and all its bids, below) with a clear warning either way,
+    # keep going for everyone else. The O League itself is never skipped
+    # this way for either failure - if ITS OWN scoring can't be mapped, or
+    # ITS OWN settings can't be fetched, that's a real bug (or a credentials
+    # problem) worth crashing loudly for, not silently dropping our own
+    # league's data.
     scoring_by_league: dict[int, ScoringRules] = {}
     excluded_leagues: set[int] = set()
     for lid in {r["source_league_id"] for r in all_bids}:
         print(f"loading scoring rules for league {lid} ({provenance.get(lid, {}).get('name')!r})...")
         try:
             scoring_by_league[lid] = load_scoring_rules_for_league(lid)
-        except ValueError as exc:
+        except (ValueError, RuntimeError) as exc:
             if lid == O_LEAGUE_ID:
                 raise
             print(f"  WARNING: skipping league {lid} entirely - {exc}", file=sys.stderr)
@@ -928,22 +999,28 @@ def main():
     if excluded_leagues:
         all_bids = [r for r in all_bids if r["source_league_id"] not in excluded_leagues]
         other_bids = [r for r in other_bids if r["source_league_id"] not in excluded_leagues]
-        print(f"excluded {len(excluded_leagues)} league(s) with unmappable scoring: {sorted(excluded_leagues)}")
+        print(f"excluded {len(excluded_leagues)} league(s) with unmappable scoring or no-longer-fetchable settings: {sorted(excluded_leagues)}")
 
     bidder_counts = compute_bidder_counts(all_bids)
     team_season_spend, league_season_spend = compute_spend_denominators(all_bids)
 
     # Load each season's nflverse data ONCE, not per-row - shared across
     # every league, since these describe real NFL players, not any one
-    # fantasy league.
-    stats_by_season: dict[int, pl.DataFrame] = {}
-    injuries_by_season: dict[int, pl.DataFrame] = {}
-    snaps_by_season: dict[int, pl.DataFrame] = {}
+    # fantasy league. Immediately indexed (see build_season_index/
+    # SeasonIndex) rather than kept as raw DataFrames - enrich_player_week/
+    # build_no_bid_rows do hundreds of thousands of per-player-week lookups
+    # against this data, and a fresh polars .filter() per lookup was, by
+    # far, the single biggest cost in this whole script (see the
+    # conversation this was built from: ~80% of a real enrich_player_week
+    # call's own time was pure polars query-collection overhead, not any
+    # actual work).
+    season_index_by_season: dict[int, SeasonIndex] = {}
     for season in seasons:
         print(f"loading nflverse data for {season}...")
-        stats_by_season[season] = nfl.load_player_stats([season])
-        injuries_by_season[season] = nfl.load_injuries([season])
-        snaps_by_season[season] = nfl.load_snap_counts([season])
+        season_index_by_season[season] = build_season_index(
+            nfl.load_player_stats([season]), nfl.load_injuries([season]), nfl.load_snap_counts([season]),
+            nfl.load_rosters_weekly([season]),
+        )
 
     print("building forward-looking rank index (FantasyPros historical consensus ranks)...")
     rank_index = build_rank_index(seasons)
@@ -953,8 +1030,7 @@ def main():
     for lid, bids_group in [(lid, [r for r in all_bids if r["source_league_id"] == lid]) for lid in {r["source_league_id"] for r in all_bids}]:
         rows, unresolved = build_rows_for_source(
             bids=bids_group, provenance=provenance[lid], idmap=idmap, gsis_to_pfr=gsis_to_pfr,
-            scoring=scoring_by_league[lid], stats_by_season=stats_by_season,
-            injuries_by_season=injuries_by_season, snaps_by_season=snaps_by_season,
+            scoring=scoring_by_league[lid], season_index_by_season=season_index_by_season,
             bidder_counts=bidder_counts, team_season_spend=team_season_spend, league_season_spend=league_season_spend,
             rank_index=rank_index,
         )
@@ -987,7 +1063,7 @@ def main():
         rows = build_no_bid_rows(
             league_id=lid, bids=league_bids, rostered_by_week=rostered_by_week,
             idmap=idmap, gsis_to_pfr=gsis_to_pfr, scoring=scoring_by_league[lid],
-            stats_by_season=stats_by_season, injuries_by_season=injuries_by_season, snaps_by_season=snaps_by_season,
+            season_index_by_season=season_index_by_season,
             rank_index=rank_index,
         )
         for r in rows:
@@ -1014,7 +1090,20 @@ def main():
 
     print(f"\nwrote {sum(1 for r in all_out_rows if r['source_league_id'] == O_LEAGUE_ID)} rows to {OUT_PATH}")
     print(f"wrote {len(all_out_rows)} rows ({len({r['source_league_id'] for r in all_out_rows})} leagues) to {COMBINED_OUT_PATH}")
-    print(f"unresolved ESPN player ids (no nflverse match) across all leagues: {len(all_unresolved)}")
+
+    # {espn_id: name} for every unresolved id, not just a bare count - the
+    # name comes straight off the bid row's own add_player_name (ESPN's own
+    # spelling), the same field idmap.by_espn failed to match against, so
+    # this is exactly the raw material needed to spot a real name-spelling/
+    # crosswalk mismatch (see the conversation this was built from) rather
+    # than re-deriving player identity from scratch to investigate one.
+    unresolved_names: dict[int, str] = {}
+    for r in all_bids:
+        eid = r["add_player_id"]
+        if eid in all_unresolved and eid not in unresolved_names:
+            unresolved_names[eid] = r["add_player_name"]
+    UNRESOLVED_PLAYERS_PATH.write_text(json.dumps(unresolved_names, indent=2, sort_keys=True))
+    print(f"unresolved ESPN player ids (no nflverse match) across all leagues: {len(all_unresolved)} - see {UNRESOLVED_PLAYERS_PATH}")
     resolved_count = sum(1 for r in all_out_rows if r["gsis_id"])
     print(f"resolved to a gsis_id: {resolved_count}/{len(all_out_rows)}")
     with_prior_points = sum(1 for r in all_out_rows if r["prior_week_actual_points"] is not None)

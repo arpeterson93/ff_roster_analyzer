@@ -139,15 +139,48 @@ FEATURE_NAMES = [
     "prior_week_had_stat_row",
     "own_injury_flag",
     "teammate_position_injury_flag",
+    # Whether the qualifying teammate's OWN injury/reserve status is new
+    # this week (he wasn't ALSO flagged the week before) vs. an ongoing,
+    # already-priced-in absence - see build_injury_indices/enrich_player_
+    # week. Anecdotally, FAAB bids on a newly-relevant backup spike hardest
+    # the very first week a starter goes down and cool off once the market
+    # has had a week to price the backup in - see the conversation this was
+    # built from. Always 0.0 when teammate_position_injury_flag itself is
+    # false - there's no "new" reading without a real flagged teammate to
+    # begin with.
+    "teammate_position_injury_is_new",
     "snap_pct_prior_week",
+    # had_X flags for the three fields above that don't already have one via
+    # a dedicated stat-row check (prior_week_had_stat_row covers prior_week_
+    # actual_points already) - see the conversation this was built from.
+    # Without these, "no real data because he didn't play" and "played and
+    # scored/snapped exactly 0" were both silently mapped to the same 0.0,
+    # indistinguishable to both the k-NN distance and the regression fit -
+    # a real conflation for exactly the population this model cares about
+    # (a rank-rescued player who's been out for weeks looking identical,
+    # feature-wise, to one on a genuine 0-point/0-snap streak).
+    "had_snap_pct_prior_week",
     "trailing_2_3_avg_points",
+    "had_trailing_2_3_avg_points",
     "season_avg_points",
+    "had_season_avg_points",
     "weekly_rank",
     "had_weekly_rank",
     "ros_rank",
     "had_ros_rank",
-    "best_position_competitor_ros_rank",
-    "had_position_competitor_rank",
+    # RB-position-scoped carry share and team-wide (any position) target
+    # share - see recent_carry_share/recent_target_share. Only ever a real
+    # signal for an RB's own carry share or a WR/TE's own target share (the
+    # k-NN search already only ever compares same-position rows, so a
+    # QB/K's own near-meaningless carry share never competes against an
+    # RB's real one) - see the conversation this was built from: meant to
+    # help distinguish a real featured back/receiver from a blocking
+    # fullback or in-line TE who racked up a high snap share without much
+    # actual on-ball involvement.
+    "carry_share_prior_week",
+    "had_carry_share_prior_week",
+    "target_share_prior_week",
+    "had_target_share_prior_week",
 ]
 
 # Missing-rank sentinel (see feature_vector) - a real FantasyPros ECR rank
@@ -159,14 +192,6 @@ FEATURE_NAMES = [
 # the model can tell "genuinely replacement-level" from "we don't know"
 # (before 2020, or a player FantasyPros never ranked that week).
 MISSING_RANK_SENTINEL = 150.0
-
-# A teammate only counts toward teammate_position_injury_flag if they had at
-# least this much offensive snap share recently - filters out third-
-# stringers/camp bodies who show up on every injury report but were never
-# actually playing (see tools/faab_history/build_training_table.py, where
-# this same constant/reasoning was first established for the historical
-# data - kept in sync here for the live pipeline).
-FANTASY_RELEVANT_SNAP_PCT = 0.15
 
 # A live WAIVERS candidate only gets run through the model if their own
 # recent usage/production clears one of these bars - the SAME thresholds
@@ -243,6 +268,58 @@ def is_faab_relevant(prior_points: float | None, snap_pct: float | None, ros_ran
 # Questionable, since that's what a manager actually sees when bidding).
 TEAMMATE_INJURY_FLAG_STATUSES = {"OUT", "DOUBTFUL", "INJURY_RESERVE", "SUSPENSION"}
 
+# nflverse's own report_status vocabulary (Questionable/Doubtful/Out from the
+# weekly PRACTICE REPORT) - a completely different vocabulary/data source
+# from TEAMMATE_INJURY_FLAG_STATUSES above (ESPN's live roster status), used
+# wherever a caller (historical or live) is reading nflverse's own injury/
+# roster data via build_injury_indices below, not ESPN's. "RESERVE" is not a
+# real nflverse value - see build_injury_indices for why it's synthesized.
+INJURY_FLAG_STATUSES = {"Out", "Doubtful", "RESERVE"}
+RESERVE_ROSTER_STATUS = "RES"
+SYNTHETIC_RESERVE_REPORT_STATUS = "RESERVE"
+
+
+def build_injury_indices(
+    injuries_df, rosters_weekly_df
+) -> tuple[dict[tuple[str, int], str], dict[tuple[str, int, str], list[dict]]]:
+    """({(gsis_id, week): report_status}, {(team, week, position): rows}) -
+    the former for a player's own injury status, the latter for scanning his
+    teammates at the same position that week. Shared by tools/faab_history/
+    build_training_table.py (historical) and engine/pipeline.py (live) so
+    both read nflverse's own injury/roster data the same way.
+
+    Built from injuries_df (the weekly PRACTICE-REPORT data) first, THEN
+    overlaid with rosters_weekly_df's own real roster status wherever it
+    shows RES (Reserve/Injured, PUP, NFI, etc.) for a (player, week) the
+    practice report never recorded at all - see the conversation this was
+    built from: a real ~10-week Isiah Pacheco 2024 IR stint (confirmed live
+    2026-09-16 via load_rosters_weekly's own week-by-week status, RES from
+    week 3 through week 12) had ZERO injuries_df rows for 8 of those 10
+    weeks - the practice report only tracks day-to-day game-status
+    uncertainty leading up to a game, not "already on injured reserve, not
+    practicing at all" the way a real roster-status transaction does. Only
+    fills a gap, never overwrites a real practice-report entry - a genuine
+    Questionable/Doubtful/Out designation is real, more granular information
+    the roster status alone doesn't carry, so it's never downgraded to the
+    synthetic RESERVE tag."""
+    own: dict[tuple[str, int], str] = {}
+    by_team_week_pos: dict[tuple[str, int, str], list[dict]] = defaultdict(list)
+    for row in injuries_df.to_dicts():
+        own[(row["gsis_id"], row["week"])] = row.get("report_status")
+        by_team_week_pos[(row["team"], row["week"], row["position"])].append(row)
+
+    for row in rosters_weekly_df.to_dicts():
+        if row.get("status") != RESERVE_ROSTER_STATUS or not row.get("gsis_id"):
+            continue
+        key = (row["gsis_id"], row["week"])
+        if own.get(key) is not None:
+            continue  # a real practice-report entry already exists - don't overwrite it
+        own[key] = SYNTHETIC_RESERVE_REPORT_STATUS
+        by_team_week_pos[(row["team"], row["week"], row["position"])].append(
+            {"gsis_id": row["gsis_id"], "report_status": SYNTHETIC_RESERVE_REPORT_STATUS}
+        )
+    return own, dict(by_team_week_pos)
+
 
 def build_gsis_to_pfr_map(playerids_df) -> dict[str, str]:
     """gsis_id -> pfr_id, straight from the raw ESPN<->nflverse crosswalk
@@ -255,18 +332,116 @@ def build_gsis_to_pfr_map(playerids_df) -> dict[str, str]:
     return result
 
 
-def recent_snap_pct(pfr_id: str | None, week: int, snaps_df) -> float | None:
+def build_snap_pct_index(snaps_df) -> dict[str, dict[int, float]]:
+    """{pfr_player_id: {week: offense_pct}} - built ONCE per season so
+    recent_snap_pct can do an O(1) dict lookup instead of a fresh polars
+    .filter() call every time it's asked about a player-week. See the
+    conversation this was built from: profiling a real enrich_player_week
+    call showed ~80% of its time was pure polars query-collection overhead
+    (not any actual work) from calling .filter() on this same season-long
+    DataFrame repeatedly - with a training table in the hundreds of
+    thousands of rows, that overhead alone ran into hours. A season's worth
+    of snap_counts rows is small enough that converting all of it to a dict
+    once is negligible next to the per-row lookups it replaces."""
+    index: dict[str, dict[int, float]] = defaultdict(dict)
+    for row in snaps_df.to_dicts():
+        index[row["pfr_player_id"]][row["week"]] = row.get("offense_pct")
+    return dict(index)
+
+
+def recent_snap_pct(pfr_id: str | None, week: int, snap_pct_index: dict[str, dict[int, float]]) -> float | None:
     """This player's offense_pct in the most recent of week-1/week-2 that
-    has a row."""
+    has a row. snap_pct_index is build_snap_pct_index's own output - see
+    that function for why this takes a pre-built index rather than the raw
+    snaps DataFrame."""
     if not pfr_id:
         return None
-    hist = snaps_df.filter(pl.col("pfr_player_id") == pfr_id)
+    weeks = snap_pct_index.get(pfr_id)
+    if not weeks:
+        return None
     for wk in (week - 1, week - 2):
         if wk < 1:
             continue
-        row = hist.filter(pl.col("week") == wk)
-        if row.height:
-            return row.to_dicts()[0].get("offense_pct")
+        pct = weeks.get(wk)
+        if pct is not None:
+            return pct
+    return None
+
+
+def build_stats_index(stats_df) -> dict[str, dict[int, dict]]:
+    """{player_id: {week: row}} - the full nflverse player_stats row per
+    player-week, built ONCE per season for the same reason build_snap_pct_
+    index exists (see that function's docstring) - recent_carry_share/
+    recent_target_share do O(1) lookups into this instead of a fresh
+    .filter() per call."""
+    index: dict[str, dict[int, dict]] = defaultdict(dict)
+    for row in stats_df.to_dicts():
+        index[row["player_id"]][row["week"]] = row
+    return dict(index)
+
+
+def team_position_totals(stats_df, position: str, stat_col: str) -> dict[tuple[str, int], float]:
+    """{(team, week): total `stat_col` by every player AT `position` on that
+    team, that week} - the denominator for a position-scoped usage share
+    (e.g. an RB's own share of his team's RB-position carries specifically,
+    not every position's carries combined - unlike nflverse's own
+    target_share, which is already computed team-wide across every
+    position and needs no recomputation here - see recent_target_share).
+    Computed once per (stats_df, position, stat_col) and reused across every
+    player's own lookup, rather than re-aggregating per player. Already a
+    single polars group_by (not called per-row), so unlike recent_snap_pct/
+    recent_carry_share/recent_target_share this was never the bottleneck -
+    kept taking the raw DataFrame rather than build_stats_index's output."""
+    rows = stats_df.filter(pl.col("position") == position)
+    grouped = rows.group_by(["team", "week"]).agg(pl.col(stat_col).sum().alias("total"))
+    return {(r["team"], r["week"]): r["total"] for r in grouped.to_dicts()}
+
+
+def recent_carry_share(gsis_id: str | None, week: int, stats_index: dict[str, dict[int, dict]], team_rb_carries: dict[tuple[str, int], float]) -> float | None:
+    """This RB's own share of his TEAM's total RB-position carries (not
+    every position's carries combined - see team_position_totals), for the
+    most recent of week-1/week-2 that has a real stat row - same lookback
+    convention as recent_snap_pct, so the SNAP/ATT/TGT usage columns all
+    read as of the same reference point. Meaningful for an RB specifically
+    (a WR's own occasional carry share against an RB-only denominator isn't
+    a real signal); callers displaying it should scope that to RB, same as
+    recent_target_share's own callers scope to WR/TE. None (not 0.0) when
+    the team had zero RB carries that week at all - a real 0/0, not a real
+    0% share. stats_index is build_stats_index's own output."""
+    if not gsis_id:
+        return None
+    weeks = stats_index.get(gsis_id)
+    if not weeks:
+        return None
+    for wk in (week - 1, week - 2):
+        if wk < 1:
+            continue
+        row = weeks.get(wk)
+        if row is not None:
+            total = team_rb_carries.get((row.get("team"), wk))
+            return (row.get("carries") or 0) / total if total else None
+    return None
+
+
+def recent_target_share(gsis_id: str | None, week: int, stats_index: dict[str, dict[int, dict]]) -> float | None:
+    """This player's own target_share - nflverse's own stat, already
+    computed team-wide ACROSS EVERY POSITION (his targets / his team's
+    total targets, any position), used as-is - unlike carry share, no
+    position-scoped recomputation needed here (see team_position_totals).
+    Most recent of week-1/week-2 that has a real stat row - same lookback
+    convention as recent_snap_pct. stats_index is build_stats_index's own
+    output."""
+    if not gsis_id:
+        return None
+    weeks = stats_index.get(gsis_id)
+    if not weeks:
+        return None
+    for wk in (week - 1, week - 2):
+        if wk < 1:
+            continue
+        row = weeks.get(wk)
+        if row is not None:
+            return row.get("target_share")
     return None
 
 
@@ -308,61 +483,12 @@ def build_event_won_rows_index(trainable_rows: list[dict]) -> dict[tuple, list[d
     return dict(index)
 
 
-def annotate_position_competition(all_rows: list[dict]) -> None:
-    """Mutates every row in place, attaching best_position_competitor_ros_rank
-    / had_position_competitor_rank - a cheap first cut at a "hot commodity"
-    / crowding-out feature (see the conversation this was built from): the
-    more elite OTHER free agents are sitting on the wire at the same
-    position that week, the more a decent-but-not-elite player's own
-    interest/price should get squeezed, since FAAB attention (and budget)
-    is zero-sum within a week. Deliberately starting from ROS rank ALONE
-    rather than a weighted combination of prior-week points/weekly rank/ROS
-    rank - ROS rank is already position-specific and league-scoring-format-
-    agnostic (a real FantasyPros consensus rank, not derived from any one
-    league's own point values), so no cross-feature combination or
-    cross-position normalization is needed at all to make it comparable.
-    Per the conversation, this is intentionally the simplest possible
-    version to validate the underlying idea before reaching for anything
-    more complex (e.g. a weighted blend of features, or literally running
-    the interest model on every competitor).
-
-    Grouped by (source_league_id, season, week, position) - the same
-    grouping build_training_table.py uses to generate no_bid rows for
-    every free agent at that spot, so "other" here genuinely means every
-    other player who was on the wire, not just other rows that happen to
-    have drawn a bid. Uses the row's OWN pre-substitution ros_rank (None
-    when FantasyPros never ranked that player-week), not the
-    MISSING_RANK_SENTINEL-filled feature_vector value, so a real "nobody
-    notable is ranked" read isn't quietly diluted by treating every
-    unranked competitor as tied at the sentinel.
-
-    Must run on the FULL unfiltered row set (before load_trainable_rows
-    filters to trainable signals) - a no_bid row IS another free agent for
-    this purpose, and dropping them would silently shrink "other players
-    available" down to just whoever happened to draw a bid, which is
-    exactly backwards for a competition-for-attention signal."""
-    groups: dict[tuple, list[dict]] = defaultdict(list)
-    for r in all_rows:
-        groups[(r.get("source_league_id"), r["season"], r["week"], r["position"])].append(r)
-    for group in groups.values():
-        for r in group:
-            other_ranks = [
-                g["ros_rank"] for g in group
-                if g["add_player_id"] != r["add_player_id"] and g.get("ros_rank") is not None
-            ]
-            r["best_position_competitor_ros_rank"] = min(other_ranks) if other_ranks else None
-            r["had_position_competitor_rank"] = bool(other_ranks)
-
-
 def load_trainable_rows(rows: list[dict]) -> list[dict]:
-    """Takes an already-parsed, already-annotated row list (see
-    annotate_position_competition - must run on the FULL row set BEFORE
-    this filters it down, so it has every free agent to compare against,
-    not just the ones that happen to be trainable) rather than a path, so
-    a caller that also needs the unfiltered all_rows (both current callers
-    do) can parse+annotate the file once and share the same row objects,
-    instead of two independent reads silently drifting into two unrelated
-    copies of "the same" data.
+    """Takes an already-parsed row list rather than a path, so a caller that
+    also needs the unfiltered all_rows (both current callers do) can parse
+    the file once and share the same row objects, instead of two
+    independent reads silently drifting into two unrelated copies of "the
+    same" data.
 
     Excludes type == "FREEAGENT" - once a player clears the waiver
     period unclaimed, ANY team can add him instantly for free, first-come-
@@ -611,15 +737,21 @@ def feature_vector(r: dict) -> dict[str, float]:
         "prior_week_had_stat_row": 1.0 if r.get("prior_week_had_stat_row") else 0.0,
         "own_injury_flag": 1.0 if r.get("own_injury_status") else 0.0,
         "teammate_position_injury_flag": 1.0 if r.get("teammate_position_injury_flag") else 0.0,
+        "teammate_position_injury_is_new": 1.0 if r.get("teammate_position_injury_is_new") else 0.0,
         "snap_pct_prior_week": r["snap_pct_prior_week"] if r.get("snap_pct_prior_week") is not None else 0.0,
+        "had_snap_pct_prior_week": 1.0 if r.get("snap_pct_prior_week") is not None else 0.0,
         "trailing_2_3_avg_points": r["trailing_2_3_avg_points"] if r.get("trailing_2_3_avg_points") is not None else 0.0,
+        "had_trailing_2_3_avg_points": 1.0 if r.get("trailing_2_3_avg_points") is not None else 0.0,
         "season_avg_points": r["season_avg_points"] if r.get("season_avg_points") is not None else 0.0,
+        "had_season_avg_points": 1.0 if r.get("season_avg_points") is not None else 0.0,
         "weekly_rank": r["weekly_rank"] if r.get("weekly_rank") is not None else MISSING_RANK_SENTINEL,
         "had_weekly_rank": 1.0 if r.get("weekly_rank") is not None else 0.0,
         "ros_rank": r["ros_rank"] if r.get("ros_rank") is not None else MISSING_RANK_SENTINEL,
         "had_ros_rank": 1.0 if r.get("ros_rank") is not None else 0.0,
-        "best_position_competitor_ros_rank": r["best_position_competitor_ros_rank"] if r.get("best_position_competitor_ros_rank") is not None else MISSING_RANK_SENTINEL,
-        "had_position_competitor_rank": 1.0 if r.get("had_position_competitor_rank") else 0.0,
+        "carry_share_prior_week": r["carry_share_prior_week"] if r.get("carry_share_prior_week") is not None else 0.0,
+        "had_carry_share_prior_week": 1.0 if r.get("carry_share_prior_week") is not None else 0.0,
+        "target_share_prior_week": r["target_share_prior_week"] if r.get("target_share_prior_week") is not None else 0.0,
+        "had_target_share_prior_week": 1.0 if r.get("target_share_prior_week") is not None else 0.0,
     }
 
 
@@ -1151,6 +1283,15 @@ def _price_comp_dicts(
             "bid_distribution": _price_comp_bid_distribution(r, event_won_rows_index),
             "prior_week_actual_points": r.get("prior_week_actual_points"),
             "snap_pct_prior_week": r.get("snap_pct_prior_week"),
+            # RB-position-scoped carry share and team-wide (any position)
+            # target share, both as of the same prior-week reference point
+            # as snap_pct_prior_week above - see recent_carry_share/
+            # recent_target_share. A UI displaying these should scope carry
+            # share to RB and target share to WR/TE, same as those
+            # functions' own callers do; None for a comp built before this
+            # field existed, or for a position where it was never computed.
+            "carry_share_prior_week": r.get("carry_share_prior_week"),
+            "target_share_prior_week": r.get("target_share_prior_week"),
             **_comp_rank_and_injury_fields(r),
             # See consolidate_cross_league_events - real specificity from
             # The O League itself when this comp is actually a cross-league
@@ -1179,6 +1320,15 @@ def _interest_comp_dicts(scored: list[dict], weights: list[float], shrunk_fracti
             "season": r["season"], "week": r["week"], "name": r["add_player_name"],
             "prior_week_actual_points": r.get("prior_week_actual_points"),
             "snap_pct_prior_week": r.get("snap_pct_prior_week"),
+            # RB-position-scoped carry share and team-wide (any position)
+            # target share, both as of the same prior-week reference point
+            # as snap_pct_prior_week above - see recent_carry_share/
+            # recent_target_share. A UI displaying these should scope carry
+            # share to RB and target share to WR/TE, same as those
+            # functions' own callers do; None for a comp built before this
+            # field existed, or for a position where it was never computed.
+            "carry_share_prior_week": r.get("carry_share_prior_week"),
+            "target_share_prior_week": r.get("target_share_prior_week"),
             **_comp_rank_and_injury_fields(r),
             "o_league_detail": r.get("o_league_detail"),
             # See _price_comp_dicts's identical field - same normalized weight.
@@ -1530,7 +1680,6 @@ class FaabModel:
 
     def __init__(self, training_table_path: Path = TRAINING_TABLE_PATH):
         all_rows = json.loads(training_table_path.read_text())
-        annotate_position_competition(all_rows)
         # add_synthetic_price_wins runs BEFORE any other trainable_rows
         # consumer sees this data - every league's own synthetic won-
         # equivalent (the highest other_failure bid for an event with no

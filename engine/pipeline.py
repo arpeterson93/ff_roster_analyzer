@@ -14,13 +14,19 @@ import polars as pl
 
 from engine.curve import Curve, blend_current, build_curve, build_dst_curve
 from engine.faab_estimate import (
-    FANTASY_RELEVANT_SNAP_PCT,
+    INJURY_FLAG_STATUSES,
     POOLED_TRAINING_TABLE_PATH,
     TEAMMATE_INJURY_FLAG_STATUSES,
     FaabModel,
     build_gsis_to_pfr_map,
+    build_injury_indices,
+    build_snap_pct_index,
+    build_stats_index,
     is_faab_relevant,
+    recent_carry_share,
     recent_snap_pct,
+    recent_target_share,
+    team_position_totals,
 )
 from engine.matchups import (
     allowed_by_team_week_pos,
@@ -212,8 +218,35 @@ def _compute_faab_estimates(
     if not candidates:
         return {}
 
-    snaps_df = nd.snap_counts([season], current_season=season)
+    # Indexed once here rather than handing the raw DataFrames to recent_
+    # snap_pct/recent_carry_share/recent_target_share to re-filter per
+    # candidate (and per teammate) - this pipeline's own candidate pool is
+    # small enough that it wasn't the real bottleneck (that was tools/faab_
+    # history/build_training_table.py's hundreds of thousands of historical
+    # rows - see the conversation this was built from), but there's no
+    # reason for the live path to carry the same per-call .filter() pattern
+    # when the shared functions now expect an index anyway.
+    snap_pct_index = build_snap_pct_index(nd.snap_counts([season], current_season=season))
     gsis_to_pfr = build_gsis_to_pfr_map(nd.playerids())
+    # carries/targets/target_share - the live analog of build_training_
+    # table.py's own stats load, for recent_carry_share/recent_target_share
+    # (SNAP/ATT/TGT usage columns - see the conversation this was built
+    # from). Keyed by gsis id (p["id"] itself - unlike snap_pct above, which
+    # needs the pfr crosswalk since snap_counts is pfr-keyed).
+    stats_df = nd.player_stats(season, current_season=season)
+    stats_index = build_stats_index(stats_df)
+    team_rb_carries = team_position_totals(stats_df, "RB", "carries")
+    # nflverse's own weekly injury/roster-status history - NOT used to
+    # decide whether a teammate is CURRENTLY hurt (that's still ESPN's own
+    # live roster injury_status below, the more accurate real-time signal)
+    # - only to check whether a qualifying teammate was ALSO flagged the
+    # week before, for teammate_position_injury_is_new. See the
+    # conversation this was built from: FAAB bids on a newly-relevant
+    # backup anecdotally spike hardest the very first week a starter goes
+    # down and cool off once the market's had a week to price him in.
+    injury_by_player_week, _ = build_injury_indices(
+        nd.injuries(season, current_season=season), nd.rosters_weekly(season, current_season=season)
+    )
 
     by_team_pos: dict[tuple[str, str], list[dict]] = {}
     for p in players_out:
@@ -284,9 +317,7 @@ def _compute_faab_estimates(
         return None
 
     # First pass: compute every candidate's own inputs, INCLUDING relevance,
-    # before any per-player estimate - best_position_competitor_ros_rank
-    # (below) needs the full relevant-candidate pool up front, not just the
-    # one player currently being scored.
+    # before any per-player estimate.
     per_player: dict[str, dict] = {}
     for p in candidates:
         prior_actual = prior_week_actual(p)
@@ -297,16 +328,39 @@ def _compute_faab_estimates(
         # feature (below) and the per-team handcuff attribution (team_
         # interest, further down) are keyed off this SAME qualifying set, so
         # it's computed once here instead of twice (once per purpose).
+        # is_faab_relevant is the SAME shared gate a bid TARGET's own row
+        # already has to clear - a real usage bar OR a good enough ROS rank
+        # - applied here to the TEAMMATE instead: a committee back with a
+        # real, well-known ROS ranking can have a genuinely quiet recent-
+        # usage week without that making his injury any less of a real
+        # crowding-out event for the backup behind him. See the
+        # conversation this was built from.
         qualifying_mates = []
         for mate in by_team_pos.get((p["nfl_team"], p["position"]), []):
             if mate["id"] == p["id"] or mate.get("injury_status") not in TEAMMATE_INJURY_FLAG_STATUSES:
                 continue
-            mate_snap_pct = recent_snap_pct(gsis_to_pfr.get(mate["id"]), current_week, snaps_df)
-            if mate_snap_pct is not None and mate_snap_pct >= FANTASY_RELEVANT_SNAP_PCT:
+            mate_snap_pct = recent_snap_pct(gsis_to_pfr.get(mate["id"]), current_week, snap_pct_index)
+            if is_faab_relevant(None, mate_snap_pct, mate.get("ros_pos_rank"), mate["position"]):
                 qualifying_mates.append(mate)
 
+        # Was ANY qualifying mate ALSO flagged (by nflverse's own weekly
+        # data - see injury_by_player_week above) the week before, or is
+        # this genuinely the first week his absence shows up at all? See
+        # tools/faab_history/build_training_table.py's identical historical
+        # feature for the full reasoning.
+        teammate_injury_is_new = any(
+            injury_by_player_week.get((mate["id"], current_week - 1)) not in INJURY_FLAG_STATUSES for mate in qualifying_mates
+        )
+
         prior_points = prior_actual["points"] if prior_actual else None
-        snap_pct = recent_snap_pct(pfr_id, current_week, snaps_df)
+        snap_pct = recent_snap_pct(pfr_id, current_week, snap_pct_index)
+        # RB-position-scoped carry share and team-wide (any position) target
+        # share - see engine.faab_estimate.recent_carry_share/recent_target_
+        # share. Computed for every candidate regardless of position (cheap,
+        # and matches how snap_pct is computed unconditionally too) - the UI
+        # decides which to actually show based on the player's own position.
+        carry_share = recent_carry_share(p["id"], current_week, stats_index, team_rb_carries)
+        target_share = recent_target_share(p["id"], current_week, stats_index)
         trailing_2_3_avg_points, season_avg_points = recent_form(p)
 
         # Same relevance bar the historical no_bid rows had to clear to even
@@ -321,32 +375,12 @@ def _compute_faab_estimates(
         is_relevant = is_faab_relevant(prior_points, snap_pct, p.get("ros_pos_rank"), p["position"])
         per_player[p["id"]] = {
             "player": p, "prior_actual": prior_actual, "prior_points": prior_points,
-            "snap_pct": snap_pct, "teammate_flag": bool(qualifying_mates), "qualifying_mates": qualifying_mates,
+            "snap_pct": snap_pct, "carry_share": carry_share, "target_share": target_share,
+            "teammate_flag": bool(qualifying_mates), "teammate_injury_is_new": teammate_injury_is_new,
+            "qualifying_mates": qualifying_mates,
             "trailing_2_3_avg_points": trailing_2_3_avg_points, "season_avg_points": season_avg_points,
             "is_relevant": is_relevant,
         }
-
-    # best_position_competitor_ros_rank / had_position_competitor_rank - the
-    # live analog of engine.faab_estimate.annotate_position_competition's
-    # historical feature: how good is the BEST other free agent at this
-    # position right now, among every OTHER candidate that clears the same
-    # relevance bar (matching the historical feature, which is built from
-    # the training table's no_bid rows - themselves already relevance-
-    # filtered at build time, see build_training_table.py - not the
-    # unfiltered waiver wire). A real elite name on the wire should pull
-    # attention away from everyone else at that position this week.
-    relevant_ros_ranks_by_position: dict[str, list[tuple[str, float]]] = {}
-    for pid, info in per_player.items():
-        if not info["is_relevant"]:
-            continue
-        rank = info["player"].get("ros_pos_rank")
-        if rank is None:
-            continue
-        relevant_ros_ranks_by_position.setdefault(info["player"]["position"], []).append((pid, rank))
-
-    def best_competitor_rank(p: dict) -> tuple[float | None, bool]:
-        others = [rank for pid, rank in relevant_ros_ranks_by_position.get(p["position"], []) if pid != p["id"]]
-        return (min(others), True) if others else (None, False)
 
     # team_interest: "which of the OTHER owners in the league would actually
     # want this guy, and why" - the two things a single market-wide FAAB
@@ -393,9 +427,10 @@ def _compute_faab_estimates(
     for pid, info in per_player.items():
         p = info["player"]
         prior_actual, prior_points, snap_pct = info["prior_actual"], info["prior_points"], info["snap_pct"]
+        carry_share, target_share = info["carry_share"], info["target_share"]
         teammate_flag = info["teammate_flag"]
+        teammate_injury_is_new = info["teammate_injury_is_new"]
         trailing_2_3_avg_points, season_avg_points = info["trailing_2_3_avg_points"], info["season_avg_points"]
-        best_rank, had_competitor_rank = best_competitor_rank(p)
         # Roster-fit context is orthogonal to whether the broader MARKET
         # should bid - a below-threshold player can still be a real personal
         # handcuff stash for one specific owner, so this is computed and
@@ -413,10 +448,12 @@ def _compute_faab_estimates(
                     "position": p["position"], "week": current_week,
                     "prior_week_actual_points": prior_points, "prior_week_had_stat_row": prior_actual is not None,
                     "own_injury_flag": p.get("injury_status") not in (None, "ACTIVE"),
-                    "teammate_position_injury_flag": teammate_flag, "snap_pct_prior_week": snap_pct,
+                    "teammate_position_injury_flag": teammate_flag, "teammate_position_injury_is_new": teammate_injury_is_new,
+                    "snap_pct_prior_week": snap_pct,
                     "trailing_2_3_avg_points": trailing_2_3_avg_points, "season_avg_points": season_avg_points,
                     "weekly_rank": faab_weekly_rank(p), "ros_rank": p.get("ros_pos_rank"),
-                    "best_position_competitor_ros_rank": best_rank, "had_position_competitor_rank": had_competitor_rank,
+                    "carry_share_prior_week": carry_share, "had_carry_share_prior_week": carry_share is not None,
+                    "target_share_prior_week": target_share, "had_target_share_prior_week": target_share is not None,
                 },
             }
             continue
@@ -428,6 +465,7 @@ def _compute_faab_estimates(
             "prior_week_had_stat_row": prior_actual is not None,
             "own_injury_status": p.get("injury_status") if p.get("injury_status") not in (None, "ACTIVE") else None,
             "teammate_position_injury_flag": teammate_flag,
+            "teammate_position_injury_is_new": teammate_injury_is_new,
             "snap_pct_prior_week": snap_pct,
             "trailing_2_3_avg_points": trailing_2_3_avg_points,
             "season_avg_points": season_avg_points,
@@ -439,8 +477,8 @@ def _compute_faab_estimates(
             # FantasyPros doesn't rank this player at all this week).
             "weekly_rank": faab_weekly_rank(p),
             "ros_rank": p.get("ros_pos_rank"),
-            "best_position_competitor_ros_rank": best_rank,
-            "had_position_competitor_rank": had_competitor_rank,
+            "carry_share_prior_week": carry_share,
+            "target_share_prior_week": target_share,
         }
         estimates[pid] = model.estimate(query) | {"team_interest": team_interest}
 

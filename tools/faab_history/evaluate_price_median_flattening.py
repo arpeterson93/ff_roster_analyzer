@@ -51,7 +51,6 @@ from engine.faab_estimate import (
     _feature_stats,
     _position_distance_cutoffs,
     add_synthetic_price_wins,
-    annotate_position_competition,
     build_event_won_rows_index,
     build_price_rows,
     comp_based_estimate,
@@ -84,7 +83,6 @@ def main():
     args = parser.parse_args()
 
     all_rows = json.loads(args.table.read_text())
-    annotate_position_competition(all_rows)
     trainable = add_synthetic_price_wins(load_trainable_rows(all_rows))
     train, test = stratified_split(trainable, SEED, TEST_FRACTION, args.holdout_league_id)
 

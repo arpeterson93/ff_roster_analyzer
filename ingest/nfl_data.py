@@ -160,6 +160,44 @@ def snap_counts(seasons: int | list[int], current_season: int | None = None) -> 
     return _normalize_team_columns(df, ["team", "opponent"])
 
 
+def injuries(seasons: int | list[int], current_season: int | None = None) -> pl.DataFrame:
+    """Weekly per-player injury PRACTICE-REPORT status (report_status -
+    Questionable/Doubtful/Out etc.) - day-to-day game-status uncertainty
+    leading up to a game, NOT the same thing as a player already on
+    injured reserve and not practicing at all (see rosters_weekly below,
+    and tools/faab_history/build_training_table.py's own notes on why
+    both sources are needed together - a real, weeks-long IR stint can
+    have zero rows here for most of its duration)."""
+    seasons_list = [seasons] if isinstance(seasons, int) else list(seasons)
+    try:
+        df = _cached_load("injuries", seasons_list, lambda: nfl.load_injuries(seasons_list), current_season=current_season)
+    except ConnectionError:
+        probe = _cached_load("injuries_schema_probe", [2023], lambda: nfl.load_injuries([2023]), current_season=None)
+        return probe.clear()
+    return _normalize_team_columns(df, ["team"])
+
+
+def rosters_weekly(seasons: int | list[int], current_season: int | None = None) -> pl.DataFrame:
+    """Weekly per-player roster status (status: ACT/RES/INA/CUT/etc.) - RES
+    (Reserve/Injured, PUP, NFI) is what actually catches a player on
+    injured reserve WEEK BY WEEK, unlike the injuries() practice report
+    above, which only tracks pre-game status uncertainty and can miss a
+    real, sustained IR absence almost entirely (confirmed live 2026-09-16:
+    a real ~10-week 2024 IR stint had zero injuries() rows for 8 of those
+    10 weeks, while this status showed RES correctly the whole time)."""
+    seasons_list = [seasons] if isinstance(seasons, int) else list(seasons)
+    try:
+        df = _cached_load(
+            "rosters_weekly", seasons_list, lambda: nfl.load_rosters_weekly(seasons_list), current_season=current_season
+        )
+    except ConnectionError:
+        probe = _cached_load(
+            "rosters_weekly_schema_probe", [2023], lambda: nfl.load_rosters_weekly([2023]), current_season=None
+        )
+        return probe.clear()
+    return _normalize_team_columns(df, ["team"])
+
+
 def playerids() -> pl.DataFrame:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     path = CACHE_DIR / "playerids.parquet"

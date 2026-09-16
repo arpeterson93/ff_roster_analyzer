@@ -8,6 +8,8 @@ from tools.faab_history.build_training_table import (
     _compute_weekly_blackouts,
     _ros_ranked_candidates,
     build_no_bid_rows,
+    build_season_index,
+    enrich_player_week,
     forward_rank_features,
 )
 
@@ -151,9 +153,13 @@ def test_ros_ranked_candidates_skips_an_fp_id_with_no_gsis_mapping():
     assert _ros_ranked_candidates(rank_index, idmap, "RB", 2024, 2) == {}
 
 
-_EMPTY_STATS = pl.DataFrame(schema={"player_id": pl.Utf8, "week": pl.Int64, "position": pl.Utf8, "team": pl.Utf8})
+_EMPTY_STATS = pl.DataFrame(
+    schema={"player_id": pl.Utf8, "week": pl.Int64, "position": pl.Utf8, "team": pl.Utf8, "carries": pl.Int64, "targets": pl.Int64, "target_share": pl.Float64}
+)
 _EMPTY_INJURIES = pl.DataFrame(schema={"gsis_id": pl.Utf8, "week": pl.Int64, "team": pl.Utf8, "position": pl.Utf8, "report_status": pl.Utf8})
 _EMPTY_SNAPS = pl.DataFrame(schema={"pfr_player_id": pl.Utf8, "week": pl.Int64, "offense_pct": pl.Float64})
+_EMPTY_ROSTERS_WEEKLY = pl.DataFrame(schema={"gsis_id": pl.Utf8, "week": pl.Int64, "team": pl.Utf8, "position": pl.Utf8, "status": pl.Utf8})
+_EMPTY_SEASON_INDEX = build_season_index(_EMPTY_STATS, _EMPTY_INJURIES, _EMPTY_SNAPS, _EMPTY_ROSTERS_WEEKLY)
 
 
 def test_build_no_bid_rows_widens_to_a_ros_ranked_player_with_no_stats_row_at_all():
@@ -180,9 +186,7 @@ def test_build_no_bid_rows_widens_to_a_ros_ranked_player_with_no_stats_row_at_al
         idmap=idmap,
         gsis_to_pfr={},
         scoring=ScoringRules.from_espn([{"id": 42, "abbr": "REY", "points": 1}]),
-        stats_by_season={2024: _EMPTY_STATS},
-        injuries_by_season={2024: _EMPTY_INJURIES},
-        snaps_by_season={2024: _EMPTY_SNAPS},
+        season_index_by_season={2024: _EMPTY_SEASON_INDEX},
         rank_index=rank_index,
     )
     assert len(rows) == 1
@@ -212,9 +216,107 @@ def test_build_no_bid_rows_does_not_widen_a_player_above_the_ros_rank_ceiling():
         idmap=idmap,
         gsis_to_pfr={},
         scoring=ScoringRules.from_espn([{"id": 42, "abbr": "REY", "points": 1}]),
-        stats_by_season={2024: _EMPTY_STATS},
-        injuries_by_season={2024: _EMPTY_INJURIES},
-        snaps_by_season={2024: _EMPTY_SNAPS},
+        season_index_by_season={2024: _EMPTY_SEASON_INDEX},
         rank_index=rank_index,
     )
     assert rows == []
+
+
+def test_enrich_player_week_snap_pct_falls_back_to_two_weeks_prior():
+    # A real bye/inactive week 4 (week-1 relative to a week-5 lookup) with
+    # real snap data sitting right there two weeks back (week 3) - must fall
+    # back to it, matching engine.faab_estimate.recent_snap_pct's own
+    # fallback (the LIVE query's own snap_pct_prior_week uses that exact
+    # function) - an earlier version here tracked week-1/week-2 as two
+    # separate, non-falling-back fields, which read this real situation as
+    # "no data" purely because the immediate prior week happened to be
+    # empty, a genuine train/predict mismatch against the live path.
+    snaps = pl.DataFrame({"pfr_player_id": ["p1"], "week": [3], "offense_pct": [0.55]})
+    season_index = build_season_index(_EMPTY_STATS, _EMPTY_INJURIES, snaps, _EMPTY_ROSTERS_WEEKLY)
+    enriched = enrich_player_week(
+        gsis_id="g1", position="RB", season=2024, week=5,
+        season_index=season_index,
+        scoring=ScoringRules.from_espn([{"id": 42, "abbr": "REY", "points": 1}]),
+        idmap=_idmap({}), gsis_to_pfr={"g1": "p1"}, rank_index={"snapshots": {}, "week_starts": {}, "blackout": {}},
+    )
+    assert enriched["snap_pct_prior_week"] == 0.55
+
+
+def test_enrich_player_week_flags_a_teammate_on_reserve_status_with_no_injury_report_row():
+    # A real, live case (Isiah Pacheco, KC, 2024): a real ~10-week IR stint
+    # starting week 3 had ZERO load_injuries (practice-report) rows for 8 of
+    # those weeks - the report only tracks day-to-day game-status
+    # uncertainty, not "already on reserve, not practicing at all." His REAL
+    # roster status (load_rosters_weekly) showed RES the whole time. Without
+    # folding that second source in, a backup (Carson Steele here) sitting
+    # behind him would never get teammate_position_injury_flag even though
+    # the real-world crowding-out situation the flag exists to catch was
+    # exactly what was happening. injuries_df is left EMPTY here on purpose -
+    # simulating the exact gap this fix closes.
+    stats = pl.DataFrame({"player_id": ["backup"], "week": [3], "position": ["RB"], "team": ["KC"], "carries": [10], "targets": [1], "target_share": [0.1]})
+    rosters_weekly = pl.DataFrame({"gsis_id": ["starter"], "week": [4], "team": ["KC"], "position": ["RB"], "status": ["RES"]})
+    snaps = pl.DataFrame({"pfr_player_id": ["starter_pfr"], "week": [2], "offense_pct": [0.65]})
+    season_index = build_season_index(stats, _EMPTY_INJURIES, snaps, rosters_weekly)
+
+    enriched = enrich_player_week(
+        gsis_id="backup", position="RB", season=2024, week=4,
+        season_index=season_index,
+        scoring=ScoringRules.from_espn([{"id": 42, "abbr": "REY", "points": 1}]),
+        idmap=_idmap({}), gsis_to_pfr={"starter": "starter_pfr"},
+        rank_index={"snapshots": {}, "week_starts": {}, "blackout": {}},
+    )
+    assert enriched["teammate_position_injury_flag"] is True
+    # He wasn't flagged (by either source) the week before either - week 4
+    # is the first week his absence shows up at all, so this reads as a
+    # fresh, newly-relevant opportunity for the backup.
+    assert enriched["teammate_position_injury_is_new"] is True
+
+
+def test_enrich_player_week_does_not_flag_an_ongoing_injury_as_new():
+    # Same shape as the test above, but the starter was ALSO on reserve the
+    # week before - a real, already-known, ongoing absence by the time this
+    # week's bid happens, not a fresh one. Anecdotally, FAAB bids on the
+    # backup spike hardest the very first week and cool off once the market
+    # has had a week to price him in - see the conversation this was built
+    # from.
+    stats = pl.DataFrame({"player_id": ["backup"], "week": [3], "position": ["RB"], "team": ["KC"], "carries": [10], "targets": [1], "target_share": [0.1]})
+    rosters_weekly = pl.DataFrame(
+        {"gsis_id": ["starter", "starter"], "week": [3, 4], "team": ["KC", "KC"], "position": ["RB", "RB"], "status": ["RES", "RES"]}
+    )
+    snaps = pl.DataFrame({"pfr_player_id": ["starter_pfr"], "week": [2], "offense_pct": [0.65]})
+    season_index = build_season_index(stats, _EMPTY_INJURIES, snaps, rosters_weekly)
+
+    enriched = enrich_player_week(
+        gsis_id="backup", position="RB", season=2024, week=4,
+        season_index=season_index,
+        scoring=ScoringRules.from_espn([{"id": 42, "abbr": "REY", "points": 1}]),
+        idmap=_idmap({}), gsis_to_pfr={"starter": "starter_pfr"},
+        rank_index={"snapshots": {}, "week_starts": {}, "blackout": {}},
+    )
+    assert enriched["teammate_position_injury_flag"] is True
+    assert enriched["teammate_position_injury_is_new"] is False
+
+
+def test_enrich_player_week_rank_rescues_a_teammate_with_no_recent_snap_data():
+    # A real, well-ranked starter can go down with no recent snap data of
+    # his own recorded yet - his own real ROS rank should still be enough
+    # to count him as fantasy relevant for the crowding-out flag, same as
+    # is_faab_relevant already rank-rescues the bid TARGET'S OWN row (see
+    # the conversation this was built from).
+    stats = pl.DataFrame({"player_id": ["backup"], "week": [3], "position": ["RB"], "team": ["KC"], "carries": [10], "targets": [1], "target_share": [0.1]})
+    injuries = pl.DataFrame({"gsis_id": ["starter"], "week": [4], "team": ["KC"], "position": ["RB"], "report_status": ["Out"]})
+    rank_index = {
+        "week_starts": WEEK_STARTS_2024,
+        "snapshots": {("redraft-rb", 777): [(dt.date(2024, 9, 1), 50.0)]},  # well under RB's 73 ceiling
+        "blackout": {},
+    }
+    season_index = build_season_index(stats, injuries, _EMPTY_SNAPS, _EMPTY_ROSTERS_WEEKLY)
+
+    enriched = enrich_player_week(
+        gsis_id="backup", position="RB", season=2024, week=4,
+        season_index=season_index,
+        scoring=ScoringRules.from_espn([{"id": 42, "abbr": "REY", "points": 1}]),
+        idmap=_idmap({"starter": 777}), gsis_to_pfr={},  # no pfr crosswalk at all - snap_pct lookup will be None
+        rank_index=rank_index,
+    )
+    assert enriched["teammate_position_injury_flag"] is True
