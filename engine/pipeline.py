@@ -404,8 +404,8 @@ def _compute_faab_estimates(
 
         if not info["is_relevant"]:
             estimates[pid] = {
-                "bid_probability": {"comp_based": 0.0, "simple_baseline": 0.0, "regression": 0.0},
-                "conditional_price": {"comp_based": 0.0, "simple_baseline": 0.0, "regression": 0.0},
+                "bid_probability": {"comp_based_mean": 0.0, "comp_based_median": 0.0, "regression": 0.0},
+                "conditional_price": {"comp_based_mean": 0.0, "comp_based_median": 0.0, "regression": 0.0},
                 "comps": [], "interest_comps": [], "distribution": None,
                 "below_relevance_threshold": True,
                 "team_interest": team_interest,

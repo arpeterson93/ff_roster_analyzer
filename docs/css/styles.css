@@ -401,9 +401,14 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 .faab-dist-marker { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--accent); transform: translateX(-1px); }
 .faab-dist-labels { display: flex; justify-content: space-between; font-size: 11px; color: var(--ink-500); margin-top: 4px; font-variant-numeric: tabular-nums; }
 
-/* Confidence-to-win slider - a second marker (blue, distinct from the
-   accent-colored conditional_price marker) on the SAME track, moved live
-   by the range input below it rather than a separately-scaled widget. */
+/* conditional_price_median - a second accent-colored marker alongside the
+   solid conditional_price_mean one (.faab-dist-marker), distinguished by a
+   dashed rather than solid fill so both stay readable on the same track
+   without introducing a whole new color token. */
+.faab-dist-marker-median { background: repeating-linear-gradient(to bottom, var(--accent) 0 3px, transparent 3px 6px); }
+/* Confidence-to-win slider - a further marker (blue, distinct from both
+   conditional_price markers) on the SAME track, moved live by the range
+   input below it rather than a separately-scaled widget. */
 .faab-dist-marker-confidence { background: var(--blue-500); }
 /* Per-price-comp click-to-expand distribution (see docs/js/playermodal.js's
    priceCompDistributionHtml) - every real WINNING price tied to that comp's

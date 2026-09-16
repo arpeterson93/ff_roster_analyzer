@@ -561,6 +561,7 @@ function faabEstimateSection(player, data) {
       const rowId = `price-comp-${i}`;
       const mainRow = `<tr class="${hasDist ? "clickable-row" : ""}" data-price-comp-row="${rowId}">
         <td class="num">${fmt(c.weight * 100, 1)}%</td>
+        <td class="num">${c.weight_capped !== undefined ? fmt(c.weight_capped * 100, 1) + "%" : "–"}</td>
         <td>${escapeHtml(c.name)}<div class="muted small">${c.season} wk${c.week}</div>${oLeagueTag(c.o_league_detail)}</td>
         <td>${fmt(c.pct_of_remaining_budget * 100, 1)}%</td>
         <td>${recentCellHtml(c.prior_week_actual_points, c.trailing_2_3_avg_points, c.season_avg_points)}</td>
@@ -568,7 +569,7 @@ function faabEstimateSection(player, data) {
         <td>${flagsCellHtml(c.own_injury_flag, c.teammate_position_injury_flag)}</td>
       </tr>`;
       const detailRow = hasDist
-        ? `<tr class="price-comp-detail" data-price-comp-detail="${rowId}" hidden><td colspan="6">${priceCompDistributionHtml(c)}</td></tr>`
+        ? `<tr class="price-comp-detail" data-price-comp-detail="${rowId}" hidden><td colspan="7">${priceCompDistributionHtml(c)}</td></tr>`
         : "";
       return mainRow + detailRow;
     })
@@ -590,11 +591,14 @@ function faabEstimateSection(player, data) {
   // The K price comps (comp["comps"]) are real WINNING bids only - their
   // spread is the "if this goes to auction" distribution, not the blended
   // headline number (which also folds in P(anyone bids) - see
-  // bid_probability/conditional_price below). The marker on this track
-  // shows conditional_price, not comp_based, so it actually falls inside
-  // the range it's plotted against.
+  // bid_probability/conditional_price below). Two markers now, not one -
+  // comp_based_mean and comp_based_median (see engine/faab_estimate.py's
+  // comp_based_estimate) are two independent reads off the SAME k comps,
+  // both real candidates for "price if contested," so both get plotted
+  // rather than picking one to show.
   const dist = est.distribution;
-  const condPrice = (est.conditional_price || {}).comp_based;
+  const condPriceMean = (est.conditional_price || {}).comp_based_mean;
+  const condPriceMedian = (est.conditional_price || {}).comp_based_median;
   const samples = est.price_confidence_samples || [];
   const distHtml = dist
     ? (() => {
@@ -606,12 +610,13 @@ function faabEstimateSection(player, data) {
         // every sample here comes from one of the same comps dist.min/max
         // is built from - so this track's existing scale already safely
         // bounds every possible confidence-slider position, no separate
-        // axis needed for the second marker.
+        // axis needed for the extra markers.
         return `
           <div class="faab-dist">
             <div class="faab-dist-track">
               <div class="faab-dist-iqr" style="left:${pct(dist.p25)}%; width:${pct(dist.p75) - pct(dist.p25)}%;"></div>
-              <div class="faab-dist-marker" style="left:${pct(condPrice)}%;" title="Price if contested: ${fmt(condPrice * 100, 1)}%"></div>
+              <div class="faab-dist-marker" style="left:${pct(condPriceMean)}%;" title="Price if contested (mean): ${fmt(condPriceMean * 100, 1)}%"></div>
+              <div class="faab-dist-marker faab-dist-marker-median" style="left:${pct(condPriceMedian)}%;" title="Price if contested (median): ${fmt(condPriceMedian * 100, 1)}%"></div>
               ${samples.length ? `<div class="faab-dist-marker faab-dist-marker-confidence" data-confidence-marker style="left:${pct(defaultBid)}%;"></div>` : ""}
             </div>
             <div class="faab-dist-labels">
@@ -644,7 +649,7 @@ function faabEstimateSection(player, data) {
   // method's own card rather than multiplied in.
   const bidProb = est.bid_probability || {};
   const condPriceByMethod = est.conditional_price || {};
-  const METHOD_LABELS = { comp_based: "Comp-based", simple_baseline: "Similar-usage avg", regression: "Regression" };
+  const METHOD_LABELS = { comp_based_mean: "Comp-based (mean)", comp_based_median: "Comp-based (median)", regression: "Regression" };
   const methodCards = Object.entries(METHOD_LABELS)
     .map(([key, label]) => {
       const faabPct = condPriceByMethod[key];
@@ -692,8 +697,8 @@ function faabEstimateSection(player, data) {
 
     ${thisPlayerSection}
 
-    <h3>Price comps <span class="muted small">- won only, drives the price-if-contested estimate above</span></h3>
-    <div class="table-wrap"><table><thead><tr><th title="This comp's share of the total weight behind the weighted-average estimate above - every comp's weight sums to 100%. Derived from 1/(distance+0.05), so a closer comp counts for more. Comps are already listed highest-weight-first.">Weight</th><th>Player</th><th>% of budget</th><th>Recent pts</th><th>Rank</th><th>Flags</th></tr></thead><tbody>${priceComps || `<tr><td colspan="6" class="muted small">No comparable winning bids found.</td></tr>`}</tbody></table></div>
+    <h3>Price comps <span class="muted small">- won only, drives the price-if-contested estimates above</span></h3>
+    <div class="table-wrap"><table><thead><tr><th title="This comp's share of the total weight behind conditional_price_mean above - every comp's weight sums to 100%. Derived from 1/(distance+0.05), credibility-adjusted for how many leagues backed this comp's own price. Comps are already listed highest-weight-first.">Weight (mean)</th><th title="This comp's share of the total weight behind conditional_price_median above - the same weight, capped so no single comp can carry more than 2x any other's, so one very well-backed comp can't single-handedly drag the estimate toward an outlier price.">Weight (median)</th><th>Player</th><th>% of budget</th><th>Recent pts</th><th>Rank</th><th>Flags</th></tr></thead><tbody>${priceComps || `<tr><td colspan="7" class="muted small">No comparable winning bids found.</td></tr>`}</tbody></table></div>
 
     <h3>Interest comps <span class="muted small">- won + outbid + no-bid, drives the "chance you'll even need to bid" estimate</span></h3>
     <div class="table-wrap"><table><thead><tr><th title="This comp's share of the total weight behind the weighted-average bid_probability above - every comp's weight sums to 100%. Derived from 1/(distance+0.05), so a closer comp counts for more. Comps are already listed highest-weight-first.">Weight</th><th>Player</th><th title="Of the leagues we have real data for this exact player/week (a real bid, or roster data confirming he was a genuine free agent there), how many actually saw a bid - not weighted, one binary count per league.">Leagues bid</th><th>Recent pts</th><th>Rank</th><th>Flags</th></tr></thead><tbody>${interestComps || `<tr><td colspan="6" class="muted small">No comparable situations found.</td></tr>`}</tbody></table></div>

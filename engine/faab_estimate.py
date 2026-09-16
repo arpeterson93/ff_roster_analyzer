@@ -65,10 +65,19 @@ its OWN conditional price:
   1. comp_based_estimate()    - two k-NN searches, standardized feature
      distance: the K nearest same-position INTEREST comps (won+outbid+
      no_bid) weighted-average their own real bid RATE (leagues_with_bid /
-     leagues_eligible - see _interest_bid_fraction, not a binary "did any
-     pooled league bid") into P(bid); the K nearest same-position PRICE
-     comps (won only) weighted-average into the conditional price. The
-     comps themselves ARE the explanation.
+     leagues_eligible - see _shrunk_interest_fractions, not a binary "did
+     any pooled league bid"), each rate first shrunk toward this same
+     neighborhood's own leave-one-out pooled rate so a low-backing comp's
+     noisy rate can't swing P(bid) on its own, into P(bid). The K nearest
+     same-position PRICE comps (won only) produce TWO parallel conditional-
+     price reads off the SAME selected comps: conditional_price_mean, the
+     original credibility-weighted average (a single very-well-backed comp
+     can still dominate this - working as designed, but a real problem when
+     that comp's own price is an outlier relative to its neighbors), and
+     conditional_price_median, a weighted median over the same comps after
+     capping any one comp's weight relative to the rest (see _cap_weights/
+     _weighted_median) - more robust to exactly that case. The comps
+     themselves ARE the explanation.
   2. simple_baseline_estimate() - same split, but bucketed by usage decile
      (recent points + snap share percentile) instead of k-NN - one
      sentence to explain each half.
@@ -870,9 +879,10 @@ def _credibility(n: int, k: float = BUHLMANN_K) -> float:
     how much each selected comp counts once chosen.
 
     Only ever applied to the PRICE weight in comp_based_estimate, not
-    interest - see _interest_bid_fraction, whose own value already divides
-    by this same backing count, so multiplying by n/(n+15) on top of it
-    would double-count it rather than adding a genuinely separate axis."""
+    interest - see _shrunk_interest_fractions, whose own value already
+    divides by this same backing count, so multiplying by n/(n+15) on top
+    of it would double-count it rather than adding a genuinely separate
+    axis."""
     return n / (n + k) if n > 0 else 0.0
 
 
@@ -911,35 +921,148 @@ def _normalized_weights(weights: list[float]) -> list[float]:
     return [w / total for w in weights] if total else weights
 
 
-def _interest_bid_fraction(r: dict) -> float:
-    """This comp's own real bid RATE across every pooled league that had a
-    real chance to bid on it - leagues_with_bid / leagues_eligible (see
-    consolidate_cross_league_events, which sets both unconditionally on
-    every interest_rows row, single-league or cross-league) - NOT the
-    collapsed won/outbid/no_bid signal's binary "did ANY of them bid at
-    all." A cross-league event where only 4 of 50 pooled leagues actually
-    bid should contribute 8% interest, not the same full 100% "yes" a
-    40-of-50 event would contribute purely because at least one league in
-    each case happened to bid - see the conversation this was built from
-    (a 2026 wk2 AJ Barner query whose interest comps table was full of
-    single-digit bid rates, yet the aggregate bid_probability still came
-    out at 66%, because every nonzero bid rate was being treated as a full
-    yes vote regardless of how small it actually was).
+INTEREST_SHRINKAGE_K = 15.0  # same magnitude as BUHLMANN_K by default - independently tunable, see _shrunk_interest_fractions
 
-    Deliberately NOT also run through _credibility_weighted (unlike price) -
-    that would double-count a comp's own backing count: it's already priced
-    into this fraction's own denominator, so multiplying the surrounding
-    k-NN weight by n/(n+15) on top would apply the same "how much real
-    evidence backs this" adjustment twice, in two different, non-composing
-    ways (see comp_based_estimate's own docstring for the exact math).
-    Falls back to the collapsed signal only when leagues_eligible is
-    missing/zero (a row built directly, e.g. in a test, without going
-    through consolidate_cross_league_events) - every real production
-    interest_rows row always has both fields."""
+
+def _interest_counts(r: dict) -> tuple[float, float]:
+    """(leagues_with_bid, leagues_eligible) for one interest comp - see
+    consolidate_cross_league_events, which sets both unconditionally on
+    every real interest_rows row, single-league or cross-league. Falls
+    back to the collapsed won/outbid/no_bid signal only when
+    leagues_eligible is missing (a row built directly, e.g. in a test,
+    without going through that function)."""
     eligible = r.get("leagues_eligible")
     if eligible:
-        return r.get("leagues_with_bid", 0) / eligible
-    return 1.0 if r["signal"] != "no_bid" else 0.0
+        return r.get("leagues_with_bid", 0), eligible
+    return (1.0, 1.0) if r["signal"] != "no_bid" else (0.0, 1.0)
+
+
+def _shrunk_interest_fractions(scored: list[dict]) -> list[float]:
+    """This comp's own real bid RATE across every pooled league that had a
+    real chance to bid on it - leagues_with_bid / leagues_eligible (see
+    _interest_counts) - NOT the collapsed won/outbid/no_bid signal's binary
+    "did ANY of them bid at all." A cross-league event where only 4 of 50
+    pooled leagues actually bid should contribute 8% interest, not the same
+    full 100% "yes" a 40-of-50 event would contribute purely because at
+    least one league in each case happened to bid - see the conversation
+    this was built from (a 2026 wk2 AJ Barner query whose interest comps
+    table was full of single-digit bid rates, yet the aggregate
+    bid_probability still came out at 66%, because every nonzero bid rate
+    was being treated as a full yes vote regardless of how small it
+    actually was).
+
+    That raw rate is then Bühlmann-shrunk toward a LOCAL prior, pooled from
+    every OTHER comp in this same k-NN neighborhood - not a fixed global
+    constant, and not run back through _credibility_weighted (unlike
+    price): that would double-count a comp's own backing count, since it's
+    already priced into this rate's own denominator (see comp_based_
+    estimate's own docstring for the exact math of why that mistake was
+    made and reverted). A local prior fixes the real remaining problem
+    without reintroducing that one: a 2-of-2 (100%) comp sitting among a
+    neighborhood of mostly ~15% comps was swinging P(bid) far more than its
+    tiny backing count justifies - shrinking it toward a single GLOBAL
+    average would also risk the opposite mistake in a neighborhood that's
+    genuinely a "usually gets bid on" region of feature space (a global
+    average has no way to know that).
+
+    LEAVE-ONE-OUT: a comp's own value never contributes to its own prior -
+    otherwise an extreme rate would slightly inflate the very prior meant
+    to correct it, diluting the correction exactly where it matters most.
+
+    The prior POOLS raw counts, not a mean of ratios - sum(with_bid) /
+    sum(eligible) across the other comps, so a comp backed by 50 leagues
+    naturally counts 50x as much toward "what's typical here" as one backed
+    by 2 (the same reasoning _backing_count/_credibility already apply on
+    the price side) - a plain mean of ratios would let a handful of noisy
+    small-n neighbors define the very prior meant to correct small-n noise.
+
+    Falls back to a 0% prior only when there's no other comp in this
+    neighborhood to pool at all (k==1 - _knn's own last-resort single-
+    neighbor fallback for a query sitting outside interest_max_distance of
+    everything else) - a real query this far from every known situation is
+    itself a signal this is an unusually obscure candidate, and 0% is the
+    safe assumption with zero real local evidence to lean on."""
+    counts = [_interest_counts(r) for r in scored]
+    total_with_bid = sum(c[0] for c in counts)
+    total_eligible = sum(c[1] for c in counts)
+    fractions = []
+    for with_bid, eligible in counts:
+        other_eligible = total_eligible - eligible
+        prior = (total_with_bid - with_bid) / other_eligible if other_eligible > 0 else 0.0
+        fractions.append((with_bid + INTEREST_SHRINKAGE_K * prior) / (eligible + INTEREST_SHRINKAGE_K))
+    return fractions
+
+
+def _cap_weights(weights: list[float], max_ratio: float = 2.0, max_iterations: int = 10) -> list[float]:
+    """weights, iteratively capped so no single weight exceeds max_ratio
+    times the NEXT-highest remaining weight - directly targets a single
+    very-well-backed comp dominating the PRICE weighted average purely
+    because of its own outsized credibility weight, even when its distance
+    rank doesn't justify that much influence (see the conversation this was
+    built from - a real Carson Steele-shaped case: high credibility from
+    real backing, but that comp's own price is an outlier relative to its
+    neighbors, and a plain weighted mean converges toward it anyway).
+    Credibility weighting elsewhere in this file is doing exactly what it's
+    designed to do; this is a separate, deliberately blunt guard against
+    the specific case where "well-measured" and "representative of what
+    this query should expect" diverge.
+
+    Excess weight clipped off the top is redistributed proportionally
+    across every OTHER weight, which can occasionally push a different
+    weight over the same ratio relative to what's now below it - hence the
+    small bounded loop (real cases here are expected to settle in 1-2
+    passes; max_iterations is a hard safety stop, not expected to ever
+    bind). Only ever consulted by conditional_price_median - the original
+    conditional_price_mean is intentionally left on the uncapped weights,
+    since capping is a real behavior change some callers may not want
+    applied silently to the incumbent number."""
+    weights = list(weights)
+    n = len(weights)
+    if n < 2:
+        return weights
+    for _ in range(max_iterations):
+        order = sorted(range(n), key=lambda i: weights[i], reverse=True)
+        top, second = order[0], order[1]
+        if weights[top] <= 0:
+            break
+        cap = max_ratio * weights[second]
+        if weights[top] <= cap:
+            break
+        excess = weights[top] - cap
+        weights[top] = cap
+        others_total = sum(weights[i] for i in range(n) if i != top)
+        if others_total <= 0:
+            break
+        for i in range(n):
+            if i != top:
+                weights[i] += excess * (weights[i] / others_total)
+    return weights
+
+
+def _weighted_median(values: list[float], weights: list[float]) -> float:
+    """The value where cumulative weight (sorted by value, ascending) first
+    reaches half of the total weight - half the weighted evidence sits at
+    or below it, half at or above. Far more resistant to a single
+    high-weight outlier than a weighted mean: an outlier needs to command
+    MORE THAN HALF the total weight on its own to move the median away from
+    where the bulk of the other comps sit, whereas even a modest-weight
+    outlier can drag a mean noticeably just by sitting far from the rest in
+    value (see _cap_weights' own docstring for the case this is paired
+    with). 0.0 for an empty input, matching comp_based_estimate's existing
+    fallback when there are no price comps at all."""
+    if not values:
+        return 0.0
+    pairs = sorted(zip(values, weights))
+    total = sum(w for _, w in pairs)
+    if total <= 0:
+        return pairs[len(pairs) // 2][0]
+    half = total / 2
+    cumulative = 0.0
+    for value, w in pairs:
+        cumulative += w
+        if cumulative >= half:
+            return value
+    return pairs[-1][0]
 
 
 def _comp_rank_and_injury_fields(r: dict) -> dict:
@@ -999,7 +1122,15 @@ def _price_comp_dicts(
     scored: list[dict],
     weights: list[float],
     event_won_rows_index: dict[tuple, list[dict]] | None,
+    weights_capped: list[float] | None = None,
 ) -> list[dict]:
+    """weights is the ORIGINAL (uncapped) credibility weight behind
+    conditional_price_mean; weights_capped (optional - omitted by callers
+    that don't need the second method, e.g. existing tests) is the
+    _cap_weights output behind conditional_price_median, exposed as its own
+    "weight_capped" field only when provided, so a reader can see exactly
+    how much a comp's influence changed between the two methods - most
+    visible on the one comp _cap_weights actually clipped."""
     return [
         {
             "season": r["season"], "week": r["week"], "name": r["add_player_name"],
@@ -1021,17 +1152,23 @@ def _price_comp_dicts(
             # consolidated event that included it.
             "o_league_detail": r.get("o_league_detail"),
             # This comp's share (0-1, sums to 1 across every comp in this
-            # list) of the total weight behind the weighted-average
-            # bid_probability/conditional_price calc - see
+            # list) of the total weight behind conditional_price_mean - see
             # _normalized_weights. scored is already sorted nearest-first
-            # (== highest-weight-first).
+            # (== highest-weight-first by the UNCAPPED weight).
             "weight": w,
+            **({"weight_capped": weights_capped[i]} if weights_capped is not None else {}),
         }
-        for r, w in zip(scored, weights)
+        for i, (r, w) in enumerate(zip(scored, weights))
     ]
 
 
-def _interest_comp_dicts(scored: list[dict], weights: list[float]) -> list[dict]:
+def _interest_comp_dicts(scored: list[dict], weights: list[float], shrunk_fractions: list[float] | None = None) -> list[dict]:
+    """shrunk_fractions (optional - omitted by callers that don't need it,
+    e.g. existing tests) is _shrunk_interest_fractions' own output for these
+    same comps, exposed as "shrunk_bid_fraction" only when provided - lets a
+    reader see the corrected rate actually used in bid_probability
+    alongside the raw leagues_with_bid/leagues_eligible counts below, most
+    useful on a low-backing comp whose raw rate and shrunk rate diverge."""
     return [
         {
             "season": r["season"], "week": r["week"], "name": r["add_player_name"],
@@ -1049,8 +1186,9 @@ def _interest_comp_dicts(scored: list[dict], weights: list[float]) -> list[dict]
             # unconditionally); .get() only guards direct callers in tests.
             "leagues_with_bid": r.get("leagues_with_bid"),
             "leagues_eligible": r.get("leagues_eligible"),
+            **({"shrunk_bid_fraction": shrunk_fractions[i]} if shrunk_fractions is not None else {}),
         }
-        for r, w in zip(scored, weights)
+        for i, (r, w) in enumerate(zip(scored, weights))
     ]
 
 
@@ -1133,11 +1271,15 @@ def comp_based_estimate(
     """Two k-NN searches, one standardized distance space (fit on
     interest_rows - see module docstring for why the interest and price
     pools differ): the K nearest same-position INTEREST comps weighted-
-    average their own real bid rate (by the same 1/(dist+0.05) weighting
-    used for price - see _interest_bid_fraction for why this is a rate, not
-    a binary won/no_bid vote) into P(anyone bids); the K nearest same-
-    position PRICE comps (won rows only) weighted-average into the
-    conditional price - now a % OF THE WINNING BIDDER'S OWN REMAINING
+    average their own real, Bühlmann-shrunk bid rate (by the same
+    1/(dist+0.05) weighting used for price - see _shrunk_interest_fractions
+    for why this is a shrunk rate, not a binary won/no_bid vote) into
+    P(anyone bids); the K nearest same-position PRICE comps (won rows only)
+    produce TWO parallel conditional-price reads off that SAME selected set -
+    conditional_price_mean (the original credibility-weighted average) and
+    conditional_price_median (a weighted median over the same comps, after
+    capping any one comp's weight relative to the rest - see _cap_weights/
+    _weighted_median) - both a % OF THE WINNING BIDDER'S OWN REMAINING
     BUDGET at the time (see target_pct), not a $-scaled-to-$1000 amount.
 
     Deliberately does NOT also return P(bid) x conditional price as a single
@@ -1155,21 +1297,26 @@ def comp_based_estimate(
     underlying neighbor pool specifically, independent of the interest
     search's own k - but ONLY for price_confidence_samples: estimating a
     tail percentile for the confidence-slider feature wants a bigger base
-    pool than a plain weighted average needs to already be stable. The
-    weighted-average conditional_price AND the displayed price comps table
-    both use just the nearest k of that wider pool (a k-NN search is
-    already sorted nearest-first, so the nearest k of a k-NN(price_k) call
-    IS exactly what a separate k-NN(k) call would return) - showing a
-    reader the same k comps that actually produced the number above it,
-    not a wider pool they never see most of.
+    pool than a plain weighted average needs to already be stable. Both
+    conditional_price methods AND the displayed price comps table use just
+    the nearest k of that wider pool (a k-NN search is already sorted
+    nearest-first, so the nearest k of a k-NN(price_k) call IS exactly what
+    a separate k-NN(k) call would return) - showing a reader the same k
+    comps that actually produced the numbers above them, not a wider pool
+    they never see most of. Weight capping is applied to that same nearest-k
+    slice, not the wider price_k pool - price_confidence_samples has its own,
+    different mitigant against one comp's credibility dominating (each
+    neighbor's weight is split evenly across every one of its own real
+    per-league wins there, rather than staying one lump sum - see that
+    function), so it doesn't need capping on top.
 
     The PRICE weight is credibility-adjusted (see _credibility_weighted)
     immediately after its k-NN call, before anything downstream ever sees
     it - selection (WHICH k rows are neighbors) stays purely distance-
     based, only how much each selected one counts changes. The INTEREST
-    weight is NOT credibility-adjusted - see _interest_bid_fraction for why
-    applying credibility on top of a rate that already divides by the same
-    backing count would double-count a comp's size instead of cleanly
+    weight is NOT credibility-adjusted - see _shrunk_interest_fractions for
+    why applying credibility on top of a rate that already divides by the
+    same backing count would double-count a comp's size instead of cleanly
     complementing distance the way it does for price.
 
     interest_max_distance/price_max_distance (see _knn) cap how far a
@@ -1182,29 +1329,26 @@ def comp_based_estimate(
     filter interest or gut price."""
     stats = _feature_stats(interest_rows)
 
-    # No _credibility_weighted here (unlike price, below) - _interest_bid_fraction
-    # already divides by leagues_eligible (the same backing count credibility
-    # would otherwise multiply back in), so applying both would double-count
-    # a comp's own size: half of it cancels right back out of the numerator
-    # (with_bid/n * n/(n+15) = with_bid/(n+15)) while the OTHER half stays
-    # uncancelled in the normalizing denominator (sum of n/(n+15) terms) -
-    # not a deliberate shrinkage design, just a confounded leftover from a
-    # multiplier that made sense for the old binary won/no_bid signal and
-    # doesn't compose with a continuous rate. See the conversation this was
-    # built from.
     interest_scored, interest_weights = _knn(query, interest_rows, stats, k, max_distance=interest_max_distance)
-    bid_probability = sum(w * _interest_bid_fraction(r) for w, r in zip(interest_weights, interest_scored)) / sum(interest_weights)
+    interest_fractions = _shrunk_interest_fractions(interest_scored)
+    bid_probability = sum(w * f for w, f in zip(interest_weights, interest_fractions)) / sum(interest_weights)
 
     price_scored_all, price_weights_all = _knn(query, price_rows, stats, price_k or k, max_distance=price_max_distance)
     price_weights_all = _credibility_weighted(price_scored_all, price_weights_all)
     price_scored, price_weights = price_scored_all[:k], price_weights_all[:k]
-    conditional_pct = sum(w * target_pct(r) for w, r in zip(price_weights, price_scored)) / sum(price_weights) if price_scored else 0.0
+    price_targets = [target_pct(r) for r in price_scored]
+    conditional_pct_mean = sum(w * t for w, t in zip(price_weights, price_targets)) / sum(price_weights) if price_scored else 0.0
+    price_weights_capped = _cap_weights(price_weights)
+    conditional_pct_median = _weighted_median(price_targets, price_weights_capped)
 
     return {
         "bid_probability": bid_probability,
-        "conditional_price": conditional_pct,
-        "comps": _price_comp_dicts(price_scored, _normalized_weights(price_weights), event_won_rows_index),
-        "interest_comps": _interest_comp_dicts(interest_scored, _normalized_weights(interest_weights)),
+        "conditional_price_mean": conditional_pct_mean,
+        "conditional_price_median": conditional_pct_median,
+        "comps": _price_comp_dicts(
+            price_scored, _normalized_weights(price_weights), event_won_rows_index, _normalized_weights(price_weights_capped)
+        ),
+        "interest_comps": _interest_comp_dicts(interest_scored, _normalized_weights(interest_weights), interest_fractions),
         "price_confidence_samples": price_confidence_samples(price_scored_all, price_weights_all, event_won_rows_index),
     }
 
@@ -1425,7 +1569,10 @@ class FaabModel:
             interest_max_distance=self.interest_max_distance.get(query["position"]),
             price_max_distance=self.price_max_distance.get(query["position"]),
         )
-        simple = simple_baseline_estimate(query, self.interest_rows, self.price_rows)
+        # simple_baseline_estimate is deliberately not called here anymore -
+        # dropped from the live UI (see the conversation this was built
+        # from); the function itself stays for evaluate_model.py's own,
+        # independent backtest machinery.
         reg = regression_estimate(query, self.price_coefs, self.interest_coefs, self.interest_stats)
 
         comp_values = sorted(c["pct_of_remaining_budget"] for c in comp["comps"])
@@ -1436,8 +1583,18 @@ class FaabModel:
             # as a % of that (league, season)'s effective starting budget -
             # NOT a $ amount; bid_probability is separate context ("but you
             # may not need to"), never multiplied in.
-            "bid_probability": {"comp_based": comp["bid_probability"], "simple_baseline": simple["bid_probability"], "regression": reg["bid_probability"]},
-            "conditional_price": {"comp_based": comp["conditional_price"], "simple_baseline": simple["conditional_price"], "regression": reg["conditional_price"]},
+            #
+            # comp_based_mean/comp_based_median share the SAME bid_probability
+            # value (comp["bid_probability"]) - capping/median only apply to
+            # the PRICE side (see comp_based_estimate) - but each still needs
+            # its own key here so the UI's per-method card lookup (keyed
+            # identically into both dicts) finds a real number for both.
+            "bid_probability": {
+                "comp_based_mean": comp["bid_probability"], "comp_based_median": comp["bid_probability"], "regression": reg["bid_probability"],
+            },
+            "conditional_price": {
+                "comp_based_mean": comp["conditional_price_mean"], "comp_based_median": comp["conditional_price_median"], "regression": reg["conditional_price"],
+            },
             "comps": comp["comps"],
             "interest_comps": comp["interest_comps"],
             # Raw (value, weight) pairs behind the confidence slider (see

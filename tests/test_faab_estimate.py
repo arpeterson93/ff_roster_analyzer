@@ -5,6 +5,7 @@ from engine.faab_estimate import (
     NO_BID_MIN_PRIOR_POINTS,
     NO_BID_MIN_SNAP_PCT,
     _backing_count,
+    _cap_weights,
     _credibility,
     _credibility_weighted,
     _feature_stats,
@@ -14,6 +15,8 @@ from engine.faab_estimate import (
     _position_distance_cutoffs,
     _price_comp_bid_distribution,
     _price_comp_dicts,
+    _shrunk_interest_fractions,
+    _weighted_median,
     add_synthetic_price_wins,
     build_event_won_rows_index,
     build_price_rows,
@@ -498,6 +501,120 @@ def test_comp_based_estimate_interest_does_not_double_count_backing_count():
     deep = _bid_row(1, add_player_id=2, prior_week_actual_points=10.0, signal="won", leagues_eligible=40, leagues_with_bid=20)
     out = comp_based_estimate(query, [thin, deep], [], k=2)
     assert out["bid_probability"] == pytest.approx(0.5, abs=1e-6)
+
+
+def test_shrunk_interest_fractions_pulls_a_low_backing_outlier_toward_its_neighbors():
+    # A 2-of-2 (100%) comp sitting alongside two well-backed ~14% comps -
+    # exactly the AJ Barner-shaped case: a tiny sample's noisy rate should
+    # get pulled hard toward what its neighborhood actually shows, not left
+    # at its own raw extreme.
+    low1 = {"leagues_with_bid": 7, "leagues_eligible": 50}
+    low2 = {"leagues_with_bid": 7, "leagues_eligible": 50}
+    thin_high = {"leagues_with_bid": 2, "leagues_eligible": 2}
+    out = _shrunk_interest_fractions([low1, low2, thin_high])
+    assert out[0] == pytest.approx(0.14763313609467457)
+    assert out[1] == pytest.approx(0.14763313609467457)
+    assert out[2] == pytest.approx(0.24117647058823527)  # pulled way down from a raw 100%
+    assert out[2] < 1.0
+
+
+def test_shrunk_interest_fractions_leaves_a_rate_matching_its_neighbors_unchanged():
+    # Every comp already shows the SAME rate as its neighborhood's own
+    # pooled prior - shrinkage should be a no-op here, not systematically
+    # bias every comp downward just for existing.
+    same_rate = [{"leagues_with_bid": 5, "leagues_eligible": 10}] * 3
+    out = _shrunk_interest_fractions(same_rate)
+    assert out == pytest.approx([0.5, 0.5, 0.5])
+
+
+def test_shrunk_interest_fractions_falls_back_to_zero_prior_for_a_single_comp():
+    # No other comp in the neighborhood to pool a local prior from at all -
+    # only reachable via _knn's own single-nearest-neighbor fallback for a
+    # query sitting outside interest_max_distance of everything else.
+    single = [{"leagues_with_bid": 2, "leagues_eligible": 2}]
+    out = _shrunk_interest_fractions(single)
+    assert out[0] == pytest.approx(2 / 17)  # (2 + 15*0) / (2 + 15)
+
+
+def test_cap_weights_leaves_weights_alone_when_already_within_ratio():
+    assert _cap_weights([10.0, 6.0, 5.0]) == pytest.approx([10.0, 6.0, 5.0])
+
+
+def test_cap_weights_caps_a_dominant_weight_and_redistributes_the_excess():
+    out = _cap_weights([100.0, 10.0, 10.0, 10.0])
+    assert out == pytest.approx([20.0, 36.666666666666664, 36.666666666666664, 36.666666666666664])
+    assert sum(out) == pytest.approx(130.0)  # total weight conserved, not just clipped away
+
+
+def test_cap_weights_handles_fewer_than_two_weights():
+    assert _cap_weights([]) == []
+    assert _cap_weights([5.0]) == [5.0]
+
+
+def test_weighted_median_basic_odd_count_equal_weights():
+    assert _weighted_median([1, 2, 3], [1, 1, 1]) == 2
+
+
+def test_weighted_median_resists_an_outlier_below_majority_weight():
+    # The 100 carries only 1 of 4 equal weight shares (25%) - nowhere near
+    # enough to move the crossover point away from the middle of the other
+    # three.
+    assert _weighted_median([1, 2, 3, 100], [1, 1, 1, 1]) == 2
+
+
+def test_weighted_median_converges_to_a_true_majority_weight_outlier():
+    # The 100 alone carries more than half the total weight (10 of 13) -
+    # no central-tendency measure can avoid converging to it once one value
+    # genuinely owns the majority of the evidence; this is the case
+    # _cap_weights exists to prevent from arising in the first place.
+    assert _weighted_median([1, 2, 3, 100], [1, 1, 1, 10]) == 100
+
+
+def test_weighted_median_empty_is_zero():
+    assert _weighted_median([], []) == 0.0
+
+
+def test_comp_based_estimate_median_resists_a_dominant_credibility_outlier_that_mean_does_not():
+    # The Carson Steele shape: four modest, similarly-priced, single-league
+    # comps (low credibility, ~6%) alongside one comp priced way higher but
+    # backed by 40 leagues (high credibility, ~74%) - all at IDENTICAL
+    # distance from the query, isolating credibility as the only reason the
+    # outlier's weight differs. conditional_price_mean converges hard toward
+    # the outlier (this is credibility weighting doing exactly what it's
+    # designed to do); conditional_price_median, computed off the SAME comps
+    # after capping the outlier's weight, should land on one of the modest,
+    # more typical prices instead.
+    query = _bid_row(0, add_player_id=0, prior_week_actual_points=10.0)
+    low_comps = [
+        _bid_row(i, add_player_id=i, prior_week_actual_points=10.0, consolidated_target_pct=p)
+        for i, p in enumerate([0.05, 0.06, 0.07, 0.08], start=1)
+    ]
+    outlier = _bid_row(
+        99, add_player_id=99, prior_week_actual_points=10.0, consolidated_target_pct=0.90, consolidated_from_leagues=list(range(40))
+    )
+    price_rows = low_comps + [outlier]
+    out = comp_based_estimate(query, price_rows, price_rows, k=5)
+    assert out["conditional_price_mean"] == pytest.approx(0.6863953488372092)  # dragged way up by the outlier
+    assert out["conditional_price_median"] == pytest.approx(0.07)  # lands on a modest, typical comp instead
+
+    outlier_comp = next(c for c in out["comps"] if c["pct_of_remaining_budget"] == pytest.approx(0.90))
+    # weight (uncapped, drives the mean) reflects its real outsized
+    # credibility; weight_capped (drives the median) has been reined in.
+    assert outlier_comp["weight"] > 0.7
+    assert outlier_comp["weight_capped"] < 0.15
+
+
+def test_comp_based_estimate_exposes_shrunk_bid_fraction_on_interest_comps():
+    query = _bid_row(0, add_player_id=0, prior_week_actual_points=10.0)
+    low1 = _bid_row(1, add_player_id=1, prior_week_actual_points=10.0, add_player_name="Low A", leagues_eligible=50, leagues_with_bid=7)
+    low2 = _bid_row(2, add_player_id=2, prior_week_actual_points=10.0, add_player_name="Low B", leagues_eligible=50, leagues_with_bid=7)
+    thin_high = _bid_row(
+        3, add_player_id=3, prior_week_actual_points=10.0, add_player_name="Thin High", leagues_eligible=2, leagues_with_bid=2
+    )
+    out = comp_based_estimate(query, [low1, low2, thin_high], [], k=3)
+    fractions = {c["name"]: c["shrunk_bid_fraction"] for c in out["interest_comps"]}
+    assert fractions["Thin High"] == pytest.approx(0.24117647058823527)  # pulled way down from a raw 100%
+    assert fractions["Low A"] == pytest.approx(0.14763313609467457)
 
 
 def test_knn_max_distance_excludes_neighbors_beyond_the_cutoff():
