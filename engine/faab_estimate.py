@@ -993,50 +993,55 @@ def _shrunk_interest_fractions(scored: list[dict]) -> list[float]:
     return fractions
 
 
-def _cap_weights(weights: list[float], max_ratio: float = 2.0, max_iterations: int = 10) -> list[float]:
-    """weights, iteratively capped so no single weight exceeds max_ratio
-    times the NEXT-highest remaining weight - directly targets a single
-    very-well-backed comp dominating the PRICE weighted average purely
-    because of its own outsized credibility weight, even when its distance
-    rank doesn't justify that much influence (see the conversation this was
-    built from - a real Carson Steele-shaped case: high credibility from
-    real backing, but that comp's own price is an outlier relative to its
-    neighbors, and a plain weighted mean converges toward it anyway).
-    Credibility weighting elsewhere in this file is doing exactly what it's
-    designed to do; this is a separate, deliberately blunt guard against
-    the specific case where "well-measured" and "representative of what
-    this query should expect" diverge.
+DEFAULT_WEIGHT_CAP_RATIO = 5.0  # deliberately looser than a strict 2x - see _cap_weights
 
-    Excess weight clipped off the top is redistributed proportionally
-    across every OTHER weight, which can occasionally push a different
-    weight over the same ratio relative to what's now below it - hence the
-    small bounded loop (real cases here are expected to settle in 1-2
-    passes; max_iterations is a hard safety stop, not expected to ever
-    bind). Only ever consulted by conditional_price_median - the original
+
+def _cap_weights(weights: list[float], max_ratio: float = DEFAULT_WEIGHT_CAP_RATIO) -> list[float]:
+    """weights, clamped so the FULL RANGE never exceeds max_ratio - no comp
+    ends up with more than max_ratio times ANY other comp's weight, not just
+    the one immediately below it. 5x by default rather than a stricter 2x -
+    real distance-based k-NN weights already span a legitimate range across
+    k genuinely-different-distance neighbors on their own, before
+    credibility ever enters into it; a tight 2x ceiling risks flattening
+    that real distance differentiation too, not just reining in a
+    credibility-driven outlier. 5x leaves normal distance spread alone while
+    still catching a real Carson Steele-shaped case, where credibility alone
+    (not distance) was pushing one comp far past a 5x share of the rest.
+    Directly targets a single very-well-backed
+    comp dominating the PRICE weighted average purely because of its own
+    outsized credibility weight, even when its distance rank doesn't justify
+    that much influence (see the conversation this was built from - a real
+    Carson Steele-shaped case: high credibility from real backing, but that
+    comp's own price is an outlier relative to its neighbors, and a plain
+    weighted mean converges toward it anyway). Credibility weighting
+    elsewhere in this file is doing exactly what it's designed to do; this
+    is a separate, deliberately blunt guard against the specific case where
+    "well-measured" and "representative of what this query should expect"
+    diverge.
+
+    An earlier version capped only the top weight against the SECOND-
+    highest, then redistributed the excess proportionally across the rest -
+    that let [100, 50, 5, 5] sail through untouched (100 <= 2*50), even
+    though 100 is 20x the smallest weight in the set, not the "no comp over
+    2x ANY other" guarantee this is actually supposed to provide. Clamping
+    every weight down to min(weights) * max_ratio fixes that in one pass:
+    the untouched minimum anchors the ceiling, so max/min <= max_ratio holds
+    by construction - no iteration, no redistribution needed. Redistributing
+    the clipped excess elsewhere isn't needed either: this is only ever fed
+    into _weighted_median (scale- and shift-invariant to how much total
+    weight there nominally is, as long as relative proportions among the
+    comps are right) and _normalized_weights (which rescales to sum to 1 for
+    display regardless of what the pre-normalization total happens to be) -
+    neither cares about preserving the original sum.
+
+    Only ever consulted by conditional_price_median - the original
     conditional_price_mean is intentionally left on the uncapped weights,
     since capping is a real behavior change some callers may not want
     applied silently to the incumbent number."""
-    weights = list(weights)
-    n = len(weights)
-    if n < 2:
-        return weights
-    for _ in range(max_iterations):
-        order = sorted(range(n), key=lambda i: weights[i], reverse=True)
-        top, second = order[0], order[1]
-        if weights[top] <= 0:
-            break
-        cap = max_ratio * weights[second]
-        if weights[top] <= cap:
-            break
-        excess = weights[top] - cap
-        weights[top] = cap
-        others_total = sum(weights[i] for i in range(n) if i != top)
-        if others_total <= 0:
-            break
-        for i in range(n):
-            if i != top:
-                weights[i] += excess * (weights[i] / others_total)
-    return weights
+    if len(weights) < 2:
+        return list(weights)
+    ceiling = min(weights) * max_ratio
+    return [min(w, ceiling) for w in weights]
 
 
 def _weighted_median(values: list[float], weights: list[float]) -> float:

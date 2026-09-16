@@ -540,10 +540,30 @@ def test_cap_weights_leaves_weights_alone_when_already_within_ratio():
     assert _cap_weights([10.0, 6.0, 5.0]) == pytest.approx([10.0, 6.0, 5.0])
 
 
-def test_cap_weights_caps_a_dominant_weight_and_redistributes_the_excess():
-    out = _cap_weights([100.0, 10.0, 10.0, 10.0])
-    assert out == pytest.approx([20.0, 36.666666666666664, 36.666666666666664, 36.666666666666664])
-    assert sum(out) == pytest.approx(130.0)  # total weight conserved, not just clipped away
+def test_cap_weights_caps_a_dominant_weight_down_to_the_ratio_ceiling():
+    # min is 10.0, so at ratio=2 the ceiling is 2x that (20.0) - the
+    # dominant weight gets clamped straight to it; the other three, already
+    # within range, are left exactly as they were (no redistribution to
+    # inflate them). Ratio passed explicitly - see
+    # test_cap_weights_uses_the_wider_default_ratio for the real default.
+    assert _cap_weights([100.0, 10.0, 10.0, 10.0], max_ratio=2.0) == pytest.approx([20.0, 10.0, 10.0, 10.0])
+
+
+def test_cap_weights_bounds_the_full_range_not_just_top_vs_runner_up():
+    # An earlier version capped only the top weight against the SECOND-
+    # highest, which let this exact case sail through untouched (100 <=
+    # 2*50) even though 100 is 20x the smallest weight (5) - not the "no
+    # comp over 2x ANY other" guarantee this is supposed to provide.
+    out = _cap_weights([100.0, 50.0, 5.0, 5.0], max_ratio=2.0)
+    assert out == pytest.approx([10.0, 10.0, 5.0, 5.0])
+    assert max(out) / min(out) == pytest.approx(2.0)
+
+
+def test_cap_weights_uses_the_wider_default_ratio():
+    # The real default (5x, not 2x) - deliberately looser so normal
+    # distance-based k-NN weight spread isn't flattened alongside a real
+    # credibility-driven outlier - see _cap_weights' own docstring.
+    assert _cap_weights([100.0, 10.0, 10.0, 10.0]) == pytest.approx([50.0, 10.0, 10.0, 10.0])
 
 
 def test_cap_weights_handles_fewer_than_two_weights():
@@ -575,33 +595,39 @@ def test_weighted_median_empty_is_zero():
 
 
 def test_comp_based_estimate_median_resists_a_dominant_credibility_outlier_that_mean_does_not():
-    # The Carson Steele shape: four modest, similarly-priced, single-league
-    # comps (low credibility, ~6%) alongside one comp priced way higher but
-    # backed by 40 leagues (high credibility, ~74%) - all at IDENTICAL
-    # distance from the query, isolating credibility as the only reason the
-    # outlier's weight differs. conditional_price_mean converges hard toward
-    # the outlier (this is credibility weighting doing exactly what it's
-    # designed to do); conditional_price_median, computed off the SAME comps
-    # after capping the outlier's weight, should land on one of the modest,
-    # more typical prices instead.
+    # The Carson Steele shape: nine modest, similarly-priced, single-league
+    # comps (low credibility) alongside one comp priced way higher but
+    # backed by 40 leagues (high credibility) - all at IDENTICAL distance
+    # from the query, isolating credibility as the only reason the outlier's
+    # weight differs. Nine "other" comps, matching comp_based_estimate's own
+    # default k=10, not a smaller toy count - at the default 5x cap ratio, a
+    # too-small "other" pool can leave the capped outlier still holding a
+    # MAJORITY of total weight (5x one comp vs only 4 others already tips
+    # past 50%), which would make the median converge right back to it, same
+    # as the mean - this shape keeps the outlier's capped share (5 of 5+9=14)
+    # comfortably under that.
     query = _bid_row(0, add_player_id=0, prior_week_actual_points=10.0)
     low_comps = [
         _bid_row(i, add_player_id=i, prior_week_actual_points=10.0, consolidated_target_pct=p)
-        for i, p in enumerate([0.05, 0.06, 0.07, 0.08], start=1)
+        for i, p in enumerate([0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10], start=1)
     ]
     outlier = _bid_row(
         99, add_player_id=99, prior_week_actual_points=10.0, consolidated_target_pct=0.90, consolidated_from_leagues=list(range(40))
     )
     price_rows = low_comps + [outlier]
-    out = comp_based_estimate(query, price_rows, price_rows, k=5)
-    assert out["conditional_price_mean"] == pytest.approx(0.6863953488372092)  # dragged way up by the outlier
-    assert out["conditional_price_median"] == pytest.approx(0.07)  # lands on a modest, typical comp instead
+    out = comp_based_estimate(query, price_rows, price_rows, k=10)
+    assert out["conditional_price_mean"] == pytest.approx(0.5336563876651983)  # dragged way up by the outlier
+    assert out["conditional_price_median"] == pytest.approx(0.08)  # lands on a modest, typical comp instead
 
     outlier_comp = next(c for c in out["comps"] if c["pct_of_remaining_budget"] == pytest.approx(0.90))
+    other_comp = next(c for c in out["comps"] if c["pct_of_remaining_budget"] != pytest.approx(0.90))
     # weight (uncapped, drives the mean) reflects its real outsized
-    # credibility; weight_capped (drives the median) has been reined in.
-    assert outlier_comp["weight"] > 0.7
-    assert outlier_comp["weight_capped"] < 0.15
+    # credibility. weight_capped (drives the median) is reined in to
+    # EXACTLY the default 5x ratio of the smallest comp's own weight_capped -
+    # the full-range guarantee _cap_weights provides, not just "less than
+    # before."
+    assert outlier_comp["weight"] > 0.5
+    assert outlier_comp["weight_capped"] == pytest.approx(5 * other_comp["weight_capped"])
 
 
 def test_comp_based_estimate_exposes_shrunk_bid_fraction_on_interest_comps():
