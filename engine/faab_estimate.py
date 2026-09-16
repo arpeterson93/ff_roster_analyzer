@@ -1268,7 +1268,6 @@ def comp_based_estimate(
     interest_rows: list[dict],
     price_rows: list[dict],
     k: int = 10,
-    price_k: int | None = None,
     event_won_rows_index: dict[tuple, list[dict]] | None = None,
     interest_max_distance: float | None = None,
     price_max_distance: float | None = None,
@@ -1298,22 +1297,23 @@ def comp_based_estimate(
     real, useful context ("but you may not even need to bid"), shown
     separately, not multiplied in.
 
-    price_k (defaults to k when omitted) widens the PRICE search's
-    underlying neighbor pool specifically, independent of the interest
-    search's own k - but ONLY for price_confidence_samples: estimating a
-    tail percentile for the confidence-slider feature wants a bigger base
-    pool than a plain weighted average needs to already be stable. Both
-    conditional_price methods AND the displayed price comps table use just
-    the nearest k of that wider pool (a k-NN search is already sorted
-    nearest-first, so the nearest k of a k-NN(price_k) call IS exactly what
-    a separate k-NN(k) call would return) - showing a reader the same k
-    comps that actually produced the numbers above them, not a wider pool
-    they never see most of. Weight capping is applied to that same nearest-k
-    slice, not the wider price_k pool - price_confidence_samples has its own,
-    different mitigant against one comp's credibility dominating (each
-    neighbor's weight is split evenly across every one of its own real
-    per-league wins there, rather than staying one lump sum - see that
-    function), so it doesn't need capping on top.
+    price_confidence_samples (the confidence-slider feature) draws from
+    exactly the SAME k price comps as everything else here - conditional_
+    price_mean/median, the displayed comps table, all of it - one single
+    k-NN search, not a wider pool computed on the side. An earlier version
+    ran a separate, wider price_k search (default 25 vs this k's 10) just
+    for price_confidence_samples on the theory that a tail-percentile
+    estimate wants a bigger base pool than a plain weighted average needs to
+    already be stable - but that meant the confidence slider's own "N real
+    winning prices" count silently included real per-league wins from
+    neighbors that were never actually shown as one of the displayed comps,
+    which read as a real discrepancy (a live 2026 wk2 Antonio Williams query
+    counted 34 there vs 20 summed from the visible comps' own expand views -
+    confirmed live 2026-09-16, not a bug in the count itself, just two
+    different pools quietly feeding two different UI elements). One shared
+    pool means what the confidence slider counts is now exactly what a
+    reader can verify by expanding every comp below - the entire point of
+    this being a deliberately explainable method in the first place.
 
     The PRICE weight is credibility-adjusted (see _credibility_weighted)
     immediately after its k-NN call, before anything downstream ever sees
@@ -1338,23 +1338,42 @@ def comp_based_estimate(
     interest_fractions = _shrunk_interest_fractions(interest_scored)
     bid_probability = sum(w * f for w, f in zip(interest_weights, interest_fractions)) / sum(interest_weights)
 
-    price_scored_all, price_weights_all = _knn(query, price_rows, stats, price_k or k, max_distance=price_max_distance)
-    price_weights_all = _credibility_weighted(price_scored_all, price_weights_all)
-    price_scored, price_weights = price_scored_all[:k], price_weights_all[:k]
+    price_scored, price_weights = _knn(query, price_rows, stats, k, max_distance=price_max_distance)
+    price_weights = _credibility_weighted(price_scored, price_weights)
     price_targets = [target_pct(r) for r in price_scored]
     conditional_pct_mean = sum(w * t for w, t in zip(price_weights, price_targets)) / sum(price_weights) if price_scored else 0.0
     price_weights_capped = _cap_weights(price_weights)
     conditional_pct_median = _weighted_median(price_targets, price_weights_capped)
+    # EXPERIMENTAL, not surfaced anywhere in FaabModel.estimate()/the live UI
+    # yet - see the conversation this was built from. conditional_pct_median
+    # takes one median across the K comps' own already-cross-league-
+    # consolidated values (each comp = one vote, however many leagues won
+    # it). This is the alternative that skips that consolidation for the
+    # median specifically: expand each of the SAME K comps back out to
+    # every one of its own real per-league winning prices (reusing
+    # price_confidence_samples' own expansion - the same "one event's
+    # weight split evenly across its own real wins" the confidence slider
+    # already relies on), then take ONE flat weighted median over that
+    # pooled set of individual real bids instead of over K pre-collapsed
+    # per-event values. Whether this is actually more accurate than
+    # conditional_pct_median is an open, real empirical question - see
+    # tools/faab_history/evaluate_price_median_flattening.py, which
+    # backtests both against real held-out data before either one gets
+    # promoted or discarded.
+    conditional_pct_median_flattened = weighted_percentile(
+        price_confidence_samples(price_scored, price_weights_capped, event_won_rows_index), 50
+    )
 
     return {
         "bid_probability": bid_probability,
         "conditional_price_mean": conditional_pct_mean,
         "conditional_price_median": conditional_pct_median,
+        "conditional_price_median_flattened": conditional_pct_median_flattened,
         "comps": _price_comp_dicts(
             price_scored, _normalized_weights(price_weights), event_won_rows_index, _normalized_weights(price_weights_capped)
         ),
         "interest_comps": _interest_comp_dicts(interest_scored, _normalized_weights(interest_weights), interest_fractions),
-        "price_confidence_samples": price_confidence_samples(price_scored_all, price_weights_all, event_won_rows_index),
+        "price_confidence_samples": price_confidence_samples(price_scored, price_weights, event_won_rows_index),
     }
 
 
@@ -1562,15 +1581,9 @@ class FaabModel:
         self.price_max_distance = _position_distance_cutoffs(self.price_rows, distance_stats)
 
     def estimate(self, query: dict) -> dict:
-        # price_k=25 (vs. the interest search's own default 10) - a plain
-        # weighted average is already stable at 10 neighbors, but the
-        # confidence-slider feature (price_confidence_samples, further
-        # widened by expanding each neighbor across every pooled league
-        # that won the same real event) wants a bigger base pool to
-        # estimate a tail percentile from without every step being noisy.
         comp = comp_based_estimate(
             query, self.interest_rows, self.price_rows,
-            price_k=25, event_won_rows_index=self.event_won_rows_index,
+            event_won_rows_index=self.event_won_rows_index,
             interest_max_distance=self.interest_max_distance.get(query["position"]),
             price_max_distance=self.price_max_distance.get(query["position"]),
         )

@@ -500,20 +500,25 @@ function faabEstimateSection(player, data) {
   // in %-of-budget units so they're meaningfully comparable across leagues
   // with different budgets, each tagged with its own source_league_id.
   //
-  // Rendered as a binned HEAT STRIP, not individual dots - a busy event
-  // (won in 20+ pooled leagues) used to render as a wall of overlapping
-  // dots with no way to see where the real cluster was. Bin count scales
-  // with how many real prices there are (floor of 6 so a sparse event still
-  // reads as a shape, cap of 20 so a single bin never represents a wide
-  // span of the axis) - each bin's fill is a single-hue blend from the
-  // track's own neutral color (empty) up to full accent (this bin's own
-  // share of the busiest bin), so density reads as color intensity instead
-  // of dot-counting. The comp's own value and (generalized to whichever
-  // site league is currently loaded, via data.meta.league_id - not
-  // hardcoded to any one league) the viewer's own league are picked out as
-  // thin marker ticks OVER the strip, not folded into the binning, so
-  // "what happened in MY league" stays visible at a glance regardless of
-  // how dark the bin under it is.
+  // Rendered as a smoothed SPARKLINE, not individual dots or a flat heat
+  // strip - a busy event (won in 20+ pooled leagues) used to render as a
+  // wall of overlapping dots with no way to see where the real cluster was,
+  // and an intermediate flat-color-intensity heat strip (see the
+  // conversation this was built from) was hard to actually read at a
+  // glance - height differences are perceived far more precisely than
+  // color-saturation differences for the same underlying data. Bin count
+  // scales with how many real prices there are (floor of 6 so a sparse
+  // event still reads as a shape, cap of 20 so a single bin never
+  // represents a wide span of the axis); each bin's count becomes the
+  // sparkline's height at that bin's own center, with a quadratic-Bezier-
+  // through-midpoints smoothing (the standard lightweight sparkline
+  // technique - curves through the data without full spline math) instead
+  // of jagged straight segments between bins. The comp's own value and
+  // (generalized to whichever site league is currently loaded, via
+  // data.meta.league_id - not hardcoded to any one league) the viewer's own
+  // league are picked out as thin marker ticks OVER the sparkline, not
+  // folded into the binning, so "what happened in MY league" stays visible
+  // at a glance regardless of the curve's own height there.
   function priceCompDistributionHtml(c) {
     const values = c.bid_distribution || [];
     const max = Math.max(...values.map((v) => v.value), 0.001);
@@ -524,15 +529,36 @@ function faabEstimateSection(player, data) {
       counts[Math.min(binCount - 1, Math.floor(v.value / binWidth))] += 1;
     });
     const maxCount = Math.max(...counts, 1);
-    const bins = counts
+
+    // Fixed 100x(svgH) unit viewBox - x maps directly to a 0-100% axis
+    // position (matching the marker ticks' own left:X% positioning below),
+    // y is inverted (SVG grows downward) with peakH of headroom so the
+    // tallest bin's own peak doesn't touch the top edge.
+    const svgH = 36, peakH = 30;
+    const points = counts.map((count, i) => [((i + 0.5) / binCount) * 100, svgH - (count / maxCount) * peakH]);
+    let linePath = `M${points[0][0].toFixed(2)},${points[0][1].toFixed(2)}`;
+    for (let i = 0; i < points.length - 1; i++) {
+      const [x0, y0] = points[i];
+      const [x1, y1] = points[i + 1];
+      linePath += ` Q${x0.toFixed(2)},${y0.toFixed(2)} ${((x0 + x1) / 2).toFixed(2)},${((y0 + y1) / 2).toFixed(2)}`;
+    }
+    linePath += ` L${points[points.length - 1][0].toFixed(2)},${points[points.length - 1][1].toFixed(2)}`;
+    const areaPath = `M${points[0][0].toFixed(2)},${svgH} ${linePath.slice(1)} L${points[points.length - 1][0].toFixed(2)},${svgH} Z`;
+    const hitRects = counts
       .map((count, i) => {
-        const pct = Math.round((count / maxCount) * 100);
         const lo = fmt(i * binWidth * 100, 1);
         const hi = fmt((i + 1) * binWidth * 100, 1);
         const title = count ? `${count} winning bid${count === 1 ? "" : "s"} between ${lo}% and ${hi}%` : `no winning bids between ${lo}% and ${hi}%`;
-        return `<div class="faab-heat-bin" style="background:color-mix(in srgb, var(--accent) ${pct}%, var(--border))" title="${title}"></div>`;
+        return `<rect x="${((i / binCount) * 100).toFixed(2)}" y="0" width="${(100 / binCount).toFixed(2)}" height="${svgH}" fill="transparent"><title>${title}</title></rect>`;
       })
       .join("");
+    const sparkline = `
+      <svg class="faab-heat-spark" viewBox="0 0 100 ${svgH}" preserveAspectRatio="none">
+        <path d="${areaPath}" class="faab-heat-area"></path>
+        <path d="${linePath}" class="faab-heat-line" vector-effect="non-scaling-stroke"></path>
+        ${hitRects}
+      </svg>
+    `;
     const markers = values
       .filter((v) => Math.abs(v.value - c.pct_of_remaining_budget) < 1e-9 || (data.meta.league_id !== null && data.meta.league_id !== undefined && v.source_league_id === data.meta.league_id))
       .map((v) => {
@@ -545,7 +571,7 @@ function faabEstimateSection(player, data) {
       .join("");
     return `
       <div class="faab-dist">
-        <div class="faab-dist-track faab-heat-track">${bins}${markers}</div>
+        <div class="faab-dist-track faab-heat-track">${sparkline}${markers}</div>
         <div class="faab-dist-labels">
           <span>0%</span>
           <span class="muted">${values.length} real winning bid${values.length === 1 ? "" : "s"} across every league that won this event</span>
@@ -649,22 +675,36 @@ function faabEstimateSection(player, data) {
   // method's own card rather than multiplied in.
   const bidProb = est.bid_probability || {};
   const condPriceByMethod = est.conditional_price || {};
-  const METHOD_LABELS = { comp_based_mean: "Comp-based (mean)", comp_based_median: "Comp-based (median)", regression: "Regression" };
-  const methodCards = Object.entries(METHOD_LABELS)
-    .map(([key, label]) => {
-      const faabPct = condPriceByMethod[key];
-      const interestPct = bidProb[key];
-      return `
-        <div class="faab-method-card">
-          <div class="faab-method-label">${label}</div>
-          <div class="faab-method-values">
-            <div class="faab-method-value"><span class="faab-method-num">${faabPct !== undefined && faabPct !== null ? fmt(faabPct * 100, 1) + "%" : "–"}</span><span class="faab-method-sub">FAAB</span></div>
-            <div class="faab-method-value"><span class="faab-method-num">${interestPct !== undefined && interestPct !== null ? fmt(interestPct * 100, 0) + "%" : "–"}</span><span class="faab-method-sub">Interest</span></div>
-          </div>
-        </div>
-      `;
-    })
-    .join("");
+  const pctOrDash = (v, digits) => (v !== undefined && v !== null ? fmt(v * 100, digits) + "%" : "–");
+  // Comp-based median is the primary estimate (see the conversation this
+  // was built from) - mean shown alongside it, not as a separate card, so
+  // MED reads first. comp_based_mean and comp_based_median always share the
+  // SAME bid_probability value (capping/median only ever apply to the PRICE
+  // side - see comp_based_estimate) - one Interest number for the merged
+  // card, not two identical ones. Merging these two into one card (instead
+  // of the three separate cards this used to be) is also what makes room
+  // for Regression to sit on the same line as Comp-based on a narrow/mobile
+  // viewport.
+  const compBasedCard = `
+    <div class="faab-method-card">
+      <div class="faab-method-label">Comp-based</div>
+      <div class="faab-method-values faab-method-values-triple">
+        <div class="faab-method-value"><span class="faab-method-num">${pctOrDash(condPriceByMethod.comp_based_median, 1)}</span><span class="faab-method-sub">MED</span></div>
+        <div class="faab-method-value"><span class="faab-method-num">${pctOrDash(condPriceByMethod.comp_based_mean, 1)}</span><span class="faab-method-sub">AVG</span></div>
+        <div class="faab-method-value"><span class="faab-method-num">${pctOrDash(bidProb.comp_based_median, 0)}</span><span class="faab-method-sub">Interest</span></div>
+      </div>
+    </div>
+  `;
+  const regressionCard = `
+    <div class="faab-method-card">
+      <div class="faab-method-label">Regression</div>
+      <div class="faab-method-values">
+        <div class="faab-method-value"><span class="faab-method-num">${pctOrDash(condPriceByMethod.regression, 1)}</span><span class="faab-method-sub">FAAB</span></div>
+        <div class="faab-method-value"><span class="faab-method-num">${pctOrDash(bidProb.regression, 0)}</span><span class="faab-method-sub">Interest</span></div>
+      </div>
+    </div>
+  `;
+  const methodCards = compBasedCard + regressionCard;
 
   // The actual query inputs driving every method/comp above, formatted the
   // SAME way a Price/Interest comp row is (see recentCellHtml/rankCellHtml/

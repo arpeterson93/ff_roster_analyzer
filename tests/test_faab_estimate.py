@@ -417,20 +417,26 @@ def test_normalized_weights_empty_list_is_safe():
     assert _normalized_weights([]) == []
 
 
-def test_comp_based_estimate_price_comps_capped_at_k_but_confidence_samples_use_wider_price_k():
-    # price_k widens the underlying k-NN pool for price_confidence_samples'
-    # tail-percentile estimate only - the displayed comps table and the
-    # weighted-average conditional_price itself should only ever see the
-    # nearest k, matching the interest table's own k, not the wider pool.
+def test_comp_based_estimate_price_confidence_samples_use_the_same_k_pool_as_the_comps_table():
+    # An earlier version ran a separate, wider price_k search just for
+    # price_confidence_samples - which meant the confidence slider's own "N
+    # real winning prices" count could include real per-league wins from
+    # neighbors that were never shown as one of the displayed comps (a live
+    # 2026 wk2 Antonio Williams query counted 34 there vs 20 summed from the
+    # visible comps' own expand views). Confidence samples must now come
+    # from exactly the same k comps as the table below them - each of these
+    # 3 single-league comps contributes exactly one real winning price, so
+    # the sample count must equal the comp count exactly, not some wider
+    # multiple of it.
     query = _bid_row(0, add_player_id=0, prior_week_actual_points=10.0)
     interest_rows = [_bid_row(1, add_player_id=i, prior_week_actual_points=float(i)) for i in range(20)]
     price_rows = [
         _bid_row(1, add_player_id=i, prior_week_actual_points=float(i), effective_cost_dollars=5.0, effective_starting_budget=50.0)
         for i in range(20)
     ]
-    out = comp_based_estimate(query, interest_rows, price_rows, k=3, price_k=6)
+    out = comp_based_estimate(query, interest_rows, price_rows, k=3)
     assert len(out["comps"]) == 3
-    assert len(out["price_confidence_samples"]) == 6
+    assert len(out["price_confidence_samples"]) == 3
     # comps is the nearest-first PREFIX of the wider pool, not an unrelated
     # k=3 search - the 3 closest prior_week_actual_points to the query's
     # own 10.0 either way (ids 10, 9, 11).

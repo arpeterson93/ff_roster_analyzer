@@ -412,18 +412,21 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 .faab-dist-marker-confidence { background: var(--blue-500); }
 /* Per-price-comp click-to-expand distribution (see docs/js/playermodal.js's
    priceCompDistributionHtml) - every real WINNING price tied to that comp's
-   own event, binned into a heat strip (color intensity = how many real
-   prices landed in that bin) rather than individual dots - a busy event
-   (won in 20+ pooled leagues) used to render as a wall of overlapping dots
-   with no way to see where the real cluster was. A single-hue sequential
-   ramp (track's own neutral color -> full accent), computed per bin in JS
-   via color-mix, not a hardcoded step scale. */
-.faab-heat-track { display: flex; overflow: hidden; }
-.faab-heat-bin { flex: 1; height: 100%; }
+   own event, binned and rendered as a smoothed sparkline (height = how many
+   real prices landed in that bin) rather than individual dots or a flat
+   color-intensity heat strip - a busy event (won in 20+ pooled leagues)
+   used to render as a wall of overlapping dots with no way to see where
+   the real cluster was, and height reads far more precisely than color
+   saturation for the same data. Taller than the plain .faab-dist-track
+   default (10px) specifically to give the curve room to show real shape. */
+.faab-heat-track { height: 36px; overflow: hidden; }
+.faab-heat-spark { display: block; width: 100%; height: 100%; }
+.faab-heat-area { fill: color-mix(in srgb, var(--accent) 22%, transparent); stroke: none; }
+.faab-heat-line { fill: none; stroke: var(--accent); stroke-width: 1.5px; }
 /* The comp's own value and (generalized to whichever site league is
    currently loaded) the viewer's own league, as thin marker ticks OVER the
-   heat strip - identity/highlight, not part of the density encoding, so
-   they stay findable regardless of how dark the bin under them is. */
+   sparkline - identity/highlight, not part of the density encoding, so
+   they stay findable regardless of the curve's own height there. */
 .faab-dist-marker-self { z-index: 2; }
 /* A ring, not a fill swap, so it still reads when the same marker is also
    -self (see the "this comp, your league" combined-label case above). */
@@ -706,12 +709,16 @@ details[open] summary { margin-bottom: 8px; }
 .stat-tile .stat-label { font-size: 11px; color: var(--ink-500); text-transform: uppercase; letter-spacing: 0.03em; }
 .stat-tile .stat-value { font-size: 17px; font-weight: 600; margin-top: 2px; }
 
-/* FAAB Lab's per-method cards (Comp-based / Similar-usage avg / Regression)
-   - same tile look as .stat-tile above, but each carries TWO numbers (the
-   FAAB % and that method's own Interest %) side by side instead of one. */
+/* FAAB Lab's per-method cards (Comp-based / Regression) - same tile look as
+   .stat-tile above. Comp-based carries THREE numbers (MED/AVG price + one
+   shared Interest - see playermodal.js's compBasedCard); Regression carries
+   two (FAAB + Interest). Only 2 cards now, not 3 (Similar-usage avg dropped,
+   mean/median merged into one card) - minmax lowered from 160px so the two
+   deliberately fit on one line on a narrow/mobile viewport where 3 cards
+   never could. */
 .faab-method-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 10px;
   margin: 12px 0;
 }
@@ -722,6 +729,10 @@ details[open] summary { margin-bottom: 8px; }
 }
 .faab-method-label { font-size: 11px; color: var(--ink-500); text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 4px; }
 .faab-method-values { display: flex; gap: 16px; }
+/* Comp-based's own 3-value row - a tighter gap than the 2-value default so
+   MED/AVG/Interest still fit comfortably within the grid's own 140px
+   minimum column width. */
+.faab-method-values-triple { gap: 10px; }
 .faab-method-num { display: block; font-size: 17px; font-weight: 600; }
 .faab-method-sub { display: block; font-size: 10.5px; color: var(--ink-500); text-transform: uppercase; letter-spacing: 0.03em; }
 

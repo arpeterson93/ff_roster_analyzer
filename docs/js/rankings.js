@@ -106,12 +106,13 @@ function columns(data, watched) {
         // bare "0.0%" here read as "the model considered him," when the
         // player modal's own FAAB Lab tab already explains this case).
         if (est.below_relevance_threshold) return `<span class="muted" title="Not enough recent usage to model - see FAAB Lab tab">–</span>`;
-        // % of effective starting budget IF contested (comp-based mean
-        // method - see the FAAB Lab tab for the median alternative) - not
-        // blended with P(bid) (that's the separate INT column below), and
-        // not a $ amount - see the conversation this was built from for why
-        // the target moved off a fictional $1000 scale.
-        const pct = (est.conditional_price || {}).comp_based_mean;
+        // % of effective starting budget IF contested (comp-based MEDIAN
+        // method, now the primary estimate - see the FAAB Lab tab for the
+        // mean alongside it) - not blended with P(bid) (that's the separate
+        // INT column below), and not a $ amount - see the conversation this
+        // was built from for why the target moved off a fictional $1000
+        // scale.
+        const pct = (est.conditional_price || {}).comp_based_median;
         return `${fmt(pct * 100, 1)}%`;
       },
     },
@@ -121,7 +122,7 @@ function columns(data, watched) {
         const est = (data.faabEstimates || {})[p.id];
         if (!est) return "–";
         if (est.below_relevance_threshold) return `<span class="muted" title="Not enough recent usage to model - see FAAB Lab tab">–</span>`;
-        const pct = (est.bid_probability || {}).comp_based_mean;
+        const pct = (est.bid_probability || {}).comp_based_median;
         return `${fmt(pct * 100, 1)}%`;
       },
     },
@@ -154,7 +155,7 @@ function sortValue(p, key, data) {
   if (key === "_faab_est" || key === "_faab_interest") {
     const est = (data.faabEstimates || {})[p.id];
     const field = key === "_faab_est" ? "conditional_price" : "bid_probability";
-    const pct = est ? (est[field] || {}).comp_based_mean : undefined;
+    const pct = est ? (est[field] || {}).comp_based_median : undefined;
     // "-" (no estimate at all, or below the relevance threshold - see
     // playermodal.js's faabEstimateSection) sorts as a literal 0%, same as
     // a real player estimated at 0% would - not pinned to an extreme, so
