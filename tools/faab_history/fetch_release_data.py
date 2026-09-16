@@ -38,7 +38,7 @@ DEST_DIR = Path(__file__).parent
 # update the hash here whenever you `gh release upload faab-data <file>
 # --clobber` a new version.
 FILES = {
-    "combined-training-table.json": "4ffb917c5a9260f0b4b28a92b848d1e34859ccf5b394d97b7f81a28f94ccc8a0",
+    "combined-training-table.json": "39715fc82633f05c9359d3043ef52411ad1bccb343b8cca72ace73d9747bfbc5",
     "other-leagues-bids-raw.json": "d3c094de7451a43177ce9296e56d18556d8a7713a8e550bb32cdd42a4de457b7",
     "other-leagues-bids.json": "db53d449db00c655b76fd0ab1035480839758d09f9205bef4c0e385e57c4c0fb",
     "other-leagues-rostered-by-week.json": "3e5fe980b058f73bf26d33b9f72989c0d97d75e43782ce40f7357df59948ee84",
