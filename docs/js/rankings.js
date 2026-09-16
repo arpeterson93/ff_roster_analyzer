@@ -98,15 +98,30 @@ function columns(data, watched) {
       fmt: (_v, p) => {
         const est = (data.faabEstimates || {})[p.id];
         if (!est) return "–";
+        // below_relevance_threshold means the model never actually ran a
+        // search for this player (see engine/pipeline.py's is_relevant) -
+        // its 0.0 is a hard gate, not a computed estimate, so it must not
+        // render identically to a real near-zero number (see the
+        // conversation this was built from - a Tank Bigsby review where a
+        // bare "0.0%" here read as "the model considered him," when the
+        // player modal's own FAAB Lab tab already explains this case).
+        if (est.below_relevance_threshold) return `<span class="muted" title="Not enough recent usage to model - see FAAB Lab tab">–</span>`;
         // % of effective starting budget IF contested (comp-based method) -
-        // not blended with P(bid), see playermodal.js/engine/faab_estimate.py
-        // for why, and not a $ amount - see the conversation this was built
-        // from for why the target moved off a fictional $1000 scale.
+        // not blended with P(bid) (that's the separate INT column below),
+        // and not a $ amount - see the conversation this was built from for
+        // why the target moved off a fictional $1000 scale.
         const pct = (est.conditional_price || {}).comp_based;
-        const d = est.distribution;
-        return d
-          ? `${fmt(pct * 100, 1)}% <span class="muted small">(${fmt(d.p25 * 100, 1)}–${fmt(d.p75 * 100, 1)}%)</span>`
-          : `${fmt(pct * 100, 1)}%`;
+        return `${fmt(pct * 100, 1)}%`;
+      },
+    },
+    {
+      key: "_faab_interest", label: "INT", title: "P(anyone bids) - comp-based method, not multiplied into FAAB Est.",
+      fmt: (_v, p) => {
+        const est = (data.faabEstimates || {})[p.id];
+        if (!est) return "–";
+        if (est.below_relevance_threshold) return `<span class="muted" title="Not enough recent usage to model - see FAAB Lab tab">–</span>`;
+        const pct = (est.bid_probability || {}).comp_based;
+        return `${fmt(pct * 100, 1)}%`;
       },
     },
     ...(yourTeamId !== null
@@ -135,9 +150,10 @@ function sortValue(p, key, data) {
     const pts = lastWeekEntry(p, data.meta.current_week).actual?.points;
     return pts === undefined || pts === null ? -Infinity : pts;
   }
-  if (key === "_faab_est") {
+  if (key === "_faab_est" || key === "_faab_interest") {
     const est = (data.faabEstimates || {})[p.id];
-    const pct = est ? (est.conditional_price || {}).comp_based : undefined;
+    const field = key === "_faab_est" ? "conditional_price" : "bid_probability";
+    const pct = est ? (est[field] || {}).comp_based : undefined;
     // "-" (no estimate at all, or below the relevance threshold - see
     // playermodal.js's faabEstimateSection) sorts as a literal 0%, same as
     // a real player estimated at 0% would - not pinned to an extreme, so

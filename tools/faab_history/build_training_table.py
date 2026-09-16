@@ -111,7 +111,7 @@ import nflreadpy as nfl
 import polars as pl
 from espn_api.football import League as EspnLeague
 
-from engine.faab_estimate import FANTASY_RELEVANT_SNAP_PCT, NO_BID_MIN_PRIOR_POINTS, NO_BID_MIN_SNAP_PCT, POSITIONS as RELEVANT_POSITIONS
+from engine.faab_estimate import FANTASY_RELEVANT_SNAP_PCT, POSITIONS as RELEVANT_POSITIONS, is_faab_relevant
 from engine.scoring import ScoringRules
 from ingest import nfl_data as nd
 from ingest.ids import build_id_map
@@ -229,11 +229,16 @@ _RANK_PAGE_TYPES = [f"weekly-{p}" for p in _RANK_POSITIONS.values()] + [f"redraf
 def build_rank_index(seasons: list[int]) -> dict:
     """{"snapshots": {(page_type, fp_id): sorted [(date, ecr), ...]},
         "week_starts": {(season, week): date of that week's first real
-        game}}. week_starts is the boundary a rank lookup must stay
-    STRICTLY BEFORE - real leagues process FAAB before that week's games
-    even start (see pull_o_league_bids.py's own docstring on FAAB timing),
-    so a rank snapshot dated on/after kickoff was never actually available
-    to a bidder deciding that week."""
+        game}, "blackout": {(page_type, season, week): bool}}. week_starts
+    is the boundary a rank lookup must stay STRICTLY BEFORE - real leagues
+    process FAAB before that week's games even start (see
+    pull_o_league_bids.py's own docstring on FAAB timing), so a rank
+    snapshot dated on/after kickoff was never actually available to a
+    bidder deciding that week. blackout flags a genuine leaguewide "nobody
+    at this position has a real weekly rank yet this season" window (see
+    _compute_weekly_blackouts) - forward_rank_features consults it to
+    substitute ROS rank for a player's own missing weekly rank ONLY during
+    a real blackout, not whenever any one player happens to lack one."""
     rankings = nfl.load_ff_rankings("all").filter(pl.col("page_type").is_in(_RANK_PAGE_TYPES))
     snapshots: dict[tuple, list[tuple]] = defaultdict(list)
     for row in rankings.iter_rows(named=True):
@@ -266,7 +271,59 @@ def build_rank_index(seasons: list[int]) -> dict:
             if key not in week_starts or date < week_starts[key]:
                 week_starts[key] = date
 
-    return {"snapshots": dict(snapshots), "week_starts": week_starts}
+    return {"snapshots": dict(snapshots), "week_starts": week_starts, "blackout": _compute_weekly_blackouts(snapshots, week_starts, seasons)}
+
+
+# How far before/after a season's own week-1 kickoff to look for that
+# season's OWN weekly-rank snapshots, when finding the first one - wide
+# enough to catch an early preseason weekly snapshot if one exists, and to
+# span a full season through its playoffs, but never wide enough to reach
+# into a NEIGHBORING season's own snapshots (which would make a genuine
+# blackout look like real coverage, or vice versa).
+_SEASON_WINDOW_BEFORE_DAYS = 45
+_SEASON_WINDOW_AFTER_DAYS = 200
+
+
+def _compute_weekly_blackouts(snapshots: dict, week_starts: dict, seasons: list[int]) -> dict[tuple, bool]:
+    """{(page_type, season, week): True} for every (weekly-{pos}, season,
+    week) where NO player at all had a real weekly-{pos} rank snapshot yet
+    THIS season, as of that week's own cutoff - a genuine leaguewide
+    "FantasyPros hasn't started publishing weekly numbers yet" blackout, not
+    one specific player simply missing that week's cheat sheet (which is
+    real signal, not a data gap - see forward_rank_features).
+
+    This window varies a lot by season and is NOT a fixed "weeks 1-3"
+    guess - confirmed empirically (see the conversation this was built
+    from): 2020 had no real weekly-RB snapshot until week 6, 2024 not until
+    week 4, other years more like week 2. Computed once here, upfront, for
+    every (page_type, season, week) combo the caller might ask about,
+    rather than re-scanning every snapshot per lookup."""
+    weekly_page_types = {pt for (pt, _fp_id) in snapshots if pt.startswith("weekly-")}
+
+    earliest_this_season: dict[tuple, dt.date] = {}
+    for season in seasons:
+        season_start = week_starts.get((season, 1))
+        if season_start is None:
+            continue
+        window_start = season_start - dt.timedelta(days=_SEASON_WINDOW_BEFORE_DAYS)
+        window_end = season_start + dt.timedelta(days=_SEASON_WINDOW_AFTER_DAYS)
+        for page_type in weekly_page_types:
+            dates_this_season = [
+                d
+                for (pt, _fp_id), snaps in snapshots.items()
+                if pt == page_type
+                for d, _ecr in snaps
+                if window_start <= d <= window_end
+            ]
+            if dates_this_season:
+                earliest_this_season[(page_type, season)] = min(dates_this_season)
+
+    blackout: dict[tuple, bool] = {}
+    for (season, week), cutoff in week_starts.items():
+        for page_type in weekly_page_types:
+            first = earliest_this_season.get((page_type, season))
+            blackout[(page_type, season, week)] = first is None or cutoff <= first
+    return blackout
 
 
 def _rank_lookup(rank_index: dict, page_type: str, fp_id: int | None, season: int, week: int) -> int | None:
@@ -307,10 +364,49 @@ def forward_rank_features(gsis_id: str | None, position: str | None, season: int
         fp_id = record.get("fantasypros_id") if record else None
     if pos is None:
         return {"weekly_rank": None, "ros_rank": None}
-    return {
-        "weekly_rank": _rank_lookup(rank_index, f"weekly-{pos}", fp_id, season, week),
-        "ros_rank": _rank_lookup(rank_index, f"redraft-{pos}", fp_id, season, week),
-    }
+    weekly_page = f"weekly-{pos}"
+    weekly_rank = _rank_lookup(rank_index, weekly_page, fp_id, season, week)
+    ros_rank = _rank_lookup(rank_index, f"redraft-{pos}", fp_id, season, week)
+    # A real leaguewide blackout (see _compute_weekly_blackouts) means this
+    # player's own missing weekly rank carries no information at all - EVERY
+    # player at this position is unranked right now, stars included, so his
+    # ROS rank is the best available stand-in rather than the flat
+    # MISSING_RANK_SENTINEL every other blacked-out player would also
+    # collapse onto (which would make them all look artificially identical
+    # in feature-vector distance regardless of true talent - see the
+    # conversation this was built from). Left alone outside a real blackout:
+    # one specific player missing the weekly cheat sheet while others at his
+    # position DO have one is real signal, not a data gap.
+    if weekly_rank is None and ros_rank is not None and rank_index["blackout"].get((weekly_page, season, week), False):
+        weekly_rank = ros_rank
+    return {"weekly_rank": weekly_rank, "ros_rank": ros_rank}
+
+
+def _ros_ranked_candidates(rank_index: dict, idmap, position: str, season: int, week: int) -> dict[str, float]:
+    """gsis_id -> ROS rank, for every player with a real ROS rank as of this
+    week's cutoff at this position - the population build_no_bid_rows widens
+    into for players with NO stats row at all that week (a bye, an
+    inactive, hasn't debuted yet - see is_faab_relevant's own docstring:
+    real historical bids happen on players like this, rank-rescued despite
+    zero recent usage, so a comparable "same profile, genuinely no
+    interest" no_bid example needs to be able to exist too, not just the
+    (usage-bearing) population a stats-row-based scan alone can see)."""
+    pos = _RANK_POSITIONS.get(position)
+    if pos is None:
+        return {}
+    page_type = f"redraft-{pos}"
+    out: dict[str, float] = {}
+    for pt, fp_id in rank_index["snapshots"]:
+        if pt != page_type:
+            continue
+        rank = _rank_lookup(rank_index, page_type, fp_id, season, week)
+        if rank is None:
+            continue
+        record = idmap.by_fp.get(fp_id)
+        gsis_id = record.get("gsis_id") if record else None
+        if gsis_id:
+            out[gsis_id] = rank
+    return out
 
 
 def _points_by_week(gsis_id: str | None, stats: pl.DataFrame, scoring: ScoringRules) -> dict[int, float]:
@@ -430,10 +526,21 @@ def build_no_bid_rows(
     """One row per (season, week, player) where the player was a genuine
     free agent that week in THIS league (per pull_weekly_rosters.py's /
     pull_public_league_rosters.py's actual weekly rosters, NOT an
-    assumption), nobody placed any bid on him, and his prior-week usage or
-    production cleared the NO_BID_MIN_* relevance bar. Week 1 of each
-    season is skipped - there's no prior week within the season to judge
-    relevance from.
+    assumption), nobody placed any bid on him, and engine.faab_estimate.
+    is_faab_relevant says his prior-week usage OR ROS rank cleared the bar
+    to plausibly have been considered. Week 1 of each season is skipped -
+    there's no prior week within the season to judge relevance from.
+
+    Candidates come from TWO populations, scanned separately: every player
+    with a real stats row for the prior week (whatever his own usage was),
+    and - see _ros_ranked_candidates - every ROS-ranked player at each
+    position who has NO stats row at all that week (a bye, an inactive,
+    hasn't debuted yet), so a good-enough ROS rank alone can still surface
+    him too. Without the second scan, the historical no_bid population
+    could never represent "a well-ranked player who was genuinely quiet and
+    drew no interest" - even though real bid rows for that exact shape of
+    situation exist (a rank-rescued player with no recent usage), leaving
+    no comparable "no" example to weigh a real "yes" against.
 
     Generalized to any league with a weekly-roster snapshot file, not just
     The O League - see module docstring's WHY POOLING NOW EXTENDS TO THE
@@ -456,25 +563,17 @@ def build_no_bid_rows(
                 continue
             rostered_set = set(rostered_ids)
 
-            prior_rows = stats.filter(pl.col("week") == week - 1).to_dicts()
-            for row in prior_rows:
-                position = row.get("position")
-                if position not in RELEVANT_POSITIONS:
-                    continue
-                gsis_id = row.get("player_id")
-                prior_points = scoring.points_for_row(row)
-                snap_pct = _recent_snap_pct(gsis_to_pfr.get(gsis_id), week, snaps)
-                if prior_points < NO_BID_MIN_PRIOR_POINTS and (snap_pct is None or snap_pct < NO_BID_MIN_SNAP_PCT):
-                    continue  # not relevant enough to plausibly have been considered
-
+            def _try_add_no_bid_row(gsis_id, position, prior_points, snap_pct, ros_rank):
+                if not is_faab_relevant(prior_points, snap_pct, ros_rank, position):
+                    return  # not relevant enough to plausibly have been considered
                 record = idmap.by_gsis.get(gsis_id)
                 espn_id = record.get("espn_id") if record else None
                 if espn_id is None:
-                    continue  # can't cross-check against the rostered set without an ESPN id
+                    return  # can't cross-check against the rostered set without an ESPN id
                 if espn_id in rostered_set:
-                    continue  # actually owned by a fantasy team that week, not a free agent
+                    return  # actually owned by a fantasy team that week, not a free agent
                 if (season, week, espn_id) in existing_keys:
-                    continue  # already has a real bid row this week
+                    return  # already has a real bid row this week
 
                 enriched = enrich_player_week(
                     gsis_id=gsis_id, position=position, season=season, week=week,
@@ -507,6 +606,36 @@ def build_no_bid_rows(
                         "pct_of_league_season_spend": None,
                     }
                 )
+
+            prior_rows = stats.filter(pl.col("week") == week - 1).to_dicts()
+            gsis_ids_with_stat_row: set[str] = set()
+            for row in prior_rows:
+                position = row.get("position")
+                if position not in RELEVANT_POSITIONS:
+                    continue
+                gsis_id = row.get("player_id")
+                gsis_ids_with_stat_row.add(gsis_id)
+                prior_points = scoring.points_for_row(row)
+                snap_pct = _recent_snap_pct(gsis_to_pfr.get(gsis_id), week, snaps)
+                ros_rank = forward_rank_features(gsis_id, position, season, week, idmap, rank_index)["ros_rank"]
+                _try_add_no_bid_row(gsis_id, position, prior_points, snap_pct, ros_rank)
+
+            # Widen to players with NO stats row at all this week - a bye, an
+            # inactive, hasn't debuted yet - who is_faab_relevant can still
+            # rank-rescue. Without this, the historical no_bid population
+            # could never represent "a well-ranked player who was genuinely
+            # quiet and drew no interest," even though real bid rows for
+            # that exact profile do exist (see is_faab_relevant's own
+            # docstring) - the model would have real "yes" examples for this
+            # shape of situation but no comparable "no" ones to weigh them
+            # against. gsis_ids_with_stat_row is excluded since those
+            # players' own real usage already decided the question above.
+            for position in RELEVANT_POSITIONS:
+                for gsis_id, ros_rank in _ros_ranked_candidates(rank_index, idmap, position, season, week).items():
+                    if gsis_id in gsis_ids_with_stat_row:
+                        continue
+                    snap_pct = _recent_snap_pct(gsis_to_pfr.get(gsis_id), week, snaps)
+                    _try_add_no_bid_row(gsis_id, position, None, snap_pct, ros_rank)
     return out
 
 

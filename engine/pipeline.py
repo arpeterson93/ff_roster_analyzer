@@ -15,12 +15,11 @@ import polars as pl
 from engine.curve import Curve, blend_current, build_curve, build_dst_curve
 from engine.faab_estimate import (
     FANTASY_RELEVANT_SNAP_PCT,
-    NO_BID_MIN_PRIOR_POINTS,
-    NO_BID_MIN_SNAP_PCT,
     POOLED_TRAINING_TABLE_PATH,
     TEAMMATE_INJURY_FLAG_STATUSES,
     FaabModel,
     build_gsis_to_pfr_map,
+    is_faab_relevant,
     recent_snap_pct,
 )
 from engine.matchups import (
@@ -252,6 +251,38 @@ def _compute_faab_estimates(
     # history to train on.
     model = FaabModel(POOLED_TRAINING_TABLE_PATH)
 
+    # A genuine leaguewide "FantasyPros hasn't published ANY real weekly
+    # rank for this position yet this week" blackout - the live analog of
+    # tools/faab_history/build_training_table.py's _compute_weekly_blackouts.
+    # Checked against the FULL players_out population (not just this week's
+    # waiver candidates), since it's a fact about whether the rankings
+    # SOURCE has data yet, not about who happens to be on waivers. Used
+    # ONLY below, for the FAAB query's own weekly_rank input - deliberately
+    # never touches p["week_pos_rank"] itself, which project_player's
+    # current-week valuation logic also reads and has its own, unrelated,
+    # already-established behavior for a missing weekly rank.
+    position_weekly_blackout = {
+        pos: not any(p["week_pos_rank"] is not None for p in players_out if p["position"] == pos)
+        for pos in {"QB", "RB", "WR", "TE", "K"}
+    }
+
+    def faab_weekly_rank(p: dict) -> float | None:
+        """This candidate's weekly rank for FAAB purposes only - substitutes
+        his own ROS rank when NO player at this position has a real weekly
+        rank yet this week (see position_weekly_blackout above), leaving a
+        real "just not on the weekly cheat sheet while others are" gap
+        alone otherwise - see the conversation this was built from (Dylan
+        Laube, 2026 wk2, and Carson Steele/Jordan Mason/Isaac Guerendo, all
+        real historical comps whose OWN weekly rank was missing purely
+        because their season's weekly rankings hadn't started publishing
+        yet, not because they were individually obscure)."""
+        wk = p.get("week_pos_rank")
+        if wk is not None:
+            return wk
+        if position_weekly_blackout.get(p["position"]) and p.get("ros_pos_rank") is not None:
+            return p["ros_pos_rank"]
+        return None
+
     # First pass: compute every candidate's own inputs, INCLUDING relevance,
     # before any per-player estimate - best_position_competitor_ros_rank
     # (below) needs the full relevant-candidate pool up front, not just the
@@ -279,14 +310,15 @@ def _compute_faab_estimates(
         trailing_2_3_avg_points, season_avg_points = recent_form(p)
 
         # Same relevance bar the historical no_bid rows had to clear to even
-        # be included as training data (see engine.faab_estimate's
-        # NO_BID_MIN_* constants). A player below both isn't represented by
-        # any comparable "genuinely uninteresting" comp in the training set
-        # either - running them through the model would just extrapolate
-        # from whatever's nearest and silently inflate a should-be-$0 case.
-        is_relevant = (prior_points is not None and prior_points >= NO_BID_MIN_PRIOR_POINTS) or (
-            snap_pct is not None and snap_pct >= NO_BID_MIN_SNAP_PCT
-        )
+        # be included as training data (see engine.faab_estimate.
+        # is_faab_relevant, the ONE shared gate both this file and
+        # tools/faab_history/build_training_table.py call) - a player below
+        # both usage bars AND without a good enough ROS rank isn't
+        # represented by any comparable "genuinely uninteresting" comp in
+        # the training set either, so running them through the model would
+        # just extrapolate from whatever's nearest and silently inflate a
+        # should-be-$0 case.
+        is_relevant = is_faab_relevant(prior_points, snap_pct, p.get("ros_pos_rank"), p["position"])
         per_player[p["id"]] = {
             "player": p, "prior_actual": prior_actual, "prior_points": prior_points,
             "snap_pct": snap_pct, "teammate_flag": bool(qualifying_mates), "qualifying_mates": qualifying_mates,
@@ -383,7 +415,7 @@ def _compute_faab_estimates(
                     "own_injury_flag": p.get("injury_status") not in (None, "ACTIVE"),
                     "teammate_position_injury_flag": teammate_flag, "snap_pct_prior_week": snap_pct,
                     "trailing_2_3_avg_points": trailing_2_3_avg_points, "season_avg_points": season_avg_points,
-                    "weekly_rank": p.get("week_pos_rank"), "ros_rank": p.get("ros_pos_rank"),
+                    "weekly_rank": faab_weekly_rank(p), "ros_rank": p.get("ros_pos_rank"),
                     "best_position_competitor_ros_rank": best_rank, "had_position_competitor_rank": had_competitor_rank,
                 },
             }
@@ -405,7 +437,7 @@ def _compute_faab_estimates(
             # tools/faab_history/build_training_table.py's forward_rank_
             # features computes historically (lower = better; None if
             # FantasyPros doesn't rank this player at all this week).
-            "weekly_rank": p.get("week_pos_rank"),
+            "weekly_rank": faab_weekly_rank(p),
             "ros_rank": p.get("ros_pos_rank"),
             "best_position_competitor_ros_rank": best_rank,
             "had_position_competitor_rank": had_competitor_rank,

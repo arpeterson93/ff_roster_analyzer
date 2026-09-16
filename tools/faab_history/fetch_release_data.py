@@ -38,10 +38,10 @@ DEST_DIR = Path(__file__).parent
 # update the hash here whenever you `gh release upload faab-data <file>
 # --clobber` a new version.
 FILES = {
-    "combined-training-table.json": "f503cdaf941450241ccbb468342b710f1b7ff0fd62cbf1be8b4b5def1d085e8d",
-    "other-leagues-bids-raw.json": "c34eab8a29fb159d412a59a613d039482d4c0bb9060b33448c926a671d0decfb",
-    "other-leagues-bids.json": "8f1ca84c06a36a16c896f844e4ee43fdc94b4aeefd076e375d92d00c62a41f90",
-    "other-leagues-rostered-by-week.json": "8797b1ce611e4293e87470642e39a3b0eea32e86315c4f890f83af4d04f8b9d8",
+    "combined-training-table.json": "4ffb917c5a9260f0b4b28a92b848d1e34859ccf5b394d97b7f81a28f94ccc8a0",
+    "other-leagues-bids-raw.json": "d3c094de7451a43177ce9296e56d18556d8a7713a8e550bb32cdd42a4de457b7",
+    "other-leagues-bids.json": "db53d449db00c655b76fd0ab1035480839758d09f9205bef4c0e385e57c4c0fb",
+    "other-leagues-rostered-by-week.json": "3e5fe980b058f73bf26d33b9f72989c0d97d75e43782ce40f7357df59948ee84",
 }
 
 # The one file engine/pipeline.py actually loads at run time (see

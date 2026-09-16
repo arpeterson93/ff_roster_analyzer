@@ -494,35 +494,61 @@ function faabEstimateSection(player, data) {
       : `<div class="muted small">The O League: ${detail.signal.replace("_", " ")}</div>`;
 
   // bid_distribution (see engine/faab_estimate.py's _price_comp_bid_distribution)
-  // is every real bid tied to this comp's own event - every pooled league
-  // that also won it, plus each of those leagues' own real losing rivals,
-  // all in %-of-budget units so they're meaningfully comparable across
-  // leagues with different budgets, each tagged with its own
-  // source_league_id. A small dot-plot, reusing the same .faab-dist-track
-  // look as the top-level distribution above, with this comp's own value
-  // picked out from the rest, AND (generalized to whichever site league is
-  // currently loaded, via data.meta.league_id - not hardcoded to any one
-  // league) the site's own league picked out too, so "what happened in MY
-  // league for this historical event" is visible at a glance even when
-  // it's neither the representative comp row nor The O League.
+  // is every pooled league's own real WINNING price for this comp's same
+  // event - never a losing bid (a losing bid is a censored observation,
+  // never the real win/lose threshold - see that function's docstring), all
+  // in %-of-budget units so they're meaningfully comparable across leagues
+  // with different budgets, each tagged with its own source_league_id.
+  //
+  // Rendered as a binned HEAT STRIP, not individual dots - a busy event
+  // (won in 20+ pooled leagues) used to render as a wall of overlapping
+  // dots with no way to see where the real cluster was. Bin count scales
+  // with how many real prices there are (floor of 6 so a sparse event still
+  // reads as a shape, cap of 20 so a single bin never represents a wide
+  // span of the axis) - each bin's fill is a single-hue blend from the
+  // track's own neutral color (empty) up to full accent (this bin's own
+  // share of the busiest bin), so density reads as color intensity instead
+  // of dot-counting. The comp's own value and (generalized to whichever
+  // site league is currently loaded, via data.meta.league_id - not
+  // hardcoded to any one league) the viewer's own league are picked out as
+  // thin marker ticks OVER the strip, not folded into the binning, so
+  // "what happened in MY league" stays visible at a glance regardless of
+  // how dark the bin under it is.
   function priceCompDistributionHtml(c) {
     const values = c.bid_distribution || [];
     const max = Math.max(...values.map((v) => v.value), 0.001);
-    const dots = values
+    const binCount = Math.min(20, Math.max(6, values.length));
+    const binWidth = max / binCount;
+    const counts = new Array(binCount).fill(0);
+    values.forEach((v) => {
+      counts[Math.min(binCount - 1, Math.floor(v.value / binWidth))] += 1;
+    });
+    const maxCount = Math.max(...counts, 1);
+    const bins = counts
+      .map((count, i) => {
+        const pct = Math.round((count / maxCount) * 100);
+        const lo = fmt(i * binWidth * 100, 1);
+        const hi = fmt((i + 1) * binWidth * 100, 1);
+        const title = count ? `${count} winning bid${count === 1 ? "" : "s"} between ${lo}% and ${hi}%` : `no winning bids between ${lo}% and ${hi}%`;
+        return `<div class="faab-heat-bin" style="background:color-mix(in srgb, var(--accent) ${pct}%, var(--border))" title="${title}"></div>`;
+      })
+      .join("");
+    const markers = values
+      .filter((v) => Math.abs(v.value - c.pct_of_remaining_budget) < 1e-9 || (data.meta.league_id !== null && data.meta.league_id !== undefined && v.source_league_id === data.meta.league_id))
       .map((v) => {
         const isSelf = Math.abs(v.value - c.pct_of_remaining_budget) < 1e-9;
         const isMine = data.meta.league_id !== null && data.meta.league_id !== undefined && v.source_league_id === data.meta.league_id;
-        const label = isSelf ? " (this comp)" : isMine ? " (your league)" : "";
-        const cls = ["faab-dist-dot", isSelf ? "faab-dist-dot-self" : "", isMine ? "faab-dist-dot-mine" : ""].filter(Boolean).join(" ");
-        return `<div class="${cls}" style="left:${(v.value / max) * 100}%" title="${fmt(v.value * 100, 1)}%${v.is_winner ? "" : " (losing bid)"}${label}"></div>`;
+        const label = isSelf && isMine ? " (this comp, your league)" : isSelf ? " (this comp)" : " (your league)";
+        const cls = ["faab-dist-marker", isSelf ? "faab-dist-marker-self" : "", isMine ? "faab-dist-marker-mine" : ""].filter(Boolean).join(" ");
+        return `<div class="${cls}" style="left:${(v.value / max) * 100}%" title="${fmt(v.value * 100, 1)}%${label}"></div>`;
       })
       .join("");
     return `
       <div class="faab-dist">
-        <div class="faab-dist-track">${dots}</div>
+        <div class="faab-dist-track faab-heat-track">${bins}${markers}</div>
         <div class="faab-dist-labels">
           <span>0%</span>
-          <span class="muted">${values.length} real bid${values.length === 1 ? "" : "s"} across every league that saw this event</span>
+          <span class="muted">${values.length} real winning bid${values.length === 1 ? "" : "s"} across every league that won this event</span>
           <span>${fmt(max * 100, 1)}%</span>
         </div>
       </div>

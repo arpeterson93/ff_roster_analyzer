@@ -1,6 +1,9 @@
 import pytest
 
 from engine.faab_estimate import (
+    NO_BID_MAX_ROS_RANK,
+    NO_BID_MIN_PRIOR_POINTS,
+    NO_BID_MIN_SNAP_PCT,
     _backing_count,
     _credibility,
     _credibility_weighted,
@@ -16,6 +19,7 @@ from engine.faab_estimate import (
     build_price_rows,
     comp_based_estimate,
     consolidate_cross_league_events,
+    is_faab_relevant,
     price_confidence_samples,
     target_pct,
     weighted_percentile,
@@ -220,34 +224,22 @@ def test_weighted_percentile_empty_is_zero():
     assert weighted_percentile([], 50) == 0.0
 
 
-def test_price_confidence_samples_excludes_losing_rival_bids():
-    # One auction: won for $10 of a $40 budget (target_pct=0.25); a real
-    # rival bid $6 (lost, so never the real win/lose threshold - see
-    # price_confidence_samples' docstring) must NOT appear in the pool.
+def test_price_confidence_samples_only_ever_sees_winning_prices():
+    # A losing bid has no path into this pool at all - price_confidence_samples
+    # reads _price_comp_bid_distribution, which is winners-only by
+    # construction (see the module docstring: a losing bid is a censored
+    # observation, never the real win/lose threshold).
     row = _bid_row(1, effective_cost_dollars=10.0, effective_starting_budget=40.0, team_id="winner_team")
-    index = {(1, 2022, 5, 42): [{"team_id": "rival_team", "bid_dollars": 6.0}]}
-    samples = price_confidence_samples([row], [2.0], index)
+    samples = price_confidence_samples([row], [2.0])
     assert samples == pytest.approx([(0.25, 2.0)])
 
 
-def test_price_confidence_samples_one_auction_one_vote_regardless_of_rival_count():
-    # Two auctions with the SAME k-NN weight - one contested (winner + 3
-    # real losing bids), one uncontested (winner only). Since only the real
-    # winning price counts now, both contribute exactly ONE sample each,
-    # both carrying their neighbor's FULL weight, undiluted by how many
-    # rivals happened to also bid - a heavily-contested auction's real
-    # clearing price shouldn't count for less just because more people lost
-    # it.
+def test_price_confidence_samples_one_auction_one_vote():
+    # Two independent single-league auctions with the SAME k-NN weight each
+    # contribute exactly ONE sample, carrying their neighbor's FULL weight.
     contested = _bid_row(1, effective_cost_dollars=10.0, effective_starting_budget=40.0, team_id="winner_1")
     uncontested = _bid_row(2, add_player_id=99, effective_cost_dollars=8.0, effective_starting_budget=40.0, team_id="winner_2")
-    index = {
-        (1, 2022, 5, 42): [
-            {"team_id": "rival_a", "bid_dollars": 9.0},
-            {"team_id": "rival_b", "bid_dollars": 7.0},
-            {"team_id": "rival_c", "bid_dollars": 5.0},
-        ],
-    }
-    samples = price_confidence_samples([contested, uncontested], [2.0, 2.0], index)
+    samples = price_confidence_samples([contested, uncontested], [2.0, 2.0])
     assert sorted(samples) == pytest.approx([(0.2, 2.0), (0.25, 2.0)])
 
 
@@ -336,20 +328,17 @@ def test_price_confidence_samples_expands_consolidated_event_across_leagues():
     # cross-league consolidated event (see consolidate_cross_league_events)
     # - but the confidence distribution should still see EVERY league's own
     # real WINNING price for that same event, via event_won_rows_index.
-    # League B's rival (a real losing bid) must NOT appear - only the two
-    # real wins count as win/lose thresholds.
     league_a = _bid_row(1, effective_cost_dollars=10.0, effective_starting_budget=40.0, team_id="a_winner")  # 0.25
     league_b = _bid_row(2, effective_cost_dollars=6.0, effective_starting_budget=20.0, team_id="b_winner")  # 0.30
     representative = dict(league_a)  # what consolidate_cross_league_events would hand the k-NN search
     event_won_rows_index = {(2022, 5, 42): [league_a, league_b]}
-    competing_bids_index = {(2, 2022, 5, 42): [{"team_id": "b_rival", "bid_dollars": 4.0}]}  # 4/20 = 0.20, league B only - excluded
 
-    samples = price_confidence_samples([representative], [3.0], competing_bids_index, event_won_rows_index)
+    samples = price_confidence_samples([representative], [3.0], event_won_rows_index)
     values = sorted(round(v, 4) for v, _ in samples)
-    assert values == [0.25, 0.3]  # league A's win, league B's win - no rival
+    assert values == [0.25, 0.3]  # league A's win, league B's win
     # One real event, one vote: both expanded samples still share the
     # representative's single k-NN weight (3.0), split evenly across the 2
-    # real wins (not diluted by league B's rival).
+    # real wins.
     assert sum(w for _, w in samples) == pytest.approx(3.0)
     assert all(w == pytest.approx(1.5) for _, w in samples)
 
@@ -362,49 +351,41 @@ def test_price_confidence_samples_falls_back_without_event_won_rows_index():
     assert samples == [(0.25, 2.0)]
 
 
-def test_price_comp_bid_distribution_expands_across_leagues_and_rivals():
+def test_price_comp_bid_distribution_expands_across_leagues():
     # Same cross-league setup as the price_confidence_samples test above -
     # this is the same underlying data, just returned as a sorted list of
-    # {value, source_league_id, is_winner} dicts (so a UI can pick out
-    # which league - and which of those are real wins vs rival losing
-    # bids) for one comp row's own click-to-expand view, instead of k-NN
-    # samples.
+    # {value, source_league_id} dicts (so a UI can pick out which league)
+    # for one comp row's own click-to-expand view, instead of k-NN samples.
     league_a = _bid_row(1, effective_cost_dollars=10.0, effective_starting_budget=40.0, team_id="a_winner")  # 0.25
     league_b = _bid_row(2, effective_cost_dollars=6.0, effective_starting_budget=20.0, team_id="b_winner")  # 0.30
     representative = dict(league_a)
     event_won_rows_index = {(2022, 5, 42): [league_a, league_b]}
-    competing_bids_index = {(2, 2022, 5, 42): [{"team_id": "b_rival", "bid_dollars": 4.0}]}  # 4/20 = 0.20
 
-    values = _price_comp_bid_distribution(representative, competing_bids_index, event_won_rows_index)
-    assert [v["value"] for v in values] == pytest.approx([0.2, 0.25, 0.3])
-    assert [v["source_league_id"] for v in values] == [2, 1, 2]
-    assert [v["is_winner"] for v in values] == [False, True, True]
+    values = _price_comp_bid_distribution(representative, event_won_rows_index)
+    assert [v["value"] for v in values] == pytest.approx([0.25, 0.3])
+    assert [v["source_league_id"] for v in values] == [1, 2]
 
 
 def test_price_comp_bid_distribution_falls_back_to_just_this_row_when_not_cross_league():
     row = _bid_row(1, effective_cost_dollars=10.0, effective_starting_budget=40.0, team_id="winner")
-    values = _price_comp_bid_distribution(row, None, None)
+    values = _price_comp_bid_distribution(row, None)
     assert [v["value"] for v in values] == pytest.approx([0.25])
     assert values[0]["source_league_id"] == 1
-    assert values[0]["is_winner"] is True
 
 
-def test_price_comp_dicts_no_longer_expose_raw_dollars_or_competing_bids():
-    # Both dropped from the UI on purpose - a raw $ amount from an
-    # unfamiliar pooled league's own budget scale isn't meaningfully
-    # comparable to anything a reader already knows (see target_pct), and
-    # competing_bids only ever showed one representative league's own
-    # rivals - superseded by bid_distribution's full cross-league view.
+def test_price_comp_dicts_no_longer_expose_raw_dollars():
+    # Dropped from the UI on purpose - a raw $ amount from an unfamiliar
+    # pooled league's own budget scale isn't meaningfully comparable to
+    # anything a reader already knows (see target_pct).
     row = _bid_row(1, effective_cost_dollars=10.0, effective_starting_budget=40.0, team_id="winner")
-    out = _price_comp_dicts([row], [0.5], None, None)
+    out = _price_comp_dicts([row], [0.5], None)
     assert "bid_dollars" not in out[0]
-    assert "competing_bids" not in out[0]
     assert [v["value"] for v in out[0]["bid_distribution"]] == pytest.approx([0.25])
 
 
 def test_price_comp_dicts_expose_the_same_weight_used_in_the_weighted_average():
     rows = [_bid_row(1, effective_cost_dollars=10.0, effective_starting_budget=40.0, team_id="a"), _bid_row(1, add_player_id=99, team_id="b")]
-    out = _price_comp_dicts(rows, [7.4, 1.2], None, None)
+    out = _price_comp_dicts(rows, [7.4, 1.2], None)
     assert [c["weight"] for c in out] == pytest.approx([7.4, 1.2])
 
 
@@ -420,7 +401,7 @@ def test_comp_dicts_no_longer_expose_a_single_signal():
     # (bid_distribution for price, leagues_with_bid/leagues_eligible for
     # interest) that were always the more honest picture.
     row = _bid_row(1, team_id="a")
-    assert "signal" not in _price_comp_dicts([row], [1.0], None, None)[0]
+    assert "signal" not in _price_comp_dicts([row], [1.0], None)[0]
     assert "signal" not in _interest_comp_dicts([row], [1.0])[0]
 
 
@@ -485,21 +466,38 @@ def test_credibility_weighted_multiplies_each_row_by_its_own_credibility():
     assert out[1] == pytest.approx(10.0 * (1 / 16))
 
 
-def test_comp_based_estimate_favors_a_well_backed_comp_over_an_equally_close_thin_one():
-    # Two interest comps, IDENTICAL distance to the query (same feature
-    # values) - one backed by 40 real leagues, one by a single one. Pure
-    # distance weighting would treat them identically; credibility must
-    # make the well-backed one count for more toward bid_probability.
+def test_comp_based_estimate_interest_uses_real_bid_rate_not_a_binary_signal():
+    # Two interest comps, IDENTICAL distance to the query - one whose real
+    # bid rate across the pooled leagues that saw it was low (4/50, 8%) and
+    # one whose rate was high (45/50, 90%). Both would have collapsed to the
+    # SAME binary "won" signal under the old design; the vote now has to
+    # reflect their own real rates instead - see the conversation this was
+    # built from (a 2026 wk2 AJ Barner query whose interest comps table was
+    # full of single-digit bid rates, yet the OLD binary-signal design still
+    # produced 66% aggregate interest, since every nonzero rate counted as a
+    # full yes).
     query = _bid_row(0, add_player_id=0, prior_week_actual_points=10.0)
-    thin = _bid_row(1, add_player_id=1, prior_week_actual_points=10.0, signal="won", leagues_eligible=1, leagues_with_bid=1)
-    deep = _bid_row(1, add_player_id=2, prior_week_actual_points=10.0, signal="no_bid", leagues_eligible=40, leagues_with_bid=0)
-    price_rows = [_bid_row(1, add_player_id=1, prior_week_actual_points=10.0, effective_cost_dollars=5.0, effective_starting_budget=50.0)]
-    out = comp_based_estimate(query, [thin, deep], price_rows, k=2)
-    # thin says "won" (bid_probability=1 if it alone decided), deep says
-    # "no_bid" (0 if it alone decided) - credibility-weighting toward the
-    # 40-league comp should pull the blended result well below 0.5, not
-    # leave it at the equal-weight midpoint.
-    assert out["bid_probability"] < 0.3
+    low_rate = _bid_row(1, add_player_id=1, prior_week_actual_points=10.0, signal="won", leagues_eligible=50, leagues_with_bid=4)
+    high_rate = _bid_row(1, add_player_id=2, prior_week_actual_points=10.0, signal="won", leagues_eligible=50, leagues_with_bid=45)
+    out = comp_based_estimate(query, [low_rate, high_rate], [], k=2)
+    # Equal distance, equal backing count (so no other weighting in play) -
+    # a plain average of the two real rates: (0.08 + 0.90) / 2 = 0.49.
+    assert out["bid_probability"] == pytest.approx(0.49, abs=1e-6)
+
+
+def test_comp_based_estimate_interest_does_not_double_count_backing_count():
+    # Two comps with the SAME real bid rate (50%) but very different backing
+    # (2 vs 40 leagues eligible) must contribute EQUALLY to bid_probability -
+    # credibility must not ALSO multiply on top of a rate that already
+    # divides by that same backing count in its own denominator (see
+    # _interest_bid_fraction's docstring: doing both double-counts a comp's
+    # size instead of treating credibility as a genuinely separate axis, the
+    # way it still is for price - see the conversation this was built from).
+    query = _bid_row(0, add_player_id=0, prior_week_actual_points=10.0)
+    thin = _bid_row(1, add_player_id=1, prior_week_actual_points=10.0, signal="won", leagues_eligible=2, leagues_with_bid=1)
+    deep = _bid_row(1, add_player_id=2, prior_week_actual_points=10.0, signal="won", leagues_eligible=40, leagues_with_bid=20)
+    out = comp_based_estimate(query, [thin, deep], [], k=2)
+    assert out["bid_probability"] == pytest.approx(0.5, abs=1e-6)
 
 
 def test_knn_max_distance_excludes_neighbors_beyond_the_cutoff():
@@ -567,3 +565,51 @@ def test_position_distance_cutoffs_skips_a_position_with_too_few_rows_for_k():
     stats = _feature_stats(rows)
     cutoffs = _position_distance_cutoffs(rows, stats, k=5)
     assert "TE" not in cutoffs
+
+
+def test_is_faab_relevant_via_prior_points():
+    assert is_faab_relevant(NO_BID_MIN_PRIOR_POINTS, None, None, "RB") is True
+    assert is_faab_relevant(NO_BID_MIN_PRIOR_POINTS - 0.01, None, None, "RB") is False
+
+
+def test_is_faab_relevant_via_snap_pct():
+    assert is_faab_relevant(0.0, NO_BID_MIN_SNAP_PCT, None, "RB") is True
+    assert is_faab_relevant(0.0, NO_BID_MIN_SNAP_PCT - 0.01, None, "RB") is False
+
+
+def test_is_faab_relevant_via_ros_rank_alone_when_genuinely_inactive():
+    # A startable player having a genuinely quiet week - NO stat row at all
+    # (bye, benching, early return from injury: prior_points is None, not
+    # just low) - but a real, good ROS rank.
+    ceiling = NO_BID_MAX_ROS_RANK["RB"]
+    assert is_faab_relevant(None, None, ceiling, "RB") is True
+    assert is_faab_relevant(None, None, ceiling + 0.01, "RB") is False
+
+
+def test_is_faab_relevant_rank_rescues_even_a_real_but_weak_stat_row():
+    # Tank Bigsby, 2026 wk2: 1 carry, 0.3 points - a real, if weak, stat
+    # row - with a ROS rank (48) that clears RB's ceiling (73). Deliberately
+    # rescued anyway - see is_faab_relevant's own docstring: a version
+    # gating this on "no stat row at all" was tried and rejected as too
+    # narrow, accepting some "played weak but still rank-rescued" cases in
+    # exchange for never missing a real speculative name over a near-empty
+    # (rather than blank) stat line.
+    assert is_faab_relevant(0.3, 0.11, 48, "RB") is True
+
+
+def test_is_faab_relevant_false_when_nothing_clears_any_bar():
+    assert is_faab_relevant(0.0, 0.0, None, "RB") is False
+
+
+def test_is_faab_relevant_handles_none_prior_points_gracefully():
+    # A live query where the player has no stat row at all this week -
+    # must not raise on comparing None to a threshold.
+    assert is_faab_relevant(None, None, None, "RB") is False
+    assert is_faab_relevant(None, NO_BID_MIN_SNAP_PCT, None, "RB") is True
+
+
+def test_is_faab_relevant_uses_each_positions_own_ros_rank_ceiling():
+    # Same ROS rank (30) - QB's ceiling (25) is stricter than RB's (73), so
+    # identical ROS-rank standing reads differently depending on position.
+    assert is_faab_relevant(0.0, 0.0, 30, "QB") is False
+    assert is_faab_relevant(0.0, 0.0, 30, "RB") is True
