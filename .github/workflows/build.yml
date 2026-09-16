@@ -8,6 +8,7 @@ on:
       - "ingest/**"
       - "engine/**"
       - "docs/**"
+      - "tools/faab_history/fetch_release_data.py"
       - "requirements.txt"
       - ".github/workflows/build.yml"
   schedule:
