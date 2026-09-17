@@ -850,15 +850,39 @@ def test_build_snap_counts_index_holds_the_raw_count_not_the_pct():
     assert index["PfrRB1"][5] == 42
 
 
-def test_team_snap_totals_sums_every_players_offense_snaps_by_team_week():
+def test_team_snap_totals_backs_out_the_real_total_not_just_the_top_snap_count():
+    # An offensive snap is credited to EVERY player on the field for that
+    # play, not just one (unlike a carry or a target) - summing the whole
+    # roster's offense_snaps would overcount a team's real offensive-play
+    # count by roughly the number of players on the field per play.
+    #
+    # SF: PfrWR1 played every snap (offense_pct 1.0), so his own raw count
+    # IS the real team total - dividing by 1.0 changes nothing.
+    #
+    # DAL: nobody here played every snap (top offense_pct is 0.95, not
+    # 1.0) - backing the total out via offense_snaps/offense_pct (57/0.95
+    # = 60) recovers the real total instead of quietly understating it at
+    # just that player's own raw count (57).
     snaps = _snaps_frame([
         {"pfr_player_id": "PfrRB1", "team": "SF", "week": 5, "offense_snaps": 42, "offense_pct": 0.65},
-        {"pfr_player_id": "PfrWR1", "team": "SF", "week": 5, "offense_snaps": 55, "offense_pct": 0.85},
+        {"pfr_player_id": "PfrWR1", "team": "SF", "week": 5, "offense_snaps": 65, "offense_pct": 1.0},
+        {"pfr_player_id": "PfrOL1", "team": "DAL", "week": 5, "offense_snaps": 57, "offense_pct": 0.95},
         {"pfr_player_id": "PfrRB2", "team": "DAL", "week": 5, "offense_snaps": 30, "offense_pct": 0.5},
     ])
     totals = team_snap_totals(snaps)
-    assert totals[("SF", 5)] == 97  # 42 + 55 - not DAL's snaps
-    assert totals[("DAL", 5)] == 30
+    assert totals[("SF", 5)] == pytest.approx(65)  # 65 / 1.0, not 42 + 65
+    assert totals[("DAL", 5)] == pytest.approx(60)  # 57 / 0.95, not just 57
+
+
+def test_team_snap_totals_rounds_to_a_whole_snap():
+    # A team can't actually run 56.99 plays - that fractional tail is just
+    # offense_pct's own stored precision (PFR rounds it to 2 decimals, e.g.
+    # 0.93 instead of the real 53/57 = 0.9298...) leaking into the division.
+    # Real case: Eagles week 8 2022, top offense_snaps/offense_pct was
+    # 53/0.93 = 56.989..., which should read as 57, not 56.989.
+    snaps = _snaps_frame([{"pfr_player_id": "PfrOL1", "team": "PHI", "week": 8, "offense_snaps": 53, "offense_pct": 0.93}])
+    totals = team_snap_totals(snaps)
+    assert totals[("PHI", 8)] == 57
 
 
 def test_feature_vector_flags_disambiguate_missing_from_a_real_zero():

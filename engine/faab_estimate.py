@@ -371,15 +371,37 @@ def build_snap_counts_index(snaps_df) -> dict[str, dict[int, float]]:
 
 
 def team_snap_totals(snaps_df) -> dict[tuple[str, int], float]:
-    """{(team, week): total offense_snaps by every player on that team that
-    week} - the Snap % denominator, same "team_position_totals but for
-    snap_counts instead of player_stats, and no position filter (a team's
-    total offensive snaps, not one position's)" shape. snap_counts carries
-    a row per player REGARDLESS of position, including defense/special
-    teams snaps on separate columns - summing offense_snaps here already
-    only touches the offensive side, so no position filter is needed the
-    way team_position_totals' RB-only carries total needs one."""
-    grouped = snaps_df.group_by(["team", "week"]).agg(pl.col("offense_snaps").sum().alias("total"))
+    """{(team, week): the team's real offensive-play count that week} - the
+    Snap % denominator. Backed out algebraically from the roster's OWN
+    highest offense_pct that week (offense_pct IS offense_snaps/team_total
+    by definition, so team_total = offense_snaps / offense_pct), not just
+    that player's raw offense_snaps count - unlike carries/targets
+    (team_position_totals), where each play contributes to exactly ONE
+    player's count, an offensive snap is credited to EVERY player on the
+    field for that play, so simply SUMMING the whole roster's offense_snaps
+    overcounts by roughly the number of players on the field per play
+    (confirmed live: a 76-snap game summed to 836 across the roster).
+
+    Dividing by offense_pct instead of just reading the top snap count is
+    what makes this exact even when nobody happened to play literally every
+    snap: at pct 1.0 the two are identical (true for ~99.7% of real
+    team-weeks, confirmed 2022-2025), but the worst observed exception -
+    Eagles week 8 2022, top offense_pct only 0.93 - would have silently
+    understated the true ~57-snap total by the missing 7% using the raw
+    count (53) instead of recovering it via 53/0.93. The highest-pct row
+    specifically (not just any row) is used because dividing by a value
+    near 1.0 amplifies offense_pct's own rounding far less than dividing by
+    a small fraction would.
+
+    Rounded to the nearest whole snap - a team can't actually run 56.99
+    plays, that fractional tail is purely offense_pct's own stored
+    precision (PFR rounds it to 2 decimals) leaking into the division."""
+    valid = snaps_df.filter(pl.col("offense_pct").is_not_null() & (pl.col("offense_pct") > 0))
+    grouped = valid.group_by(["team", "week"]).agg(
+        pl.col("offense_snaps").sort_by("offense_pct", descending=True).first().alias("top_snaps"),
+        pl.col("offense_pct").max().alias("top_pct"),
+    )
+    grouped = grouped.with_columns((pl.col("top_snaps") / pl.col("top_pct")).round().alias("total"))
     return {(r["team"], r["week"]): r["total"] for r in grouped.to_dicts()}
 
 

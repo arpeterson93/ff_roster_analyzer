@@ -187,7 +187,7 @@ function scheduleColumns(data) {
     { key: "reg_schedule_rank", label: "Reg Rank", title: "This team's best-remaining-schedule rank at this position, regular season (1 = easiest)", fmt: (v) => v ?? "–" },
     { key: "playoff_schedule_rank", label: "Playoff Rank", title: "Same, over the fantasy playoff weeks", fmt: (v) => v ?? "–" },
     ...weeks.map((w) => ({
-      key: `_wk${w}_sched`, label: `Wk ${w}`, sortable: false, rawTd: true,
+      key: `_wk${w}_sched`, label: `Wk ${w}`, rawTd: true,
       fmt: (_v, p) => rosCellHtml(weekEntryFor(p, w), p.position),
     })),
   ];
@@ -306,6 +306,22 @@ function sortValue(p, key, data, filters) {
   if (key === "_att_pct") return attPct(p, filters.statsWeek, cw) ?? -Infinity;
   if (key === "_tgt_pct") return tgtPct(p, filters.statsWeek, cw) ?? -Infinity;
   if (key === "_fpts") return statsFpts(p, filters.statsWeek, cw) ?? -Infinity;
+  // Schedule's per-week heat cells ("_wk12_sched", etc.) - same rank-type
+  // convention as fp_week_pos_rank_label above (lower rank = better, so a
+  // bye/no-data week sorts as Infinity, the worst possible rank, not 0).
+  const schedMatch = /^_wk(\d+)_sched$/.exec(key);
+  if (schedMatch) return weekEntryFor(p, Number(schedMatch[1])).rank ?? Infinity;
+  // Stats tab's individual grouped-block columns (passing_yards, carries,
+  // def_sacks, fg_made_20_29, etc.) - not given their own `if` branches
+  // since the key set is large and position-dependent; statsForWeek's own
+  // stat dict is authoritative for whatever key the active block set uses.
+  // A combined column (the C/A key is a 2-element array, not a string)
+  // never reaches here - see statsTrailingColumns/renderStatsTable, which
+  // never marks it as sortable in the first place.
+  if (typeof key === "string") {
+    const statVal = statsForWeek(p, filters.statsWeek, cw)?.[key];
+    if (statVal !== undefined) return statVal;
+  }
   return p[key];
 }
 
@@ -416,7 +432,12 @@ function renderStatsTable(wrap, container, data, filters, watched) {
   const topLead = common.map(() => "<th></th>").join("");
   const topGroups = blocks.map(([group, cols]) => `<th colspan="${cols.length}">${escapeHtml(group)}</th>`).join("");
   const topTrail = trailing.map(() => "<th></th>").join("");
-  const bottomLabels = flatColumns.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join("");
+  // Every column sorts by its own stat key EXCEPT the combined C/A column
+  // (an array key, "completions"+"attempts" - no single sensible sort
+  // value), which stays a plain unclickable header.
+  const bottomLabels = flatColumns
+    .map(([key, label]) => (Array.isArray(key) ? `<th>${escapeHtml(label)}</th>` : sortableThHtml({ key, label })))
+    .join("");
   const header = `
     <tr class="group-header-row">${topLead}${topGroups}${topTrail}</tr>
     <tr>${common.map((c) => sortableThHtml(c)).join("")}${bottomLabels}${trailing.map((c) => sortableThHtml(c)).join("")}</tr>
