@@ -262,10 +262,11 @@ def is_faab_relevant(prior_points: float | None, snap_pct: float | None, ros_ran
 
 # ESPN's own injury_status vocabulary (ACTIVE/QUESTIONABLE/DOUBTFUL/OUT/
 # INJURY_RESERVE/SUSPENSION/DAY_TO_DAY - see docs/js/colors.js's
-# INJURY_BADGE). Only near-certain absences count toward a TEAMMATE's flag
-# (mirrors the historical data's Out/Doubtful-only filter) - a player's OWN
-# own_injury_flag feature is more lenient (any non-ACTIVE status, including
-# Questionable, since that's what a manager actually sees when bidding).
+# INJURY_BADGE). Only near-certain absences count - QUESTIONABLE/DAY_TO_DAY
+# are excluded since most players tagged with those still suit up. Used for
+# BOTH the TEAMMATE flag and the bid target's own own_injury_flag (mirrors
+# the historical data's Out/Doubtful/RESERVE-only filter - see
+# INJURY_FLAG_STATUSES) - see the conversation this was built from.
 TEAMMATE_INJURY_FLAG_STATUSES = {"OUT", "DOUBTFUL", "INJURY_RESERVE", "SUSPENSION"}
 
 # nflverse's own report_status vocabulary (Questionable/Doubtful/Out from the

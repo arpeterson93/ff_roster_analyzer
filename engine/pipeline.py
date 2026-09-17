@@ -447,7 +447,7 @@ def _compute_faab_estimates(
                 "inputs": {
                     "position": p["position"], "week": current_week,
                     "prior_week_actual_points": prior_points, "prior_week_had_stat_row": prior_actual is not None,
-                    "own_injury_flag": p.get("injury_status") not in (None, "ACTIVE"),
+                    "own_injury_flag": p.get("injury_status") in TEAMMATE_INJURY_FLAG_STATUSES,
                     "teammate_position_injury_flag": teammate_flag, "teammate_position_injury_is_new": teammate_injury_is_new,
                     "snap_pct_prior_week": snap_pct,
                     "trailing_2_3_avg_points": trailing_2_3_avg_points, "season_avg_points": season_avg_points,
@@ -463,7 +463,7 @@ def _compute_faab_estimates(
             "week": current_week,
             "prior_week_actual_points": prior_points,
             "prior_week_had_stat_row": prior_actual is not None,
-            "own_injury_status": p.get("injury_status") if p.get("injury_status") not in (None, "ACTIVE") else None,
+            "own_injury_status": p.get("injury_status") if p.get("injury_status") in TEAMMATE_INJURY_FLAG_STATUSES else None,
             "teammate_position_injury_flag": teammate_flag,
             "teammate_position_injury_is_new": teammate_injury_is_new,
             "snap_pct_prior_week": snap_pct,

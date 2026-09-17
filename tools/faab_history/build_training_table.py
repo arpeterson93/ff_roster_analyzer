@@ -501,7 +501,8 @@ def enrich_player_week(
     teammate_position_injury_flag = None
     teammate_position_injury_is_new = None
     if gsis_id:
-        own_injury_status = season_index.injury_by_player_week.get((gsis_id, week))
+        raw_own_status = season_index.injury_by_player_week.get((gsis_id, week))
+        own_injury_status = raw_own_status if raw_own_status in INJURY_FLAG_STATUSES else None
     if team_that_week and position:
         teammates = season_index.teammates_by_team_week_pos.get((team_that_week, week, position), [])
         teammate_position_injury_flag = False

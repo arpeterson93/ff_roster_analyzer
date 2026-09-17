@@ -272,6 +272,23 @@ def test_enrich_player_week_flags_a_teammate_on_reserve_status_with_no_injury_re
     assert enriched["teammate_position_injury_is_new"] is True
 
 
+def test_enrich_player_week_does_not_flag_a_merely_questionable_own_status():
+    # own_injury_status should only reflect near-certain absences (the same
+    # Out/Doubtful/RESERVE tier as the teammate flag), not the weekly
+    # practice-report's Questionable tag - most Questionable-tagged players
+    # still suit up, so it shouldn't read as "injured" for the bid target's
+    # own feature any more than it does for a teammate's.
+    injuries = pl.DataFrame({"gsis_id": ["g1"], "week": [5], "team": ["KC"], "position": ["RB"], "report_status": ["Questionable"]})
+    season_index = build_season_index(_EMPTY_STATS, injuries, _EMPTY_SNAPS, _EMPTY_ROSTERS_WEEKLY)
+    enriched = enrich_player_week(
+        gsis_id="g1", position="RB", season=2024, week=5,
+        season_index=season_index,
+        scoring=ScoringRules.from_espn([{"id": 42, "abbr": "REY", "points": 1}]),
+        idmap=_idmap({}), gsis_to_pfr={}, rank_index={"snapshots": {}, "week_starts": {}, "blackout": {}},
+    )
+    assert enriched["own_injury_status"] is None
+
+
 def test_enrich_player_week_does_not_flag_an_ongoing_injury_as_new():
     # Same shape as the test above, but the starter was ALSO on reserve the
     # week before - a real, already-known, ongoing absence by the time this
