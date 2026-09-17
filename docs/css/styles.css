@@ -138,10 +138,12 @@ nav.tabs button.active {
 .card h2 { font-size: 14px; margin: 0 0 10px; }
 .card h3 { font-size: 12px; color: var(--ink-500); margin: 12px 0 6px; text-transform: uppercase; letter-spacing: 0.04em; }
 
-/* Some cards (Team Strength's viz/depth/pickups/targets, Start/Sit's lineup)
-   read better narrower than the wide grid views next to them - capped and
-   centered (via .card's own margin: 0 auto) independently of the whole
-   tabpanel's width. */
+/* Some cards (Team Strength's viz/depth/pickups/targets) read better
+   narrower than the wide grid views next to them - capped and centered
+   (via .card's own margin: 0 auto) independently of the whole tabpanel's
+   width. Start/Sit's lineup card used to be one of these too, but a fixed
+   cap stopped making sense once its column count grew - see the
+   shrink-to-fit ".lineup-card" rule near the lineup tables' own CSS below. */
 .card-compact { max-width: 720px; }
 .card-medium { max-width: 900px; }
 
@@ -188,48 +190,76 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 #tab-startsit td { white-space: normal; }
 
 /* ...but the lineup tables' one-line stat columns (ITT/Proj/3wk/2wk/1wk/Szn
-   Avg/FP Rank/Weather - ".stat-col") and the Slot/Player columns
-   (".slot-col"/".player-td", see docs/js/startsit.js) are exactly the
-   columns that SHOULD force the table wider than the screen on mobile
-   rather than getting squeezed into an unreadable wrapped mess - Opp (still
-   ".desktop-col", folded into the Player cell's own mobile-line) is the
-   only column still meant to disappear rather than scroll. */
-#tab-startsit td.stat-col, #tab-startsit td.player-td { white-space: nowrap; }
+   Avg/FP Rank/Weather - ".stat-col") and the Player column (".player-td",
+   see docs/js/startsit.js) are exactly the columns that SHOULD force the
+   table wider than the screen on mobile rather than getting squeezed into
+   an unreadable wrapped mess (Slot's own short one-word labels - QB/FLEX/
+   Bench/etc, see ".slot-col" - never wrap regardless, so it doesn't need
+   this treatment). Opp (still ".desktop-col", folded into the Player
+   cell's own mobile-line on mobile) is the only column still meant to
+   disappear there rather than scroll - but on DESKTOP, where it's visible
+   again, its own kickoff line (e.g. "Sun 3:25 PM") shouldn't wrap mid-line
+   either just because the growing number of stat columns leaves it a
+   narrower share of the row. */
+#tab-startsit td.stat-col, #tab-startsit td.player-td, #tab-startsit td.desktop-col { white-space: nowrap; }
 
-/* Slot+Player stay frozen in place while the stat columns scroll
-   underneath, same frozen-first-column pattern as the Rest-of-season grid
-   below (.ros-name) - separate borders again, since sticky cells are
-   unreliable under the site-wide collapsed-border default in every major
-   engine. Player's left offset is the Slot column's own MEASURED width
-   (--startsit-slot-w, set by docs/js/startsit.js after render, the same
-   "publish the real DOM as a CSS var" approach app.js's --sticky-top uses)
-   rather than a guessed pixel value - slot labels are Bench/IR/FLEX/QB/etc,
-   not all the same width. */
+/* Only Player stays frozen while the stat columns scroll underneath - Slot
+   scrolls away with everything else (it's redundant with the pos-tag chip
+   already inside the Player cell, and freezing it too left too little
+   width for stat columns on a phone screen). Same frozen-first-column
+   pattern as the Rest-of-season grid below (.ros-name) - separate borders
+   again, since sticky cells are unreliable under the site-wide
+   collapsed-border default in every major engine. At rest (unscrolled)
+   this looks identical to a normal table - sticky only pins Player once
+   scrolling would otherwise carry it past the left edge, by which point
+   Slot has already scrolled out of view ahead of it. */
 #tab-startsit .lineup-table { border-collapse: separate; border-spacing: 0; }
-#tab-startsit .lineup-table .slot-col,
 #tab-startsit .lineup-table .player-td {
   position: sticky;
+  left: 0;
   z-index: 1;
   background: var(--card);
-}
-#tab-startsit .lineup-table .slot-col { left: 0; }
-#tab-startsit .lineup-table .player-td { left: var(--startsit-slot-w, 64px); border-right: 1px solid var(--border); }
-/* The totals row's Slot+Player cells are one merged colspan=2 cell instead
-   of two - still needs the same freeze plus its own tinted background (see
-   the site-wide .totals-row rule) since the plain sticky background above
-   would otherwise paint over that tint for just these two columns. */
-#tab-startsit .lineup-table .totals-row .slot-col {
   border-right: 1px solid var(--border);
-  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+/* The totals row's Slot+Player cells are one merged colspan=2 cell instead
+   of two, and - unlike data rows - stays frozen as a whole (there's no
+   separate Player-only cell to pin here, and leaving the "Starters total"/
+   "Bench total" label to scroll away while every other row's name stays
+   pinned would look broken) - so it needs its own position:sticky rather
+   than inheriting Player's, plus its own tinted background (see the
+   site-wide .totals-row rule) since the plain sticky background above
+   would otherwise paint over that tint. Mixed against the OPAQUE --card,
+   not transparent like the site-wide rule mixes against - a sticky cell
+   has to stay fully opaque or the scrolled-under stat columns show/collide
+   through it instead of being hidden behind it the way a frozen column is
+   supposed to work (see the conversation this was fixed from - the totals
+   row's numbers were bleeding through the label before this). */
+#tab-startsit .lineup-table .totals-row .slot-col {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  border-right: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 5%, var(--card));
 }
 /* Same reasoning for a streamed row's own amber tint (see .streamed-row) -
    without this the FA badge inside the Player cell would still show, just
    floating on a plain --card background instead of the tinted row the rest
-   of the table row gets. */
-#tab-startsit .lineup-table .streamed-row .slot-col,
+   of the table row gets - and, same opaque-not-transparent requirement as
+   the totals row above, needs to stay solid so it still hides scrolled
+   content behind it rather than letting it show/collide through. */
 #tab-startsit .lineup-table .streamed-row .player-td {
-  background: color-mix(in srgb, var(--amber-500) 14%, transparent);
+  background: color-mix(in srgb, var(--amber-500) 14%, var(--card));
 }
+
+/* The lineup card shrink-wraps to whatever width its widest child (the
+   lineup table) actually needs, instead of a plain .card's normal block
+   behavior of stretching to fill the tabpanel's own 1400px cap regardless -
+   a widescreen viewer shouldn't see a sea of empty card past the last
+   column just because there was room for it. Still bounded by the
+   tabpanel's own width (fit-content never exceeds available space), so a
+   phone falls back to the table's normal horizontal scroll exactly as
+   before. */
+#tab-startsit .lineup-card { width: fit-content; }
 
 /* The Rest-of-season grid needs more room than the site-wide 1100px tabpanel
    cap allows once every remaining week gets its own column - widen just this

@@ -162,16 +162,6 @@ function lineupSection(roster, week, lineupWeek, currentWeek, allPlayersById) {
   `;
 }
 
-// Slot labels are Bench/IR/FLEX/QB/etc - not all the same width - so
-// Player's sticky offset (below) reads the Slot column's own REAL rendered
-// width via this CSS var instead of guessing a pixel value that could drift
-// out of sync with whatever font/padding renders it. Same "measure the real
-// DOM, publish it as a CSS var" approach as app.js's --sticky-top.
-function syncSlotColumnWidth(container) {
-  const th = container.querySelector(".lineup-table th.slot-col");
-  if (th) container.style.setProperty("--startsit-slot-w", `${th.getBoundingClientRect().width}px`);
-}
-
 // Lets the Starters and Bench tables' independent horizontal scrollbars
 // (".lineup-scroll", each its own .table-wrap) track each other, so
 // scrolling either one to see the stat columns scrolls both - otherwise
@@ -277,7 +267,7 @@ export function renderStartSit(container, data, slug) {
   function draw() {
     const lineupWeek = (lineupTeam.weeks || {})[String(selectedWeek)] || { total: 0, slots: {}, bench: [] };
     container.innerHTML = `
-      <div class="card card-compact">
+      <div class="card lineup-card">
         <div class="select-row">
           <label>Team:</label><select id="startsit-team-select">${teamOptions}</select>
           <label>Week:</label><select id="startsit-week-select">${weekOptions.map((w) => `<option value="${w}" ${w === selectedWeek ? "selected" : ""}>${w}${w === data.meta.current_week ? " (cur)" : ""}</option>`).join("")}</select>
@@ -301,7 +291,6 @@ export function renderStartSit(container, data, slug) {
       draw();
     });
     wireRowClicks(container, data);
-    syncSlotColumnWidth(container);
     syncHorizontalScroll(Array.from(container.querySelectorAll(".lineup-scroll")));
   }
 
