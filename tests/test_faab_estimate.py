@@ -21,6 +21,7 @@ from engine.faab_estimate import (
     add_synthetic_price_wins,
     build_event_won_rows_index,
     build_price_rows,
+    build_snap_counts_index,
     build_stats_index,
     comp_based_estimate,
     consolidate_cross_league_events,
@@ -31,6 +32,7 @@ from engine.faab_estimate import (
     recent_target_share,
     target_pct,
     team_position_totals,
+    team_snap_totals,
     weighted_percentile,
 )
 
@@ -818,6 +820,45 @@ def test_recent_target_share_reads_nflverses_own_team_wide_column_directly():
 
 def test_recent_target_share_none_without_a_gsis_id():
     assert recent_target_share(None, 5, build_stats_index(_stats_frame([]))) is None
+
+
+def test_team_position_totals_with_no_position_filter_sums_every_position():
+    # Rankings Stats tab's Tgt % denominator: a team's total targets across
+    # EVERY position, not just one - position=None skips the filter
+    # entirely rather than needing a second, parallel aggregation function.
+    stats = _stats_frame([
+        {"player_id": "RB1", "position": "RB", "team": "SF", "week": 5, "carries": 14, "targets": 1, "target_share": 0.03},
+        {"player_id": "WR1", "position": "WR", "team": "SF", "week": 5, "carries": 0, "targets": 8, "target_share": 0.24},
+        {"player_id": "TE1", "position": "TE", "team": "SF", "week": 5, "carries": 0, "targets": 3, "target_share": 0.09},
+    ])
+    team_targets = team_position_totals(stats, None, "targets")
+    assert team_targets[("SF", 5)] == 12  # 1 + 8 + 3, every position combined
+
+
+def _snaps_frame(rows: list[dict]) -> pl.DataFrame:
+    schema = {"pfr_player_id": pl.Utf8, "team": pl.Utf8, "week": pl.Int64, "offense_snaps": pl.Int64, "offense_pct": pl.Float64}
+    return pl.DataFrame(rows, schema=schema) if rows else pl.DataFrame(schema=schema)
+
+
+def test_build_snap_counts_index_holds_the_raw_count_not_the_pct():
+    # The RAW-count twin of build_snap_pct_index - a season split has to sum
+    # raw snaps across weeks played, not average each week's own already-
+    # divided percentage (see build_snap_counts_index's own docstring for
+    # why that distinction matters).
+    snaps = _snaps_frame([{"pfr_player_id": "PfrRB1", "team": "SF", "week": 5, "offense_snaps": 42, "offense_pct": 0.65}])
+    index = build_snap_counts_index(snaps)
+    assert index["PfrRB1"][5] == 42
+
+
+def test_team_snap_totals_sums_every_players_offense_snaps_by_team_week():
+    snaps = _snaps_frame([
+        {"pfr_player_id": "PfrRB1", "team": "SF", "week": 5, "offense_snaps": 42, "offense_pct": 0.65},
+        {"pfr_player_id": "PfrWR1", "team": "SF", "week": 5, "offense_snaps": 55, "offense_pct": 0.85},
+        {"pfr_player_id": "PfrRB2", "team": "DAL", "week": 5, "offense_snaps": 30, "offense_pct": 0.5},
+    ])
+    totals = team_snap_totals(snaps)
+    assert totals[("SF", 5)] == 97  # 42 + 55 - not DAL's snaps
+    assert totals[("DAL", 5)] == 30
 
 
 def test_feature_vector_flags_disambiguate_missing_from_a_real_zero():

@@ -1,5 +1,5 @@
 import { fmt, escapeHtml, getYourTeam, setYourTeam } from "./state.js";
-import { POSITION_COLOR, INJURY_BADGE, impliedTotalCellHtml, opponentCellHtml, ratioForRank, colorForRatio, formatKickoff, shortName, sortByPositionOrder, teamLabel, playerPhotoHtml, weeklyProjection, pointsWeeksAgo, seasonAvgPoints, weatherCellHtml } from "./colors.js";
+import { POSITION_COLOR, INJURY_BADGE, impliedTotalCellHtml, opponentCellHtml, formatKickoff, shortName, sortByPositionOrder, teamLabel, playerPhotoHtml, weeklyProjection, pointsWeeksAgo, seasonAvgPoints, weatherCellHtml, rosCellHtml } from "./colors.js";
 import { openPlayerModal } from "./playermodal.js";
 import { openPointsAgainstModal } from "./pointsagainstmodal.js";
 import { compareCheckboxHtml, wireCompareCheckboxes } from "./compare.js";
@@ -177,22 +177,6 @@ function syncHorizontalScroll(elements) {
       });
     });
   });
-}
-
-// Full-cell color fill (not a pill) with the opponent centered above its
-// matchup rank, no parentheses - this grid is dense (one column per
-// remaining week) so every pixel of cell width matters more here than in a
-// single "Opp" column elsewhere.
-function rosCellHtml(weekEntry, position) {
-  if (!weekEntry || !weekEntry.opponent) return `<td class="heat-cell ros-cell muted">BYE</td>`;
-  const label = (weekEntry.home === false ? "@" : "") + weekEntry.opponent;
-  const hasRank = weekEntry.rank !== null && weekEntry.rank !== undefined;
-  const color = colorForRatio(ratioForRank(weekEntry.rank));
-  const rankTitle = hasRank ? `title="Matchup rank ${weekEntry.rank} of 32 (1 = best)"` : "";
-  return `<td class="heat-cell ros-cell" style="background:${color}" ${rankTitle} data-opp-cell data-team="${escapeHtml(weekEntry.opponent)}" data-pos="${position}">
-    <div class="ros-opp">${label}</div>
-    ${hasRank ? `<div class="ros-rank">${weekEntry.rank}</div>` : ""}
-  </td>`;
 }
 
 function scheduleGrid(roster, currentWeek, finalWeek) {

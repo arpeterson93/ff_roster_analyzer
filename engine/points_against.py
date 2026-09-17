@@ -15,19 +15,23 @@ import polars as pl
 from engine.scoring import ScoringRules
 from ingest.nfl_data import game_scores as _load_game_scores
 
-PASSING_BLOCK = ("Passing", [("passing_yards", "Yds"), ("passing_tds", "TD"), ("passing_interceptions", "Int")])
+PASSING_BLOCK = ("Passing", [("completions", "C"), ("attempts", "A"), ("passing_yards", "Yds"), ("passing_tds", "TD"), ("passing_interceptions", "Int")])
 RUSHING_BLOCK = ("Rushing", [("carries", "Att"), ("rushing_yards", "Yds"), ("rushing_tds", "TD")])
 RECEIVING_BLOCK = ("Receiving", [("receptions", "Rec"), ("receiving_yards", "Yds"), ("receiving_tds", "TD"), ("targets", "Tgt")])
-RET_TD_BLOCK = ("Ret", [("special_teams_tds", "TD")])
-MISC_2PT_BLOCK = ("Misc", [("two_pt_conversions", "2PT")])
-FUM_BLOCK = ("Fum", [("fumbles_lost_total", "Lost")])
+# One consolidated Misc block (2-pt conversions, fumbles lost, special-teams
+# TD), matching docs/js/statcolumns.js's own MISC_BLOCK - see this file's
+# docstring on why these two need to stay in sync (JS derives its display
+# grouping independently; only the underlying KEY SET here has to match,
+# since `label`/`group` below are never sent to the frontend, just used to
+# build `fields` - see stat_columns()).
+MISC_BLOCK = ("Misc", [("two_pt_conversions", "2PT"), ("fumbles_lost_total", "Fuml"), ("special_teams_tds", "TD")])
 
 # Block order per offense position - contents are identical, only the lead
 # category (this position's own bread-and-butter stat) changes.
 OFFENSE_BLOCK_ORDER = {
-    "QB": [PASSING_BLOCK, RUSHING_BLOCK, RECEIVING_BLOCK, RET_TD_BLOCK, MISC_2PT_BLOCK, FUM_BLOCK],
-    "RB": [RUSHING_BLOCK, RECEIVING_BLOCK, PASSING_BLOCK, RET_TD_BLOCK, MISC_2PT_BLOCK, FUM_BLOCK],
-    "WR": [RECEIVING_BLOCK, RUSHING_BLOCK, PASSING_BLOCK, RET_TD_BLOCK, MISC_2PT_BLOCK, FUM_BLOCK],
+    "QB": [PASSING_BLOCK, RUSHING_BLOCK, RECEIVING_BLOCK, MISC_BLOCK],
+    "RB": [RUSHING_BLOCK, RECEIVING_BLOCK, PASSING_BLOCK, MISC_BLOCK],
+    "WR": [RECEIVING_BLOCK, RUSHING_BLOCK, PASSING_BLOCK, MISC_BLOCK],
 }
 OFFENSE_BLOCK_ORDER["TE"] = OFFENSE_BLOCK_ORDER["WR"]
 

@@ -1,4 +1,4 @@
-import { fmt } from "./state.js";
+import { fmt, escapeHtml } from "./state.js";
 
 // 3-stop color scale (red -> amber -> green) reused for the matchup heat
 // table and position-strength bars. Pattern borrowed from irrigation_planner.
@@ -145,6 +145,17 @@ export function seasonAvgPoints(p, currentWeek) {
   return played.reduce((sum, w) => sum + w.actual.points, 0) / played.length;
 }
 
+// Total (not averaged) actual fantasy points scored so far this season -
+// Rankings' Stats tab uses this for its FPTS column in "season" mode, same
+// played-weeks definition as seasonAvgPoints above just summed instead of
+// divided. Distinct from ros_total (a rest-of-season PROJECTION) - this is
+// real points already scored.
+export function seasonTotalPoints(p, currentWeek) {
+  const played = (p.weekly || []).filter((w) => w.week < currentWeek && w.actual?.points !== undefined && w.actual?.points !== null);
+  if (!played.length) return null;
+  return played.reduce((sum, w) => sum + w.actual.points, 0);
+}
+
 // ESPN's own CDN, keyed off the espn_id every player already carries - a
 // D/ST "player" has no individual headshot, so it gets its team's logo
 // instead (keyed off nfl_team; ESPN's logo path accepts both "was" and
@@ -174,6 +185,25 @@ export function opponentCellHtml(weekEntry) {
   const color = colorForRatio(ratioForRank(weekEntry.rank));
   const rankTitle = hasRank ? `title="Matchup rank ${weekEntry.rank} of 32 (1 = best)"` : "";
   return `<span class="pill opp-pill" style="background:${color}" ${rankTitle}>${label}${hasRank ? ` (${weekEntry.rank})` : ""}</span>`;
+}
+
+// Full-cell color fill (not a pill) with the opponent centered above its
+// matchup rank, no parentheses - for a dense weekly grid (one column per
+// week) where every pixel of cell width matters more than in a single "Opp"
+// column elsewhere. Shared by Start/Sit's Rest-of-season grid and Rankings'
+// Schedule tab. Returns a full <td> (with its own background/data
+// attributes), not just inner content - callers building a table row string
+// directly can splice it in as-is.
+export function rosCellHtml(weekEntry, position) {
+  if (!weekEntry || !weekEntry.opponent) return `<td class="heat-cell ros-cell muted">BYE</td>`;
+  const label = (weekEntry.home === false ? "@" : "") + weekEntry.opponent;
+  const hasRank = weekEntry.rank !== null && weekEntry.rank !== undefined;
+  const color = colorForRatio(ratioForRank(weekEntry.rank));
+  const rankTitle = hasRank ? `title="Matchup rank ${weekEntry.rank} of 32 (1 = best)"` : "";
+  return `<td class="heat-cell ros-cell" style="background:${color}" ${rankTitle} data-opp-cell data-team="${escapeHtml(weekEntry.opponent)}" data-pos="${position}">
+    <div class="ros-opp">${label}</div>
+    ${hasRank ? `<div class="ros-rank">${weekEntry.rank}</div>` : ""}
+  </td>`;
 }
 
 // Vegas-implied team total for the CURRENT week only (see engine/pipeline.py -

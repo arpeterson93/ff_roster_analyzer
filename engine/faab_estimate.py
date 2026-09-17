@@ -350,6 +350,39 @@ def build_snap_pct_index(snaps_df) -> dict[str, dict[int, float]]:
     return dict(index)
 
 
+def build_snap_counts_index(snaps_df) -> dict[str, dict[int, float]]:
+    """{pfr_player_id: {week: offense_snaps}} - the RAW count twin of
+    build_snap_pct_index's own offense_pct, for callers that need to
+    aggregate snap share across multiple weeks themselves (e.g. a season-
+    long split, which has to be sum(offense_snaps)/sum(team offense_snaps)
+    across the weeks actually played, not an average of each week's own
+    already-divided percentage - averaging percentages would let a week
+    with a handful of snaps count exactly as much as a full game and skew
+    the season number away from the player's real overall share). See
+    engine/pipeline.py's per-player `weekly[].offense_snaps` - the frontend
+    pairs this with `team_offense_snaps` (team_snap_totals below) to derive
+    both a single-week and a season Snap % itself, the same way it already
+    derives Szn Avg/3wk/2wk/1wk from raw per-week points rather than a
+    pre-averaged number."""
+    index: dict[str, dict[int, float]] = defaultdict(dict)
+    for row in snaps_df.to_dicts():
+        index[row["pfr_player_id"]][row["week"]] = row.get("offense_snaps")
+    return dict(index)
+
+
+def team_snap_totals(snaps_df) -> dict[tuple[str, int], float]:
+    """{(team, week): total offense_snaps by every player on that team that
+    week} - the Snap % denominator, same "team_position_totals but for
+    snap_counts instead of player_stats, and no position filter (a team's
+    total offensive snaps, not one position's)" shape. snap_counts carries
+    a row per player REGARDLESS of position, including defense/special
+    teams snaps on separate columns - summing offense_snaps here already
+    only touches the offensive side, so no position filter is needed the
+    way team_position_totals' RB-only carries total needs one."""
+    grouped = snaps_df.group_by(["team", "week"]).agg(pl.col("offense_snaps").sum().alias("total"))
+    return {(r["team"], r["week"]): r["total"] for r in grouped.to_dicts()}
+
+
 def recent_snap_pct(pfr_id: str | None, week: int, snap_pct_index: dict[str, dict[int, float]]) -> float | None:
     """This player's offense_pct in the most recent of week-1/week-2 that
     has a row. snap_pct_index is build_snap_pct_index's own output - see
@@ -381,7 +414,7 @@ def build_stats_index(stats_df) -> dict[str, dict[int, dict]]:
     return dict(index)
 
 
-def team_position_totals(stats_df, position: str, stat_col: str) -> dict[tuple[str, int], float]:
+def team_position_totals(stats_df, position: str | None, stat_col: str) -> dict[tuple[str, int], float]:
     """{(team, week): total `stat_col` by every player AT `position` on that
     team, that week} - the denominator for a position-scoped usage share
     (e.g. an RB's own share of his team's RB-position carries specifically,
@@ -392,8 +425,14 @@ def team_position_totals(stats_df, position: str, stat_col: str) -> dict[tuple[s
     player's own lookup, rather than re-aggregating per player. Already a
     single polars group_by (not called per-row), so unlike recent_snap_pct/
     recent_carry_share/recent_target_share this was never the bottleneck -
-    kept taking the raw DataFrame rather than build_stats_index's output."""
-    rows = stats_df.filter(pl.col("position") == position)
+    kept taking the raw DataFrame rather than build_stats_index's output.
+
+    position=None skips the position filter entirely - the team-WIDE total
+    across every position, e.g. team_targets for a Tgt % denominator (any
+    position can be targeted, unlike RB-only carries where mixing in a
+    receiving back's occasional carries against a non-RB-only pool would be
+    the wrong comparison)."""
+    rows = stats_df if position is None else stats_df.filter(pl.col("position") == position)
     grouped = rows.group_by(["team", "week"]).agg(pl.col(stat_col).sum().alias("total"))
     return {(r["team"], r["week"]): r["total"] for r in grouped.to_dicts()}
 

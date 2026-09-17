@@ -3,17 +3,21 @@
 // position. Mirrors engine/points_against.py's stat_columns() exactly -
 // block CONTENTS are shared across QB/RB/WR/TE, only the lead-category
 // ORDER differs per position.
-const PASSING_BLOCK = ["Passing", [["passing_yards", "Yds"], ["passing_tds", "TD"], ["passing_interceptions", "Int"]]];
+// The passing block's lead column is a combined "C/A" (completions/
+// attempts) display, not two separate columns - see statCellsHtml's
+// Array-key handling below.
+const PASSING_BLOCK = ["Passing", [[["completions", "attempts"], "C/A"], ["passing_yards", "Yds"], ["passing_tds", "TD"], ["passing_interceptions", "Int"]]];
 const RUSHING_BLOCK = ["Rushing", [["carries", "Att"], ["rushing_yards", "Yds"], ["rushing_tds", "TD"]]];
 const RECEIVING_BLOCK = ["Receiving", [["receptions", "Rec"], ["receiving_yards", "Yds"], ["receiving_tds", "TD"], ["targets", "Tgt"]]];
-const RET_TD_BLOCK = ["Ret", [["special_teams_tds", "TD"]]];
-const MISC_2PT_BLOCK = ["Misc", [["two_pt_conversions", "2PT"]]];
-const FUM_BLOCK = ["Fum", [["fumbles_lost_total", "Lost"]]];
+// One consolidated Misc block (2-pt conversions, fumbles lost, special-
+// teams TD) rather than three separate one-column groups - simpler to scan
+// as one small "everything else" block.
+const MISC_BLOCK = ["Misc", [["two_pt_conversions", "2PT"], ["fumbles_lost_total", "Fuml"], ["special_teams_tds", "TD"]]];
 
 const OFFENSE_BLOCKS = {
-  QB: [PASSING_BLOCK, RUSHING_BLOCK, RECEIVING_BLOCK, RET_TD_BLOCK, MISC_2PT_BLOCK, FUM_BLOCK],
-  RB: [RUSHING_BLOCK, RECEIVING_BLOCK, PASSING_BLOCK, RET_TD_BLOCK, MISC_2PT_BLOCK, FUM_BLOCK],
-  WR: [RECEIVING_BLOCK, RUSHING_BLOCK, PASSING_BLOCK, RET_TD_BLOCK, MISC_2PT_BLOCK, FUM_BLOCK],
+  QB: [PASSING_BLOCK, RUSHING_BLOCK, RECEIVING_BLOCK, MISC_BLOCK],
+  RB: [RUSHING_BLOCK, RECEIVING_BLOCK, PASSING_BLOCK, MISC_BLOCK],
+  WR: [RECEIVING_BLOCK, RUSHING_BLOCK, PASSING_BLOCK, MISC_BLOCK],
 };
 OFFENSE_BLOCKS.TE = OFFENSE_BLOCKS.WR;
 
@@ -39,6 +43,15 @@ export function blocksForPosition(position) {
   return OFFENSE_BLOCKS[position] || [];
 }
 
+// Rankings' Stats tab shows every position in ONE flat table (not one
+// table per position like Game Log/Points-Against), so it needs a single
+// FIXED block order rather than blocksForPosition's per-position reordering
+// - a RB/WR/TE's Passing block (or a QB's Rushing/Receiving blocks) just
+// reads mostly "-", same as any other stat that doesn't apply to that row.
+// QB's own order (Passing, Rushing, Receiving, Misc) is the arbitrary but
+// reasonable pick, matching the order requested for that tab.
+export const STATS_TAB_BLOCKS = OFFENSE_BLOCKS.QB;
+
 // Grouped <thead> markup (two <tr>s: block headers, then column labels) for
 // a table whose first N columns are `leadColumns` (e.g. Wk/Opp) and last
 // column is FPts.
@@ -57,7 +70,19 @@ export function groupedHeaderHtml(position, leadColumns) {
 }
 
 export function statCellsHtml(stats, flatColumns) {
-  return flatColumns.map(([key]) => `<td>${stats && stats[key] !== null && stats[key] !== undefined ? stats[key] : "-"}</td>`).join("");
+  return flatColumns
+    .map(([key]) => {
+      // A two-element array key (e.g. ["completions","attempts"]) renders as
+      // a single "12/18"-style ratio cell instead of two separate columns -
+      // see PASSING_BLOCK's C/A column above.
+      if (Array.isArray(key)) {
+        const [k1, k2] = key;
+        const v1 = stats?.[k1], v2 = stats?.[k2];
+        return `<td>${v1 !== null && v1 !== undefined && v2 !== null && v2 !== undefined ? `${v1}/${v2}` : "-"}</td>`;
+      }
+      return `<td>${stats && stats[key] !== null && stats[key] !== undefined ? stats[key] : "-"}</td>`;
+    })
+    .join("");
 }
 
 function escapeAttr(s) {

@@ -814,6 +814,18 @@ details[open] summary { margin-bottom: 8px; }
   background: var(--card);
   z-index: 2;
 }
+/* Stats tab's header is TWO stacked rows (group labels, then column
+   labels) - the generic rule above sticks every <th> at top:0 regardless
+   of which row it's in, which would paint row 2 directly on top of row 1
+   instead of below it. Row 2's own real height (--rankings-group-header-h,
+   set by docs/js/rankings.js after render, same "measure the real DOM"
+   approach as --sticky-top/--rankings-filters-h) pushes it down to sit
+   under row 1 instead. Doesn't affect Overview/Schedule's single-row
+   header - there's no ".group-header-row" sibling for this selector to
+   match there. */
+#rankings-table-wrap thead tr.group-header-row + tr th {
+  top: var(--rankings-group-header-h, 32px);
+}
 
 /* Compact stat summary at the top of the player modal - a grid of tiles
    instead of a narrow label/value column, so it uses the modal's full width.

@@ -20,6 +20,7 @@ from engine.faab_estimate import (
     FaabModel,
     build_gsis_to_pfr_map,
     build_injury_indices,
+    build_snap_counts_index,
     build_snap_pct_index,
     build_stats_index,
     is_faab_relevant,
@@ -27,6 +28,7 @@ from engine.faab_estimate import (
     recent_snap_pct,
     recent_target_share,
     team_position_totals,
+    team_snap_totals,
 )
 from engine.matchups import (
     allowed_by_team_week_pos,
@@ -168,6 +170,8 @@ def _faab_week_override(current_week: int, week_started: int | None) -> int:
 def _compute_faab_estimates(
     cfg: dict, client: EspnClient, players_out: list[dict], season: int, current_week: int,
     team_rosters: dict[int, list[str]], fa_values_out: dict[str, dict[str, float]],
+    snap_pct_index: dict[str, dict[int, float]], gsis_to_pfr: dict[str, str],
+    stats_index: dict[str, dict[int, dict]], team_rb_carries: dict[tuple[str, int], float],
 ) -> dict[str, dict]:
     """FAAB bid estimates for currently-unrostered players on ESPN "WAIVERS"
     status (need a real bid, unlike an instant-add "FREEAGENT") - see
@@ -191,6 +195,10 @@ def _compute_faab_estimates(
     engine.team_strength.fa_values - already computed per team for the
     Rankings NMD column) are both already sitting in run_league's scope by
     the time this is called, at no extra computation cost here.
+    snap_pct_index/gsis_to_pfr/stats_index/team_rb_carries are ALSO already
+    sitting in run_league's scope, built early (before _register's own
+    per-player `weekly[]` construction needs them for the Rankings Stats
+    tab's usage columns) rather than reloaded a second time here.
 
     Week 1 is a hard cutoff, not just a quiet edge case: there is no PRIOR
     completed week yet (the lookback window is always current_week - 1, by
@@ -218,24 +226,6 @@ def _compute_faab_estimates(
     if not candidates:
         return {}
 
-    # Indexed once here rather than handing the raw DataFrames to recent_
-    # snap_pct/recent_carry_share/recent_target_share to re-filter per
-    # candidate (and per teammate) - this pipeline's own candidate pool is
-    # small enough that it wasn't the real bottleneck (that was tools/faab_
-    # history/build_training_table.py's hundreds of thousands of historical
-    # rows - see the conversation this was built from), but there's no
-    # reason for the live path to carry the same per-call .filter() pattern
-    # when the shared functions now expect an index anyway.
-    snap_pct_index = build_snap_pct_index(nd.snap_counts([season], current_season=season))
-    gsis_to_pfr = build_gsis_to_pfr_map(nd.playerids())
-    # carries/targets/target_share - the live analog of build_training_
-    # table.py's own stats load, for recent_carry_share/recent_target_share
-    # (SNAP/ATT/TGT usage columns - see the conversation this was built
-    # from). Keyed by gsis id (p["id"] itself - unlike snap_pct above, which
-    # needs the pfr crosswalk since snap_counts is pfr-keyed).
-    stats_df = nd.player_stats(season, current_season=season)
-    stats_index = build_stats_index(stats_df)
-    team_rb_carries = team_position_totals(stats_df, "RB", "carries")
     # nflverse's own weekly injury/roster-status history - NOT used to
     # decide whether a teammate is CURRENTLY hurt (that's still ESPN's own
     # live roster injury_status below, the more accurate real-time signal)
@@ -669,6 +659,25 @@ def run_league(cfg: dict) -> dict:
 
     # --- matchup index (offense positions + DST share one code path) ---
     current_stats = nd.player_stats(season, current_season=season)
+
+    # Usage-share raw material (Snap %/Att %/Tgt % - see docs/js's Rankings
+    # Stats tab): indexed once here, up front, rather than inside
+    # _compute_faab_estimates below (which used to load all of this itself,
+    # but only ever runs for the small FAAB-candidate pool AFTER every
+    # player's own `weekly[]` is already built by _register - these numbers
+    # need to be available WHILE `weekly[]` is built, for every player, not
+    # just candidates). current_stats above is the exact same player_stats
+    # DataFrame _compute_faab_estimates used to reload a second time as its
+    # own `stats_df` - reused here instead of fetching it twice.
+    stats_index = build_stats_index(current_stats)
+    team_rb_carries = team_position_totals(current_stats, "RB", "carries")
+    team_targets = team_position_totals(current_stats, None, "targets")
+    snaps_df = nd.snap_counts([season], current_season=season)
+    snap_pct_index = build_snap_pct_index(snaps_df)
+    offense_snaps_index = build_snap_counts_index(snaps_df)
+    team_offense_snaps = team_snap_totals(snaps_df)
+    gsis_to_pfr = build_gsis_to_pfr_map(nd.playerids())
+
     prior_stats = nd.player_stats(prior_season)
     prior_schedules = nd.schedules(prior_season)
     prior_is_home = nd.home_away_from_schedule(prior_schedules, prior_season)
@@ -800,6 +809,30 @@ def run_league(cfg: dict) -> dict:
             return None
         return {"stats": _actual_stats_row(row, _OFFENSE_STAT_FIELDS), "points": player_rules.points_for_row(row)}
 
+    def _usage_stats_for_week(position, nfl_team, pid, week, weeks_played_):
+        """Raw counts (not pre-divided percentages) for the Rankings Stats
+        tab's Snap %/Att %/Tgt % columns - the frontend pairs these with
+        their team totals to derive BOTH a single-week % and a true season
+        split (sum of numerators over weeks played / sum of denominators
+        over those same weeks - not an average of weekly percentages, which
+        would let a low-snap week count exactly as much as a full game and
+        skew the season number). All four None for a week not yet played or
+        a DST (no individual snap_counts row exists for the DST construct -
+        same "no nflverse stat to source it from" precedent as DST's own
+        xpr field above); team_rb_carries specifically stays None (not 0.0)
+        for a team-week with zero real RB carries - see
+        engine.faab_estimate.recent_carry_share's docstring for why that's
+        a real 0/0, not a real 0% share."""
+        if week > weeks_played_ or position == "DST":
+            return {"offense_snaps": None, "team_offense_snaps": None, "team_rb_carries": None, "team_targets": None}
+        pfr_id = gsis_to_pfr.get(pid)
+        return {
+            "offense_snaps": offense_snaps_index.get(pfr_id, {}).get(week) if pfr_id else None,
+            "team_offense_snaps": team_offense_snaps.get((nfl_team, week)),
+            "team_rb_carries": team_rb_carries.get((nfl_team, week)),
+            "team_targets": team_targets.get((nfl_team, week)),
+        }
+
     def _register(p, fantasy_team_id: int | None):
         res = id_map.resolve(espn_id=p.espn_id, name=p.name, pos=p.position, team=p.nfl_team)
         if res.source == "unmapped":
@@ -883,6 +916,7 @@ def run_league(cfg: dict) -> dict:
                         "implied_total": (game_context.get((p.nfl_team, w)) or {}).get("implied_total"),
                         "opponent_implied_total": (game_context.get((p.nfl_team, w)) or {}).get("opponent_implied_total"),
                         "weather": None,
+                        **_usage_stats_for_week(p.position, p.nfl_team, res.id, w, weeks_played),
                     }
                     for w in range(1, current_week)
                 ] + [
@@ -904,6 +938,7 @@ def run_league(cfg: dict) -> dict:
                         # weather_by_team comment above for why a future week
                         # is never worth fetching.
                         "weather": weather_by_team.get(p.nfl_team) if wp.week == current_week else None,
+                        **_usage_stats_for_week(p.position, p.nfl_team, res.id, wp.week, weeks_played),
                     }
                     for wp in proj.weekly
                 ],
@@ -1448,7 +1483,10 @@ def run_league(cfg: dict) -> dict:
     faab_week_started = nd.week_for_kickoff(datetime.now(timezone.utc), schedules_current, season)
     faab_current_week = _faab_week_override(current_week, faab_week_started)
     try:
-        faab_estimates_out = _compute_faab_estimates(cfg, client, players_out, season, faab_current_week, team_rosters, fa_values_out)
+        faab_estimates_out = _compute_faab_estimates(
+            cfg, client, players_out, season, faab_current_week, team_rosters, fa_values_out,
+            snap_pct_index, gsis_to_pfr, stats_index, team_rb_carries,
+        )
     except Exception as exc:
         logger.warning("faab_model: estimate computation failed, writing empty faab_estimates.json: %s", exc)
         faab_estimates_out = {}
