@@ -19,6 +19,27 @@ function rosterIds(data, teamId) {
   return data.players.filter((p) => p.fantasy_team_id === teamId).map((p) => p.id);
 }
 
+// {position: [{id, position, weekly, ros_total}]} for every unrostered
+// player - the same free-agent pool engine/team_strength.py's trade_targets
+// already streams from server-side (see evaluate_with_streaming), now also
+// fed into the interactive calculator below so a bye-prone K/DST isn't
+// scored as a bigger loss/gain than the wire would actually allow. Built
+// once per render, not per evaluate() call - data.players doesn't change
+// while the calculator is open.
+function buildFreeAgentsByPos(data) {
+  const byPos = {};
+  data.players.forEach((p) => {
+    if (p.fantasy_team_id !== null) return;
+    const weekly = {};
+    (p.weekly || []).forEach((w) => {
+      weekly[w.week] = w.projected;
+    });
+    if (!byPos[p.position]) byPos[p.position] = [];
+    byPos[p.position].push({ id: p.id, position: p.position, weekly, ros_total: p.ros_total });
+  });
+  return byPos;
+}
+
 // Value = lineup-delta (next-man-down, already waiver-inclusive - see
 // engine/team_strength.py's depth_values_by_week), not raw ROS points - a
 // player's value to a trade is what your lineup would actually lose without
@@ -78,16 +99,21 @@ function weeklyImpactTable(weeklyA, weeklyB, teamAName, teamBName, expandedWeek)
 }
 
 // A team's post-trade optimal lineup/bench for one specific week, given the
-// exact same DP the totals are computed from (window.FFTrade.lineupAssignmentForWeek)
-// - so this always agrees with the week-by-week totals shown above it.
-function lineupForWeekHtml(teamName, afterRoster, players, week, slots, eligibility, playersById) {
-  const result = window.FFTrade.lineupAssignmentForWeek(afterRoster, players, week, slots, eligibility);
+// exact same streaming-aware DP the totals are computed from
+// (window.FFTrade.lineupAssignmentForWeekWithStreaming) - so this always
+// agrees with the week-by-week totals shown above it, including which
+// position (if any) would actually be streamed from the wire that week
+// rather than showing a misleadingly empty slot.
+function lineupForWeekHtml(teamName, afterRoster, players, freeAgentsByPos, week, slots, eligibility, playersById) {
+  const result = window.FFTrade.lineupAssignmentForWeekWithStreaming(afterRoster, players, freeAgentsByPos, week, slots, eligibility);
+  const streamedIds = new Set(result.streamedIds);
+  const streamBadge = (id) => (streamedIds.has(id) ? `<span class="pill small stream-badge" title="Not on this roster - the best free agent available that week instead">FA</span>` : "");
   const starterRows = result.starters
     .map((s) => {
       const p = playersById.get(s.id);
       if (!p) return "";
       const color = POSITION_COLOR[p.position] || "#888";
-      return `<tr><td class="muted small">${s.instance.replace(/\d+$/, "")}</td><td><span class="pos-tag" style="background:${color}">${p.position}</span> ${escapeHtml(p.name)}</td><td>${fmt((p.weekly || []).find((w) => w.week === week)?.projected, 1)}</td></tr>`;
+      return `<tr class="${streamedIds.has(s.id) ? "streamed-row" : ""}"><td class="muted small">${s.instance.replace(/\d+$/, "")}</td><td><span class="pos-tag" style="background:${color}">${p.position}</span> ${escapeHtml(p.name)} ${streamBadge(s.id)}</td><td>${fmt((p.weekly || []).find((w) => w.week === week)?.projected, 1)}</td></tr>`;
     })
     .join("");
   const benchRows = result.bench
@@ -124,8 +150,8 @@ function renderResult(container, result, teamAName, teamBName, ctx) {
     const wrap = container.querySelector(`#trade-week-lineup-${ctx.expandedWeek}`);
     if (wrap) {
       wrap.innerHTML =
-        lineupForWeekHtml(teamAName, result.sideA.afterRoster, ctx.players, ctx.expandedWeek, ctx.slots, ctx.eligibility, ctx.playersById) +
-        lineupForWeekHtml(teamBName, result.sideB.afterRoster, ctx.players, ctx.expandedWeek, ctx.slots, ctx.eligibility, ctx.playersById);
+        lineupForWeekHtml(teamAName, result.sideA.afterRoster, ctx.players, ctx.freeAgentsByPos, ctx.expandedWeek, ctx.slots, ctx.eligibility, ctx.playersById) +
+        lineupForWeekHtml(teamBName, result.sideB.afterRoster, ctx.players, ctx.freeAgentsByPos, ctx.expandedWeek, ctx.slots, ctx.eligibility, ctx.playersById);
     }
   }
 
@@ -141,6 +167,7 @@ function renderResult(container, result, teamAName, teamBName, ctx) {
 export function renderTrade(container, data) {
   const teams = data.teams;
   const playersById = data.playersById;
+  const freeAgentsByPos = buildFreeAgentsByPos(data);
   // Team A defaults to the viewer's own team (the trade you're actually
   // considering almost always involves you) - falls back to the first team
   // if this browser hasn't picked one for this league yet (see
@@ -239,12 +266,12 @@ export function renderTrade(container, data) {
       for (let w = data.meta.current_week; w <= data.meta.final_week; w++) weeks.push(w);
       const slots = data.meta.slots;
       const eligibility = data.meta.slot_eligibility;
-      const result = window.FFTrade.evaluateTrade({
+      const result = window.FFTrade.evaluateTradeWithStreaming({
         givesA: [...state.givesA], givesB: [...state.givesB],
-        rosterA: rostA.map((p) => p.id), rosterB: rostB.map((p) => p.id), players, weeks,
+        rosterA: rostA.map((p) => p.id), rosterB: rostB.map((p) => p.id), players, freeAgentsByPos, weeks,
         slots, eligibility,
       });
-      const ctx = { expandedWeek: state.expandedWeek, players, slots, eligibility, playersById: data.playersById };
+      const ctx = { expandedWeek: state.expandedWeek, players, freeAgentsByPos, slots, eligibility, playersById: data.playersById };
       renderResult(resultEl, result, teamLabel(teamA), teamLabel(teamB), ctx);
     }
   }

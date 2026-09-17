@@ -94,6 +94,7 @@ in a league's YAML to skip it entirely and just use the YAML values.
    o-league    | matchup_dampening      | 0.5
    o-league    | pa_basis               | blend
    o-league    | pa_l5_weight           | 0.5
+   o-league    | pa_prior_season_weeks  | 6
    o-league    | division_winners_first | true
    ```
    Recognized flat keys are listed in `ingest/settings_sheet.py`'s

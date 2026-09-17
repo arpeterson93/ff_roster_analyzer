@@ -1426,6 +1426,7 @@ def run_league(cfg: dict) -> dict:
             "matchup_dampening": val_cfg["matchup_dampening"],
             "pa_basis": val_cfg["pa_basis"],
             "pa_l5_weight": val_cfg["pa_l5_weight"],
+            "pa_prior_season_weeks": val_cfg["pa_prior_season_weeks"],
             "division_winners_first": sim_cfg["division_winners_first"],
             "seeding_raw": sim_cfg.get("seeding_raw", {}),
         },

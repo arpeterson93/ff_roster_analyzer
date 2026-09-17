@@ -21,6 +21,7 @@ _SETTINGS_SCHEMA: dict[str, tuple[tuple[str, ...], type]] = {
     "matchup_dampening": (("valuation", "matchup_dampening"), float),
     "pa_basis": (("valuation", "pa_basis"), str),
     "pa_l5_weight": (("valuation", "pa_l5_weight"), float),
+    "pa_prior_season_weeks": (("valuation", "pa_prior_season_weeks"), int),
     "division_winners_first": (("sim", "division_winners_first"), lambda v: str(v).strip().lower() in ("true", "1", "yes")),
 }
 

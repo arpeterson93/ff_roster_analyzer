@@ -147,6 +147,57 @@ function lineupAssignmentForWeek(playerIds, players, week, slots, eligibility) {
   };
 }
 
+// Same idea as lineupTotalWithStreamingByWeek, but for ONE week's real
+// assignment (what the trade calculator's click-to-expand week view shows) -
+// so that view always agrees with the streaming-aware totals above it
+// instead of silently showing an empty slot the totals already credited a
+// free agent for filling. Only ever adds ONE synthetic candidate per
+// zeroed-out position (the single best free agent that week), same as the
+// totals-only version - not the whole free-agent pool - so the bitmask DP
+// stays small. Returns the same shape as lineupAssignmentForWeek, plus
+// `streamedIds`: the subset of playerIds in the result that are free-agent
+// fill-ins, not actually on the roster, for the frontend to flag distinctly
+// (see docs/js/tradeui.js's stream badge).
+function lineupAssignmentForWeekWithStreaming(playerIds, players, freeAgentsByPos, week, slots, eligibility) {
+  var entries = [];
+  var idByIndex = [];
+  var rosteredByPos = {};
+  for (var j = 0; j < playerIds.length; j++) {
+    var pid = playerIds[j];
+    var p = players[pid];
+    if (!p) continue;
+    var pts = (p.weekly && p.weekly[week] !== undefined) ? p.weekly[week] : 0;
+    entries.push({ pos: p.position, pts: pts });
+    idByIndex.push(pid);
+    rosteredByPos[p.position] = Math.max(rosteredByPos[p.position] || 0, pts);
+  }
+  var streamedIds = [];
+  Object.keys(freeAgentsByPos || {}).forEach(function (pos) {
+    if ((rosteredByPos[pos] || 0) > 0) return;
+    var best = null, bestPts = 0;
+    (freeAgentsByPos[pos] || []).forEach(function (fa) {
+      var pts = (fa.weekly && fa.weekly[week] !== undefined) ? fa.weekly[week] : 0;
+      if (pts > bestPts) { bestPts = pts; best = fa; }
+    });
+    if (best) {
+      entries.push({ pos: pos, pts: bestPts });
+      idByIndex.push(best.id);
+      streamedIds.push(best.id);
+    }
+  });
+  var result = optimalLineupAssignment(entries, slots, eligibility);
+  var starters = result.slots
+    .filter(function (sl) { return sl.playerIndex !== null; })
+    .map(function (sl) { return { instance: sl.instance, base: sl.base, id: idByIndex[sl.playerIndex] }; });
+  // A streamed candidate the optimizer didn't actually pick for a starting
+  // slot (rare - only when a real roster player was eligible for the same
+  // slot at an equal-or-better points-per-slot tradeoff elsewhere) isn't a
+  // real bench player, so it's dropped rather than shown as one.
+  var bench = result.benchIndices.map(function (idx) { return idByIndex[idx]; }).filter(function (id) { return streamedIds.indexOf(id) === -1; });
+  var usedStreamedIds = streamedIds.filter(function (id) { return starters.some(function (s) { return s.id === id; }); });
+  return { total: result.total, starters: starters, bench: bench, streamedIds: usedStreamedIds };
+}
+
 function lineupTotalByWeek(playerIds, players, weeks, slots, eligibility) {
   var byWeek = {};
   for (var i = 0; i < weeks.length; i++) {
@@ -167,6 +218,41 @@ function lineupTotal(playerIds, players, weeks, slots, eligibility) {
   var total = 0;
   for (var w in byWeek) total += byWeek[w];
   return total;
+}
+
+// Port of engine/team_strength.py's lineup_total_with_streaming_by_week: for
+// any week where every ROSTERED player at a position projects to 0 (most
+// commonly a lone K/DST on bye), the best available free agent's OWN
+// projection for that specific week is assumed to start instead - picked
+// fresh per week (not by season-long ros_total), same "whoever's got the
+// matchup that week" logic a real manager streams with. Without this, a
+// trade calculator would give a rostered player full credit for "filling"
+// a bye week the wire would have trivially filled anyway.
+function lineupTotalWithStreamingByWeek(playerIds, players, freeAgentsByPos, weeks, slots, eligibility) {
+  var byWeek = {};
+  for (var i = 0; i < weeks.length; i++) {
+    var w = weeks[i];
+    var entries = [];
+    var rosteredByPos = {};
+    for (var j = 0; j < playerIds.length; j++) {
+      var p = players[playerIds[j]];
+      if (!p) continue;
+      var pts = (p.weekly && p.weekly[w] !== undefined) ? p.weekly[w] : 0;
+      entries.push({ pos: p.position, pts: pts });
+      rosteredByPos[p.position] = Math.max(rosteredByPos[p.position] || 0, pts);
+    }
+    Object.keys(freeAgentsByPos || {}).forEach(function (pos) {
+      if ((rosteredByPos[pos] || 0) > 0) return;
+      var bestFaWeekPts = 0;
+      (freeAgentsByPos[pos] || []).forEach(function (fa) {
+        var pts = (fa.weekly && fa.weekly[w] !== undefined) ? fa.weekly[w] : 0;
+        if (pts > bestFaWeekPts) bestFaWeekPts = pts;
+      });
+      if (bestFaWeekPts > 0) entries.push({ pos: pos, pts: bestFaWeekPts });
+    });
+    byWeek[w] = optimalLineupTotal(entries, slots, eligibility);
+  }
+  return byWeek;
 }
 
 function afterRosters(givesA, givesB, rosterA, rosterB) {
@@ -211,11 +297,57 @@ function evaluateTrade(opts) {
   return { sideA: sideA, sideB: sideB, favors: favors };
 }
 
+// Port of engine/trades.py's evaluate_with_streaming - identical to
+// evaluateTrade above except every lineup total goes through
+// lineupTotalWithStreamingByWeek instead of lineupTotalByWeek, so a trade
+// isn't scored as a bigger swing than it really is when the position it
+// touches (typically K/DST) has a decent replacement sitting on the wire
+// anyway. opts additionally takes freeAgentsByPos: {position: [{id,
+// weekly}]}.
+function evaluateTradeWithStreaming(opts) {
+  var givesA = opts.givesA, givesB = opts.givesB, rosterA = opts.rosterA, rosterB = opts.rosterB;
+  var players = opts.players, freeAgentsByPos = opts.freeAgentsByPos;
+  var weeks = opts.weeks, slots = opts.slots, eligibility = opts.eligibility;
+
+  var beforeAWk = lineupTotalWithStreamingByWeek(rosterA, players, freeAgentsByPos, weeks, slots, eligibility);
+  var beforeBWk = lineupTotalWithStreamingByWeek(rosterB, players, freeAgentsByPos, weeks, slots, eligibility);
+
+  var rosters = afterRosters(givesA, givesB, rosterA, rosterB);
+  var afterRosterA = rosters.afterRosterA, afterRosterB = rosters.afterRosterB;
+
+  var afterAWk = lineupTotalWithStreamingByWeek(afterRosterA, players, freeAgentsByPos, weeks, slots, eligibility);
+  var afterBWk = lineupTotalWithStreamingByWeek(afterRosterB, players, freeAgentsByPos, weeks, slots, eligibility);
+
+  var beforeA = 0, beforeB = 0, afterA = 0, afterB = 0;
+  var weeklyA = [], weeklyB = [];
+  weeks.forEach(function (w) {
+    beforeA += beforeAWk[w]; afterA += afterAWk[w];
+    beforeB += beforeBWk[w]; afterB += afterBWk[w];
+    weeklyA.push({ week: w, before: beforeAWk[w], after: afterAWk[w], delta: afterAWk[w] - beforeAWk[w] });
+    weeklyB.push({ week: w, before: beforeBWk[w], after: afterBWk[w], delta: afterBWk[w] - beforeBWk[w] });
+  });
+
+  var rawGivenA = givesA.reduce(function (acc, p) { return acc + players[p].ros_total; }, 0);
+  var rawGivenB = givesB.reduce(function (acc, p) { return acc + players[p].ros_total; }, 0);
+
+  var sideA = { before: beforeA, after: afterA, gain: afterA - beforeA, rawGiven: rawGivenA, rawReceived: rawGivenB, weekly: weeklyA, afterRoster: afterRosterA };
+  var sideB = { before: beforeB, after: afterB, gain: afterB - beforeB, rawGiven: rawGivenB, rawReceived: rawGivenA, weekly: weeklyB, afterRoster: afterRosterB };
+
+  var diff = sideA.gain - sideB.gain;
+  var threshold = EVEN_THRESHOLD_PER_WEEK * weeks.length;
+  var favors = Math.abs(diff) < threshold ? "even" : (diff > 0 ? "a" : "b");
+
+  return { sideA: sideA, sideB: sideB, favors: favors };
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    evaluateTrade: evaluateTrade, lineupTotal: lineupTotal, lineupTotalByWeek: lineupTotalByWeek,
+    evaluateTrade: evaluateTrade, evaluateTradeWithStreaming: evaluateTradeWithStreaming,
+    lineupTotal: lineupTotal, lineupTotalByWeek: lineupTotalByWeek,
+    lineupTotalWithStreamingByWeek: lineupTotalWithStreamingByWeek,
     optimalLineupTotal: optimalLineupTotal, optimalLineupAssignment: optimalLineupAssignment,
     lineupAssignmentForWeek: lineupAssignmentForWeek,
+    lineupAssignmentForWeekWithStreaming: lineupAssignmentForWeekWithStreaming,
   };
 
   if (require.main === module) {
@@ -245,12 +377,43 @@ if (typeof module !== "undefined" && module.exports) {
       });
       return { name: c.name, gain_a: result.sideA.gain, gain_b: result.sideB.gain, favors: result.favors };
     });
-    console.log(JSON.stringify(results));
+
+    // streaming_cases are fully self-contained (own players/free_agents/
+    // slots/weeks per case, unlike cases above which share one fixed
+    // roster) since each one is testing a specific bye/streaming scenario -
+    // see tests/fixtures/trade_case.json's _comment on this key.
+    var streamingResults = (fixture.streaming_cases || []).map(function (c) {
+      var casePlayers = {};
+      Object.keys(c.players).forEach(function (id) {
+        var p = c.players[id];
+        var weekly = {};
+        Object.keys(p.weekly).forEach(function (w) { weekly[w] = p.weekly[w]; });
+        casePlayers[id] = { position: p.position, weekly: weekly, ros_total: p.ros_total };
+      });
+      var freeAgentsByPos = {};
+      Object.keys(c.free_agents || {}).forEach(function (pos) {
+        freeAgentsByPos[pos] = c.free_agents[pos].map(function (fa) {
+          var weekly = {};
+          Object.keys(fa.weekly).forEach(function (w) { weekly[w] = fa.weekly[w]; });
+          return { id: fa.id, position: fa.position, weekly: weekly, ros_total: fa.ros_total };
+        });
+      });
+      var result = evaluateTradeWithStreaming({
+        givesA: c.gives_a, givesB: c.gives_b, rosterA: c.roster_a, rosterB: c.roster_b,
+        players: casePlayers, freeAgentsByPos: freeAgentsByPos, weeks: c.weeks, slots: c.slots, eligibility: c.eligibility,
+      });
+      return { name: c.name, gain_a: result.sideA.gain, gain_b: result.sideB.gain, favors: result.favors };
+    });
+
+    console.log(JSON.stringify({ cases: results, streaming_cases: streamingResults }));
   }
 } else if (typeof window !== "undefined") {
   window.FFTrade = {
-    evaluateTrade: evaluateTrade, lineupTotal: lineupTotal, lineupTotalByWeek: lineupTotalByWeek,
+    evaluateTrade: evaluateTrade, evaluateTradeWithStreaming: evaluateTradeWithStreaming,
+    lineupTotal: lineupTotal, lineupTotalByWeek: lineupTotalByWeek,
+    lineupTotalWithStreamingByWeek: lineupTotalWithStreamingByWeek,
     optimalLineupTotal: optimalLineupTotal, optimalLineupAssignment: optimalLineupAssignment,
     lineupAssignmentForWeek: lineupAssignmentForWeek,
+    lineupAssignmentForWeekWithStreaming: lineupAssignmentForWeekWithStreaming,
   };
 }

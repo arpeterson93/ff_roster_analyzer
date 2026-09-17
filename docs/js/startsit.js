@@ -1,5 +1,5 @@
 import { fmt, escapeHtml, getYourTeam, setYourTeam } from "./state.js";
-import { POSITION_COLOR, INJURY_BADGE, impliedTotalCellHtml, opponentCellHtml, ratioForRank, colorForRatio, formatKickoff, shortName, sortByPositionOrder, teamLabel, playerPhotoHtml, weeklyProjection } from "./colors.js";
+import { POSITION_COLOR, INJURY_BADGE, impliedTotalCellHtml, opponentCellHtml, ratioForRank, colorForRatio, formatKickoff, shortName, sortByPositionOrder, teamLabel, playerPhotoHtml, weeklyProjection, pointsWeeksAgo, seasonAvgPoints, weatherCellHtml } from "./colors.js";
 import { openPlayerModal } from "./playermodal.js";
 import { openPointsAgainstModal } from "./pointsagainstmodal.js";
 import { compareCheckboxHtml, wireCompareCheckboxes } from "./compare.js";
@@ -17,7 +17,11 @@ function healthBadge(status) {
 // Desktop keeps a separate Opp column (marked ".desktop-col"). On mobile (see
 // the ".desktop-col"/".mobile-line" media query in styles.css) that column
 // collapses away and its info folds into the Player cell instead - matching
-// a native app's compact list.
+// a native app's compact list. Every OTHER column (ITT, Proj, the recent-
+// points trend, Szn Avg, FP Rank, Weather) stays a real column on mobile too
+// - the table just grows wider than the screen and scrolls sideways via
+// .table-wrap's overflow-x, same pattern Rankings' own wide table already
+// uses, rather than hiding data Opp doesn't need hiding.
 function playerMetaLine(p) {
   const parts = [];
   if (p.nfl_team) parts.push(escapeHtml(p.nfl_team));
@@ -27,6 +31,38 @@ function playerMetaLine(p) {
 }
 
 const projValueFor = weeklyProjection;
+
+function fmtPts(v) {
+  return v === null || v === undefined ? "–" : fmt(v, 1);
+}
+
+// FP Rank and Weather are both only ever real for the CURRENT week (FP Rank:
+// engine/pipeline.py's weekly_lookup is FantasyPros' current-week positional
+// rankings page, there's no future-week equivalent to show; Weather: only
+// ever fetched for current_week - see colors.js's weatherCellHtml) - shown
+// only when viewing that week's lineup rather than as a column of dashes for
+// every other week.
+const headerRow = (isCurrentWeek) => `<tr>
+    <th>Slot</th><th>Player</th><th class="desktop-col">Opp</th>
+    <th class="stat-col" title="Implied Team Total">ITT</th><th class="stat-col">Proj</th>
+    <th class="stat-col" title="Fantasy points 3 weeks ago (byes/missed games excluded)">3wk</th>
+    <th class="stat-col" title="Fantasy points 2 weeks ago (byes/missed games excluded)">2wk</th>
+    <th class="stat-col" title="Fantasy points 1 week ago (byes/missed games excluded)">1wk</th>
+    <th class="stat-col" title="Fantasy points per game played this season (byes/missed games excluded)">Szn Avg</th>
+    ${isCurrentWeek ? `<th class="stat-col" title="FantasyPros weekly positional rank">FP Rank</th>` : ""}
+    ${isCurrentWeek ? `<th class="stat-col">Weather</th>` : ""}
+  </tr>`;
+
+function totalsRow(label, total, isCurrentWeek) {
+  return `<tr class="totals-row">
+    <td colspan="2">${label}</td>
+    <td class="desktop-col"></td>
+    <td class="stat-col"></td>
+    <td class="stat-col"><strong>${fmt(total, 1)}</strong></td>
+    <td class="stat-col"></td><td class="stat-col"></td><td class="stat-col"></td><td class="stat-col"></td>
+    ${isCurrentWeek ? `<td class="stat-col"></td><td class="stat-col"></td>` : ""}
+  </tr>`;
+}
 
 // isStreamed: this slot's occupant isn't actually on the roster - the real
 // starter was on bye, so the optimal-lineup calc pulled in the best
@@ -40,12 +76,12 @@ function playerRow(p, week, currentWeek, slotLabel, isStreamed) {
   const kickoff = formatKickoff(weekEntry.kickoff);
   const oppAttrs = `data-opp-cell data-team="${escapeHtml(weekEntry.opponent || "")}" data-pos="${p.position}"`;
   const proj = projValueFor(p, week, currentWeek);
-  // The real LAST completed week (currentWeek - 1), regardless of which
-  // week's projections `week` is currently viewing - "last week" is a fixed
-  // real-world reference point, not relative to whatever future week you're
-  // looking ahead to.
-  const lastWeekEntry = (p.weekly || []).find((w) => w.week === currentWeek - 1) || {};
-  const lastPts = lastWeekEntry.actual?.points;
+  const isCurrentWeek = week === currentWeek;
+  // The recent-points trend and season average are always anchored to the
+  // real currentWeek, not whatever future week `week` is looking ahead to -
+  // "3 weeks ago" is a fixed real-world reference point, same as the old
+  // single-week "Last" column was.
+  const seasonAvg = seasonAvgPoints(p, currentWeek);
   const streamBadge = isStreamed ? `<span class="pill small stream-badge" title="Your rostered starter is on bye - this is the best free agent available that week instead">FA</span>` : "";
   return `<tr data-player-id="${p.id}" class="clickable-row ${isStreamed ? "streamed-row" : ""}">
     ${slotCell}
@@ -63,9 +99,14 @@ function playerRow(p, week, currentWeek, slotLabel, isStreamed) {
       ${kickoff ? `<div class="muted small row-meta">${kickoff}</div>` : ""}
       <div>${opponentCellHtml(weekEntry)}</div>
     </td>
-    <td class="desktop-col">${impliedTotalCellHtml(p, weekEntry)}</td>
-    <td><strong>${fmt(proj, 1)}</strong></td>
-    <td class="desktop-col muted">${lastPts !== undefined && lastPts !== null ? fmt(lastPts, 1) : "–"}</td>
+    <td class="stat-col">${impliedTotalCellHtml(p, weekEntry)}</td>
+    <td class="stat-col"><strong>${fmt(proj, 1)}</strong></td>
+    <td class="stat-col muted">${fmtPts(pointsWeeksAgo(p, 3, currentWeek))}</td>
+    <td class="stat-col muted">${fmtPts(pointsWeeksAgo(p, 2, currentWeek))}</td>
+    <td class="stat-col muted">${fmtPts(pointsWeeksAgo(p, 1, currentWeek))}</td>
+    <td class="stat-col muted">${fmtPts(seasonAvg)}</td>
+    ${isCurrentWeek ? `<td class="stat-col">${p.fp_week_pos_rank_label ?? "–"}</td>` : ""}
+    ${isCurrentWeek ? `<td class="stat-col">${weatherCellHtml(weekEntry)}</td>` : ""}
   </tr>`;
 }
 
@@ -98,36 +139,22 @@ function lineupSection(roster, week, lineupWeek, currentWeek, allPlayersById) {
   const benchRows = bench.map((p) => playerRow(p, week, currentWeek, p.lineup_slot === "IR" ? "IR" : "Bench")).join("");
   const benchTotal = bench.reduce((acc, p) => acc + (projValueFor(p, week, currentWeek) || 0), 0);
 
+  const isCurrentWeek = week === currentWeek;
+  const thead = `<thead>${headerRow(isCurrentWeek)}</thead>`;
   return `
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Slot</th><th>Player</th><th class="desktop-col">Opp</th><th class="desktop-col" title="Implied Team Total">ITT</th><th>Proj</th><th class="desktop-col">Last</th></tr></thead>
+        ${thead}
         <tbody>${rows}</tbody>
-        <tfoot>
-          <tr class="totals-row">
-            <td colspan="2">Starters total</td>
-            <td class="desktop-col"></td>
-            <td class="desktop-col"></td>
-            <td><strong>${fmt(ourTotal, 1)}</strong></td>
-            <td class="desktop-col"></td>
-          </tr>
-        </tfoot>
+        <tfoot>${totalsRow("Starters total", ourTotal, isCurrentWeek)}</tfoot>
       </table>
     </div>
     <h3>Bench</h3>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Slot</th><th>Player</th><th class="desktop-col">Opp</th><th class="desktop-col" title="Implied Team Total">ITT</th><th>Proj</th><th class="desktop-col">Last</th></tr></thead>
+        ${thead}
         <tbody>${benchRows}</tbody>
-        <tfoot>
-          <tr class="totals-row">
-            <td colspan="2">Bench total</td>
-            <td class="desktop-col"></td>
-            <td class="desktop-col"></td>
-            <td><strong>${fmt(benchTotal, 1)}</strong></td>
-            <td class="desktop-col"></td>
-          </tr>
-        </tfoot>
+        <tfoot>${totalsRow("Bench total", benchTotal, isCurrentWeek)}</tfoot>
       </table>
     </div>
   `;

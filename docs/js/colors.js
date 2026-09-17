@@ -120,6 +120,31 @@ export function weeklyProjection(p, week, currentWeek) {
   return w ? w.projected : null;
 }
 
+// Fantasy points from `weeksAgo` weeks before the real current week - null
+// (not 0) for a bye or a missed game, same "no stat row" signal
+// engine/pipeline.py's _actual_weekly_stats already encodes server-side, so
+// a missed week never masquerades as a scoreless one. Always anchored to the
+// real currentWeek, not whatever future week a caller might be looking
+// ahead to - "3 weeks ago" is a fixed real-world reference point, same as
+// Start/Sit's old single-week "Last" column was.
+export function pointsWeeksAgo(p, weeksAgo, currentWeek) {
+  const entry = (p.weekly || []).find((w) => w.week === currentWeek - weeksAgo);
+  const pts = entry?.actual?.points;
+  return pts === undefined ? null : pts;
+}
+
+// Fantasy points per game ACTUALLY PLAYED so far this season - byes and
+// missed games (no stat row, same signal as pointsWeeksAgo above) are
+// excluded from both the sum and the denominator, mirroring engine/
+// pipeline.py's own recent_form/season_avg_points definition (weeks before
+// current_week with a real stat row) rather than a second, drifting
+// definition of "season average".
+export function seasonAvgPoints(p, currentWeek) {
+  const played = (p.weekly || []).filter((w) => w.week < currentWeek && w.actual?.points !== undefined && w.actual?.points !== null);
+  if (!played.length) return null;
+  return played.reduce((sum, w) => sum + w.actual.points, 0) / played.length;
+}
+
 // ESPN's own CDN, keyed off the espn_id every player already carries - a
 // D/ST "player" has no individual headshot, so it gets its team's logo
 // instead (keyed off nfl_team; ESPN's logo path accepts both "was" and
@@ -167,6 +192,19 @@ export function impliedTotalCellHtml(p, weekEntry) {
   const w = weekEntry.weather;
   const title = w ? ` title="${w.temperature_f}&deg;F, wind ${w.wind}, ${w.precip_pct ?? 0}% precip - ${w.short_forecast}"` : "";
   return `<span${title}>${fmt(total, 1)}</span>`;
+}
+
+// Same weekEntry.weather data as impliedTotalCellHtml's hover tooltip above,
+// rendered as its own visible cell for Start/Sit, which can spare a whole
+// column for it. Only ever populated for the CURRENT week (see
+// engine/pipeline.py) - a dome game or one beyond NWS's ~7-day forecast
+// horizon carries weather: null same as any other week, so this reads as a
+// plain "-" rather than a special case.
+export function weatherCellHtml(weekEntry) {
+  const w = weekEntry && weekEntry.weather;
+  if (!w) return `<span class="muted">&ndash;</span>`;
+  const title = `${w.temperature_f}&deg;F, wind ${w.wind}, ${w.precip_pct ?? 0}% precip - ${w.short_forecast}`;
+  return `<span title="${title}">${w.temperature_f}&deg;F, ${w.wind}</span>`;
 }
 
 // "Sun 3:25 PM" in the VIEWER's own local time zone - the pipeline only ever

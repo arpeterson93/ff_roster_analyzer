@@ -29,7 +29,7 @@ def test_parse_settings_csv_missing_columns_raises():
 
 def _base_cfg():
     return {
-        "valuation": {"matchup_dampening": 0.5, "pa_basis": "blend", "pa_l5_weight": 0.5},
+        "valuation": {"matchup_dampening": 0.5, "pa_basis": "blend", "pa_l5_weight": 0.5, "pa_prior_season_weeks": 6},
         "sim": {"division_winners_first": True},
     }
 
@@ -46,6 +46,13 @@ def test_apply_remote_settings_casts_booleans():
     cfg = _base_cfg()
     apply_remote_settings(cfg, {"division_winners_first": "false"})
     assert cfg["sim"]["division_winners_first"] is False
+
+
+def test_apply_remote_settings_casts_pa_prior_season_weeks_to_int():
+    cfg = _base_cfg()
+    changes = apply_remote_settings(cfg, {"pa_prior_season_weeks": "0"})
+    assert cfg["valuation"]["pa_prior_season_weeks"] == 0
+    assert len(changes) == 1
 
 
 def test_apply_remote_settings_ignores_unknown_keys():

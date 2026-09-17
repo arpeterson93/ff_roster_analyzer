@@ -5,6 +5,7 @@ const FIELDS = [
   { key: "matchup_dampening", label: "Matchup dampening", type: "percent", help: "How much a matchup's difficulty shifts a player's weekly projection. 0% = ignore matchups entirely, 100% = full swing." },
   { key: "pa_basis", label: "Points-allowed basis", type: "select", options: ["season", "l5", "blend"], help: "Which window of opponent history feeds the matchup index." },
   { key: "pa_l5_weight", label: "Last-5-weeks weight (when basis = blend)", type: "percent", help: "How much of the blended points-allowed basis comes from the last 5 weeks vs. the full season." },
+  { key: "pa_prior_season_weeks", label: "Weeks until matchup index fully trusts the current season", type: "number", min: 0, max: 17, help: "How many current-season weeks it takes for the matchup index to fully switch over from last season's points-allowed numbers to this season's. 0 = trust the current season immediately, even in week 1." },
   { key: "division_winners_first", label: "Seed division winners first", type: "bool", help: "If your league has divisions, guarantee division winners the top seeds ahead of wildcards." },
 ];
 
@@ -18,6 +19,9 @@ function fieldControl(field, value) {
   }
   if (field.type === "bool") {
     return `<input type="checkbox" data-key="${field.key}" data-type="bool" ${value ? "checked" : ""} />`;
+  }
+  if (field.type === "number") {
+    return `<input type="number" min="${field.min}" max="${field.max}" step="1" value="${Number(value)}" data-key="${field.key}" data-type="number" />`;
   }
   return "";
 }

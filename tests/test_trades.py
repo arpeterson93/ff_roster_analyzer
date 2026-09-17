@@ -156,3 +156,21 @@ def test_fixture_matches_committed_json():
         assert result.side_a.gain == pytest.approx(case["expected"]["gain_a"])
         assert result.side_b.gain == pytest.approx(case["expected"]["gain_b"])
         assert result.favors == case["expected"]["favors"]
+
+    for case in fixture.get("streaming_cases", []):
+        case_players = {
+            pid: PlayerCtx(id=pid, position=p["position"], ros_total=p["ros_total"], weekly={int(w): v for w, v in p["weekly"].items()})
+            for pid, p in case["players"].items()
+        }
+        free_agents = {
+            pos: [PlayerCtx(id=fa["id"], position=fa["position"], ros_total=fa["ros_total"], weekly={int(w): v for w, v in fa["weekly"].items()}) for fa in fas]
+            for pos, fas in case.get("free_agents", {}).items()
+        }
+        result = evaluate_with_streaming(
+            gives_a=case["gives_a"], gives_b=case["gives_b"], roster_a=case["roster_a"], roster_b=case["roster_b"],
+            players=case_players, free_agents_by_pos=free_agents, weeks=case["weeks"],
+            slots=case["slots"], eligibility={k: set(v) for k, v in case["eligibility"].items()},
+        )
+        assert result.side_a.gain == pytest.approx(case["expected"]["gain_a"]), case["name"]
+        assert result.side_b.gain == pytest.approx(case["expected"]["gain_b"]), case["name"]
+        assert result.favors == case["expected"]["favors"], case["name"]

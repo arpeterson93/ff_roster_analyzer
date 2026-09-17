@@ -32,5 +32,27 @@
       "gives_b": ["rbB1"],
       "expected": {"gain_a": 0.0, "gain_b": 0.0, "favors": "even"}
     }
+  ],
+  "streaming_cases": [
+    {
+      "_comment": "Same scenario as test_trades.py's test_evaluate_with_streaming_discounts_a_trade_the_wire_could_replace: team A's only kicker is on bye week 2; team B's kicker offer only helps by the edge over what a week-2 wire kicker already provides (8 - 7 = 1), not the full 0 -> 8 swing a plain evaluate() would give.",
+      "name": "kicker_bye_discounted_by_wire",
+      "slots": {"K": 1},
+      "eligibility": {"K": ["K"]},
+      "weeks": [1, 2],
+      "players": {
+        "kA1": {"position": "K", "ros_total": 10.0, "weekly": {"1": 10.0, "2": 0.0}},
+        "kB1": {"position": "K", "ros_total": 16.0, "weekly": {"1": 8.0, "2": 8.0}},
+        "otherB": {"position": "K", "ros_total": 2.0, "weekly": {"1": 1.0, "2": 1.0}}
+      },
+      "free_agents": {
+        "K": [{"id": "fa_k", "position": "K", "ros_total": 14.0, "weekly": {"1": 7.0, "2": 7.0}}]
+      },
+      "roster_a": ["kA1"],
+      "roster_b": ["kB1", "otherB"],
+      "gives_a": [],
+      "gives_b": ["kB1"],
+      "expected": {"gain_a": 1.0, "gain_b": -14.0, "favors": "a"}
+    }
   ]
 }

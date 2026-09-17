@@ -183,6 +183,14 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
    anything that doesn't fit even wrapped (e.g. a very long player name). */
 #tab-startsit td { white-space: normal; }
 
+/* ...but the lineup tables' one-line stat columns (ITT/Proj/3wk/2wk/1wk/Szn
+   Avg/FP Rank/Weather - ".stat-col", see docs/js/startsit.js) are exactly
+   the columns that SHOULD force the table wider than the screen on mobile,
+   so .table-wrap's overflow-x scrolls to reveal them instead of every one
+   of them getting squeezed into an unreadable wrapped mess to stay on
+   screen - the Player cell above is the only column meant to reflow. */
+#tab-startsit td.stat-col { white-space: nowrap; }
+
 /* The Rest-of-season grid needs more room than the site-wide 1100px tabpanel
    cap allows once every remaining week gets its own column - widen just this
    tab so a widescreen viewport doesn't have to scroll to see it. */
