@@ -175,21 +175,61 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 .player-modal-header p { margin: 2px 0 0; }
 .player-photo-lg { width: 56px; height: 56px; min-width: 56px; border-radius: 50%; object-fit: cover; background: color-mix(in srgb, var(--ink-500) 12%, transparent); }
 
-/* Start/Sit's Player/Score cells hold multi-line stacked content (name,
-   team/ownership, kickoff+opponent) - letting that text wrap instead of
-   forcing the site-wide "th, td { white-space: nowrap }" default is what
-   keeps the table itself no wider than the screen, rather than just
-   scrollable. table-wrap's overflow-x below is still the fallback for
-   anything that doesn't fit even wrapped (e.g. a very long player name). */
+/* Start/Sit's Player cell holds multi-line stacked content (name, team/
+   ownership, kickoff+opponent) as separate stacked <div>s, not wrapped
+   text - the site-wide "th, td { white-space: nowrap }" default only
+   threatens each individual line's OWN text (e.g. the name/badges row
+   wrapping mid-word once the stat columns below squeeze this column
+   narrow), never the intentional stacking itself, which is just block-level
+   divs and unaffected by white-space either way. table-wrap's overflow-x is
+   the actual fix for the squeeze (see the frozen-column block below) - this
+   broad rule only still matters for the few #tab-startsit cells that
+   genuinely want to wrap (changesTable's player-name cells). */
 #tab-startsit td { white-space: normal; }
 
 /* ...but the lineup tables' one-line stat columns (ITT/Proj/3wk/2wk/1wk/Szn
-   Avg/FP Rank/Weather - ".stat-col", see docs/js/startsit.js) are exactly
-   the columns that SHOULD force the table wider than the screen on mobile,
-   so .table-wrap's overflow-x scrolls to reveal them instead of every one
-   of them getting squeezed into an unreadable wrapped mess to stay on
-   screen - the Player cell above is the only column meant to reflow. */
-#tab-startsit td.stat-col { white-space: nowrap; }
+   Avg/FP Rank/Weather - ".stat-col") and the Slot/Player columns
+   (".slot-col"/".player-td", see docs/js/startsit.js) are exactly the
+   columns that SHOULD force the table wider than the screen on mobile
+   rather than getting squeezed into an unreadable wrapped mess - Opp (still
+   ".desktop-col", folded into the Player cell's own mobile-line) is the
+   only column still meant to disappear rather than scroll. */
+#tab-startsit td.stat-col, #tab-startsit td.player-td { white-space: nowrap; }
+
+/* Slot+Player stay frozen in place while the stat columns scroll
+   underneath, same frozen-first-column pattern as the Rest-of-season grid
+   below (.ros-name) - separate borders again, since sticky cells are
+   unreliable under the site-wide collapsed-border default in every major
+   engine. Player's left offset is the Slot column's own MEASURED width
+   (--startsit-slot-w, set by docs/js/startsit.js after render, the same
+   "publish the real DOM as a CSS var" approach app.js's --sticky-top uses)
+   rather than a guessed pixel value - slot labels are Bench/IR/FLEX/QB/etc,
+   not all the same width. */
+#tab-startsit .lineup-table { border-collapse: separate; border-spacing: 0; }
+#tab-startsit .lineup-table .slot-col,
+#tab-startsit .lineup-table .player-td {
+  position: sticky;
+  z-index: 1;
+  background: var(--card);
+}
+#tab-startsit .lineup-table .slot-col { left: 0; }
+#tab-startsit .lineup-table .player-td { left: var(--startsit-slot-w, 64px); border-right: 1px solid var(--border); }
+/* The totals row's Slot+Player cells are one merged colspan=2 cell instead
+   of two - still needs the same freeze plus its own tinted background (see
+   the site-wide .totals-row rule) since the plain sticky background above
+   would otherwise paint over that tint for just these two columns. */
+#tab-startsit .lineup-table .totals-row .slot-col {
+  border-right: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+/* Same reasoning for a streamed row's own amber tint (see .streamed-row) -
+   without this the FA badge inside the Player cell would still show, just
+   floating on a plain --card background instead of the tinted row the rest
+   of the table row gets. */
+#tab-startsit .lineup-table .streamed-row .slot-col,
+#tab-startsit .lineup-table .streamed-row .player-td {
+  background: color-mix(in srgb, var(--amber-500) 14%, transparent);
+}
 
 /* The Rest-of-season grid needs more room than the site-wide 1100px tabpanel
    cap allows once every remaining week gets its own column - widen just this

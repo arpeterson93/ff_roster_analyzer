@@ -43,24 +43,26 @@ function fmtPts(v) {
 // only when viewing that week's lineup rather than as a column of dashes for
 // every other week.
 const headerRow = (isCurrentWeek) => `<tr>
-    <th>Slot</th><th>Player</th><th class="desktop-col">Opp</th>
-    <th class="stat-col" title="Implied Team Total">ITT</th><th class="stat-col">Proj</th>
+    <th class="slot-col">Slot</th><th class="player-td">Player</th><th class="desktop-col">Opp</th>
+    ${isCurrentWeek ? `<th class="stat-col" title="FantasyPros weekly positional rank">FP Rank</th>` : ""}
+    <th class="stat-col">Proj</th>
+    <th class="stat-col" title="Fantasy points per game played this season (byes/missed games excluded)">Szn Avg</th>
     <th class="stat-col" title="Fantasy points 3 weeks ago (byes/missed games excluded)">3wk</th>
     <th class="stat-col" title="Fantasy points 2 weeks ago (byes/missed games excluded)">2wk</th>
     <th class="stat-col" title="Fantasy points 1 week ago (byes/missed games excluded)">1wk</th>
-    <th class="stat-col" title="Fantasy points per game played this season (byes/missed games excluded)">Szn Avg</th>
-    ${isCurrentWeek ? `<th class="stat-col" title="FantasyPros weekly positional rank">FP Rank</th>` : ""}
+    <th class="stat-col" title="Implied Team Total">ITT</th>
     ${isCurrentWeek ? `<th class="stat-col">Weather</th>` : ""}
   </tr>`;
 
 function totalsRow(label, total, isCurrentWeek) {
   return `<tr class="totals-row">
-    <td colspan="2">${label}</td>
+    <td colspan="2" class="slot-col">${label}</td>
     <td class="desktop-col"></td>
-    <td class="stat-col"></td>
+    ${isCurrentWeek ? `<td class="stat-col"></td>` : ""}
     <td class="stat-col"><strong>${fmt(total, 1)}</strong></td>
     <td class="stat-col"></td><td class="stat-col"></td><td class="stat-col"></td><td class="stat-col"></td>
-    ${isCurrentWeek ? `<td class="stat-col"></td><td class="stat-col"></td>` : ""}
+    <td class="stat-col"></td>
+    ${isCurrentWeek ? `<td class="stat-col"></td>` : ""}
   </tr>`;
 }
 
@@ -72,7 +74,7 @@ function totalsRow(label, total, isCurrentWeek) {
 // distinct from every other row on the page.
 function playerRow(p, week, currentWeek, slotLabel, isStreamed) {
   const weekEntry = (p.weekly || []).find((w) => w.week === week) || {};
-  const slotCell = slotLabel !== undefined ? `<td class="muted small">${slotLabel}</td>` : "";
+  const slotCell = slotLabel !== undefined ? `<td class="muted small slot-col">${slotLabel}</td>` : "";
   const kickoff = formatKickoff(weekEntry.kickoff);
   const oppAttrs = `data-opp-cell data-team="${escapeHtml(weekEntry.opponent || "")}" data-pos="${p.position}"`;
   const proj = projValueFor(p, week, currentWeek);
@@ -85,7 +87,7 @@ function playerRow(p, week, currentWeek, slotLabel, isStreamed) {
   const streamBadge = isStreamed ? `<span class="pill small stream-badge" title="Your rostered starter is on bye - this is the best free agent available that week instead">FA</span>` : "";
   return `<tr data-player-id="${p.id}" class="clickable-row ${isStreamed ? "streamed-row" : ""}">
     ${slotCell}
-    <td>
+    <td class="player-td">
       <div class="player-cell">
         ${playerPhotoHtml(p)}
         <div>
@@ -99,13 +101,13 @@ function playerRow(p, week, currentWeek, slotLabel, isStreamed) {
       ${kickoff ? `<div class="muted small row-meta">${kickoff}</div>` : ""}
       <div>${opponentCellHtml(weekEntry)}</div>
     </td>
-    <td class="stat-col">${impliedTotalCellHtml(p, weekEntry)}</td>
+    ${isCurrentWeek ? `<td class="stat-col">${p.fp_week_pos_rank_label ?? "–"}</td>` : ""}
     <td class="stat-col"><strong>${fmt(proj, 1)}</strong></td>
+    <td class="stat-col muted">${fmtPts(seasonAvg)}</td>
     <td class="stat-col muted">${fmtPts(pointsWeeksAgo(p, 3, currentWeek))}</td>
     <td class="stat-col muted">${fmtPts(pointsWeeksAgo(p, 2, currentWeek))}</td>
     <td class="stat-col muted">${fmtPts(pointsWeeksAgo(p, 1, currentWeek))}</td>
-    <td class="stat-col muted">${fmtPts(seasonAvg)}</td>
-    ${isCurrentWeek ? `<td class="stat-col">${p.fp_week_pos_rank_label ?? "–"}</td>` : ""}
+    <td class="stat-col">${impliedTotalCellHtml(p, weekEntry)}</td>
     ${isCurrentWeek ? `<td class="stat-col">${weatherCellHtml(weekEntry)}</td>` : ""}
   </tr>`;
 }
@@ -142,22 +144,49 @@ function lineupSection(roster, week, lineupWeek, currentWeek, allPlayersById) {
   const isCurrentWeek = week === currentWeek;
   const thead = `<thead>${headerRow(isCurrentWeek)}</thead>`;
   return `
-    <div class="table-wrap">
-      <table>
+    <div class="table-wrap lineup-scroll">
+      <table class="lineup-table">
         ${thead}
         <tbody>${rows}</tbody>
         <tfoot>${totalsRow("Starters total", ourTotal, isCurrentWeek)}</tfoot>
       </table>
     </div>
     <h3>Bench</h3>
-    <div class="table-wrap">
-      <table>
+    <div class="table-wrap lineup-scroll">
+      <table class="lineup-table">
         ${thead}
         <tbody>${benchRows}</tbody>
         <tfoot>${totalsRow("Bench total", benchTotal, isCurrentWeek)}</tfoot>
       </table>
     </div>
   `;
+}
+
+// Slot labels are Bench/IR/FLEX/QB/etc - not all the same width - so
+// Player's sticky offset (below) reads the Slot column's own REAL rendered
+// width via this CSS var instead of guessing a pixel value that could drift
+// out of sync with whatever font/padding renders it. Same "measure the real
+// DOM, publish it as a CSS var" approach as app.js's --sticky-top.
+function syncSlotColumnWidth(container) {
+  const th = container.querySelector(".lineup-table th.slot-col");
+  if (th) container.style.setProperty("--startsit-slot-w", `${th.getBoundingClientRect().width}px`);
+}
+
+// Lets the Starters and Bench tables' independent horizontal scrollbars
+// (".lineup-scroll", each its own .table-wrap) track each other, so
+// scrolling either one to see the stat columns scrolls both - otherwise
+// comparing a starter against a bench player means re-scrolling twice.
+// Self-terminating without a re-entrancy guard: setting scrollLeft to a
+// value it's already at doesn't fire another native "scroll" event, so the
+// mirrored update on the other element doesn't bounce back.
+function syncHorizontalScroll(elements) {
+  elements.forEach((el) => {
+    el.addEventListener("scroll", () => {
+      elements.forEach((other) => {
+        if (other !== el && other.scrollLeft !== el.scrollLeft) other.scrollLeft = el.scrollLeft;
+      });
+    });
+  });
 }
 
 // Full-cell color fill (not a pill) with the opponent centered above its
@@ -272,6 +301,8 @@ export function renderStartSit(container, data, slug) {
       draw();
     });
     wireRowClicks(container, data);
+    syncSlotColumnWidth(container);
+    syncHorizontalScroll(Array.from(container.querySelectorAll(".lineup-scroll")));
   }
 
   draw();

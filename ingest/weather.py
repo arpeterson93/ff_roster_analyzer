@@ -48,6 +48,16 @@ STADIUM_COORDS: dict[str, tuple[float, float]] = {
     "NYC01": (40.8135, -74.0745),  # MetLife Stadium, East Rutherford
     "KAN00": (39.0489, -94.4839),  # GEHA Field at Arrowhead Stadium, Kansas City
     "MEL00": (-37.8199, 144.9834),  # Melbourne Cricket Ground (neutral site)
+    "BUF00": (42.7738, -78.7870),  # Highmark Stadium (New Era Field), Orchard Park
+    "ATL97": (33.7554, -84.4008),  # Mercedes-Benz Stadium, Atlanta (retractable)
+    "CHI98": (41.8623, -87.6167),  # Soldier Field, Chicago
+    "BAL00": (39.2780, -76.6227),  # M&T Bank Stadium, Baltimore
+    "BOS00": (42.0909, -71.2643),  # Gillette Stadium, Foxborough
+    "TAM00": (27.9759, -82.5033),  # Raymond James Stadium, Tampa
+    "DEN00": (39.7439, -105.0201),  # Empower Field at Mile High, Denver
+    "PHO00": (33.5276, -112.2626),  # State Farm Stadium, Glendale (retractable)
+    "DAL00": (32.7473, -97.0945),  # AT&T Stadium, Arlington (retractable)
+    "SFO01": (37.4030, -121.9700),  # Levi's Stadium, Santa Clara
 }
 
 # A permanently closed roof - no forecast is ever meaningful there. A
