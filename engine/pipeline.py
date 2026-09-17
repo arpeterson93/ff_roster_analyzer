@@ -150,10 +150,10 @@ def _positional_ranks_from_overall(players: list[dict]) -> None:
 
 def _faab_week_override(current_week: int, week_started: int | None) -> int:
     """FAAB gets its OWN week number, one ahead of ESPN's real current_week -
-    but ONLY once current_week's own games have actually started (per the
-    schedule's earliest-game-day per week - see ingest/nfl_data.py's
-    week_for_date - not ESPN's scoringPeriodId, which doesn't flip until the
-    whole week is over). Deliberately NOT current_week + 1 unconditionally:
+    but ONLY once current_week's own games have actually KICKED OFF (the
+    earliest real kickoff instant that week - see ingest/nfl_data.py's
+    week_for_kickoff - not ESPN's scoringPeriodId, which doesn't flip until
+    the whole week is over). Deliberately NOT current_week + 1 unconditionally:
     once ESPN's own current_week catches up to what this already bumped to,
     it correctly stops advancing further until THAT week's games start in
     turn. State machine: current_week=1 mid-week -> returns 2; ESPN then
@@ -1433,7 +1433,18 @@ def run_league(cfg: dict) -> dict:
         "settings_overrides_applied": settings_overrides,
     }
 
-    faab_week_started = nd.week_for_date(datetime.now(timezone.utc).date(), schedules_current, season)
+    # Gated on the week's actual KICKOFF instant, not just whether today's
+    # calendar date has reached that week's first game day (see
+    # ingest/nfl_data.py's week_for_kickoff vs. week_for_date) - an earlier
+    # date-only version compared UTC's "today" against nflverse's Eastern-
+    # dated gameday, which rolled over up to ~5 hours early every evening
+    # (UTC crosses midnight at 7-8pm Eastern) and could fire
+    # _faab_week_override before that day's game had even kicked off, let
+    # alone the calendar day it's on. See the conversation this was built
+    # from (a real prod case: FAAB showed week 3 while it was still
+    # Wednesday evening Central, a full day before week 2's Thursday
+    # opener).
+    faab_week_started = nd.week_for_kickoff(datetime.now(timezone.utc), schedules_current, season)
     faab_current_week = _faab_week_override(current_week, faab_week_started)
     try:
         faab_estimates_out = _compute_faab_estimates(cfg, client, players_out, season, faab_current_week, team_rosters, fa_values_out)

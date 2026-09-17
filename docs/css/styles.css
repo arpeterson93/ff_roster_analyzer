@@ -396,41 +396,85 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 .stream-badge { background: var(--amber-500); }
 
 .faab-dist { margin: 10px 0; }
-.faab-dist-track { position: relative; height: 10px; background: var(--border); border-radius: 5px; }
-.faab-dist-iqr { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 5px; }
-.faab-dist-marker { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--accent); transform: translateX(-1px); }
-.faab-dist-labels { display: flex; justify-content: space-between; font-size: 11px; color: var(--ink-500); margin-top: 4px; font-variant-numeric: tabular-nums; }
+.faab-dist-caption { text-align: center; }
 
-/* conditional_price_median - a second accent-colored marker alongside the
-   solid conditional_price_mean one (.faab-dist-marker), distinguished by a
-   dashed rather than solid fill so both stay readable on the same track
-   without introducing a whole new color token. */
-.faab-dist-marker-median { background: repeating-linear-gradient(to bottom, var(--accent) 0 3px, transparent 3px 6px); }
-/* Confidence-to-win slider - a further marker (blue, distinct from both
-   conditional_price markers) on the SAME track, moved live by the range
-   input below it rather than a separately-scaled widget. */
-.faab-dist-marker-confidence { background: var(--blue-500); }
-/* Per-price-comp click-to-expand distribution (see docs/js/playermodal.js's
-   priceCompDistributionHtml) - every real WINNING price tied to that comp's
-   own event, binned and rendered as a smoothed sparkline (height = how many
-   real prices landed in that bin) rather than individual dots or a flat
-   color-intensity heat strip - a busy event (won in 20+ pooled leagues)
-   used to render as a wall of overlapping dots with no way to see where
-   the real cluster was, and height reads far more precisely than color
-   saturation for the same data. Taller than the plain .faab-dist-track
-   default (10px) specifically to give the curve room to show real shape. */
-.faab-heat-track { height: 36px; overflow: hidden; }
-.faab-heat-spark { display: block; width: 100%; height: 100%; }
-.faab-heat-area { fill: color-mix(in srgb, var(--accent) 22%, transparent); stroke: none; }
-.faab-heat-line { fill: none; stroke: var(--accent); stroke-width: 1.5px; }
-/* The comp's own value and (generalized to whichever site league is
-   currently loaded) the viewer's own league, as thin marker ticks OVER the
-   sparkline - identity/highlight, not part of the density encoding, so
-   they stay findable regardless of the curve's own height there. */
-.faab-dist-marker-self { z-index: 2; }
+/* Shared 0-to-axisMax plot area for both bid-distribution charts (the
+   per-comp dot plot and the aggregate confidence histogram - see
+   docs/js/playermodal.js's priceCompDistributionHtml/faabEstimateSection).
+   Replaced an earlier smoothed-sparkline design: a curve through as few as
+   2-3 real prices implied a shape with no data behind it, and its axis (0
+   to that comp's own max) gave no absolute sense of where bids actually
+   clustered - see the conversation this was built from. Three vertical
+   bands, top to bottom: the median label (0-12px), the plot itself
+   (12px from top to 22px from bottom - dots, bars, gridlines, IQR band),
+   then the mean triangle + label (22px from bottom to the bottom edge). The
+   plot band's own top/bottom offsets are deliberately shared by every
+   marker/gridline below so nothing drifts out of alignment between the two
+   chart types.
+
+   .faab-chart-inset carries a real 30px left/right margin, NOT padding on
+   .faab-chart-track itself - a positioned ancestor's padding does not
+   shrink the percentage-positioning domain for its absolutely-positioned
+   descendants (left:0%/100% still lands on the padding edge, ignoring the
+   padding), so a dot or label sitting at the very edge of the 0-100%
+   data domain would render half-clipped against the track's own edge
+   without this extra inset layer - see the conversation this was built
+   from (a real "0%" gridline label, and a median tag landing at an
+   extreme, both got clipped before this). */
+.faab-chart-track { position: relative; height: 66px; margin: 8px 0 2px; }
+.faab-chart-inset { position: absolute; left: 30px; right: 30px; top: 0; bottom: 0; }
+.faab-gridline { position: absolute; top: 12px; bottom: 22px; width: 1px; background: var(--border); }
+.faab-axis-ticks { position: relative; height: 14px; margin-top: 2px; }
+.faab-axis-tick { position: absolute; transform: translateX(-50%); font-size: 10.5px; color: var(--ink-500); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* Median (solid line, always shown) and mean (triangle, always shown) - see
+   the conversation this was built from: both are worth keeping side by
+   side rather than picking one. The line stops at the plot band's own top
+   (12px), well clear of .faab-median-tag pinned to true top:0, so the two
+   never visually overlap regardless of label text width. */
+.faab-median-line { position: absolute; top: 12px; bottom: 22px; width: 2px; background: var(--ink-700); transform: translateX(-1px); }
+.faab-median-tag { position: absolute; top: 0; transform: translateX(-50%); font-size: 10.5px; font-weight: 600; color: var(--ink-700); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.faab-mean-tick { position: absolute; bottom: 22px; width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 6px solid var(--amber-500); transform: translateX(-4px); }
+.faab-mean-tag { position: absolute; bottom: 0; transform: translateX(-50%); font-size: 10.5px; font-weight: 600; color: var(--amber-500); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* Per-comp dot plot: every real winning price is its own dot (sized in real
+   px, not SVG viewBox units, so it stays a circle regardless of the
+   track's own width), positioned/sized by docs/js/playermodal.js's
+   clusterBidValues + priceCompDistributionHtml. Nearby real prices cluster
+   into ONE dot sized by count rather than stacking vertically or an "xN"
+   text tag - both got busy fast with several duplicate/near-duplicate
+   bids, so count is shown ONLY via the dot's own size. */
+.faab-iqr-band { position: absolute; top: 12px; bottom: 22px; background: color-mix(in srgb, var(--accent) 16%, transparent); border-radius: 3px; }
+.faab-dot { position: absolute; bottom: 22px; transform: translate(-50%, 50%); border-radius: 50%; background: var(--accent); opacity: 0.9; }
+/* A real winning price more than 1.5x the IQR past the 75th percentile
+   among this SAME event's own other winning prices - one league's bidder
+   paid well beyond what everyone else did for the identical player/week. */
+.faab-dot-outlier { background: var(--red-600); }
+/* This comp's own value, and (generalized to whichever site league is
+   currently loaded) the viewer's own league - identity/highlight ticks,
+   distinct from the density dots so "what happened in MY league" stays
+   findable regardless of dot size there. */
+.faab-tick-marker { position: absolute; top: 12px; bottom: 22px; width: 2px; background: var(--blue-500); transform: translateX(-1px); z-index: 2; }
+.faab-tick-marker-self { z-index: 2; }
 /* A ring, not a fill swap, so it still reads when the same marker is also
-   -self (see the "this comp, your league" combined-label case above). */
-.faab-dist-marker-mine { box-shadow: 0 0 0 2px var(--amber-500); z-index: 3; }
+   -self (see the "this comp, your league" combined-label case in
+   priceCompDistributionHtml). */
+.faab-tick-marker-mine { box-shadow: 0 0 0 2px var(--amber-500); z-index: 3; }
+
+/* Aggregate confidence bar: every real winning price behind every price
+   comp, pooled (price_confidence_samples) and binned by WEIGHT into a plain
+   histogram - no smoothing, bin width picked as a "nice" round number
+   (niceStep) rather than an n-scaled count - see faabEstimateSection's
+   distHtml. This is the large-n counterpart to the per-comp dot plot above,
+   sharing the same .faab-chart-track band layout and median/mean styling
+   so the two read as one visual language. */
+.faab-hist-bars { position: absolute; left: 0; right: 0; top: 12px; bottom: 22px; display: flex; align-items: flex-end; gap: 1px; }
+.faab-hist-bar { flex: 1; background: var(--accent); opacity: 0.85; border-radius: 2px 2px 0 0; min-height: 1px; }
+/* Confidence-to-win slider marker - blue, distinct from the median/mean
+   colors above, moved live by the range input below rather than a
+   separately-scaled widget. */
+.faab-confidence-marker { position: absolute; top: 12px; bottom: 22px; width: 2px; background: var(--blue-500); transform: translateX(-1px); z-index: 2; }
+
 .faab-confidence { margin-top: 12px; }
 .faab-confidence-row { display: flex; justify-content: space-between; align-items: baseline; font-size: 12.5px; margin-bottom: 4px; }
 .faab-confidence-bid { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--blue-500); }
@@ -694,10 +738,14 @@ details[open] summary { margin-bottom: 8px; }
 }
 
 /* Compact stat summary at the top of the player modal - a grid of tiles
-   instead of a narrow label/value column, so it uses the modal's full width. */
+   instead of a narrow label/value column, so it uses the modal's full width.
+   max-content (not 1fr) so the tiles size to their own short contents rather
+   than stretching to split the modal's full width between them on a wide
+   screen - see the conversation this was built from (only 2 tiles here, so
+   1fr made each one absurdly wide with a couple of short lines in it). */
 .player-stat-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, max-content));
   gap: 10px;
   margin: 12px 0;
 }
@@ -715,10 +763,12 @@ details[open] summary { margin-bottom: 8px; }
    two (FAAB + Interest). Only 2 cards now, not 3 (Similar-usage avg dropped,
    mean/median merged into one card) - minmax lowered from 160px so the two
    deliberately fit on one line on a narrow/mobile viewport where 3 cards
-   never could. */
+   never could. max-content (not 1fr) - same reasoning as .player-stat-grid
+   above - so the two cards size to their own contents instead of stretching
+   to fill a wide screen's full row width. */
 .faab-method-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, max-content));
   gap: 10px;
   margin: 12px 0;
 }

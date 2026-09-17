@@ -398,6 +398,70 @@ function weightedPercentileJs(samples, pct) {
   return ordered[ordered.length - 1][0];
 }
 
+// Shared math/axis helpers for the two bid-distribution charts below (the
+// per-comp dot plot and the aggregate confidence histogram) - see the
+// conversation this was built from for why these replaced the old smoothed
+// sparkline: a handful of real winning prices smoothed into a curve implied
+// a shape with no data behind it, and the curve's own axis (0 to that
+// comp's own max) gave no absolute sense of where the bulk of real bids
+// actually sat.
+function median(values) {
+  const s = values.slice().sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+function meanOf(values) {
+  return values.reduce((a, b) => a + b, 0) / values.length;
+}
+function percentileOf(sorted, p) {
+  const idx = (p / 100) * (sorted.length - 1);
+  const lo = Math.floor(idx), hi = Math.ceil(idx);
+  return lo === hi ? sorted[lo] : sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
+}
+// "Nice" round step (1/2/2.5/5/10 x 10^n) targeting ~targetCount divisions
+// of `rough` - used for both chart's axis ticks and the histogram's bin
+// width, so both land on numbers a person would actually pick by hand
+// rather than an arbitrary n-based split.
+function niceStep(rough) {
+  if (rough <= 0) return 0.01;
+  const mag = Math.pow(10, Math.floor(Math.log10(rough)));
+  const norm = rough / mag;
+  const niceNorm = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 2.5 ? 2.5 : norm <= 5 ? 5 : 10;
+  return niceNorm * mag;
+}
+// Rounds UP to the nearest nice step so the axis itself tops out at a round
+// number (not an arbitrary value like "19.3%") while still clearing the
+// highest real value with a little headroom.
+function niceAxisMax(rawMax, targetCount) {
+  const step = niceStep(rawMax / targetCount);
+  return Math.ceil(rawMax / step) * step;
+}
+function niceTicksJs(axisMax, targetCount) {
+  const step = niceStep(axisMax / targetCount);
+  const ticks = [];
+  for (let t = 0; t <= axisMax + 1e-9; t += step) ticks.push(t);
+  return ticks;
+}
+// Nearby real prices (within `tolerance` of the axis's own domain, ~1/60th
+// of it) collapse into ONE cluster, sized by how many real bids landed
+// there - the non-stacking answer to duplicate/near-duplicate bids (see the
+// conversation this was built from: piling dots vertically got busy fast,
+// and a text "xN" badge got dense with many duplicates - so the count is
+// shown ONLY as the dot's own size, nothing else).
+function clusterBidValues(sortedValues, tolerance) {
+  const clusters = [];
+  sortedValues.forEach((v) => {
+    const last = clusters[clusters.length - 1];
+    if (last && v - last.avg < tolerance) {
+      last.values.push(v);
+      last.avg = meanOf(last.values);
+    } else {
+      clusters.push({ values: [v], avg: v });
+    }
+  });
+  return clusters;
+}
+
 // Rank/recency-average pairs stacked in one cell (see styles.css's
 // .comp-rank-cell) rather than four separate columns - a comp table with
 // player/when/signal/bid/%/pts/snap/rank/recent/flags would run to 9-10
@@ -507,83 +571,77 @@ function faabEstimateSection(player, data) {
   // in %-of-budget units so they're meaningfully comparable across leagues
   // with different budgets, each tagged with its own source_league_id.
   //
-  // Rendered as a smoothed SPARKLINE, not individual dots or a flat heat
-  // strip - a busy event (won in 20+ pooled leagues) used to render as a
-  // wall of overlapping dots with no way to see where the real cluster was,
-  // and an intermediate flat-color-intensity heat strip (see the
-  // conversation this was built from) was hard to actually read at a
-  // glance - height differences are perceived far more precisely than
-  // color-saturation differences for the same underlying data. Bin count
-  // scales with how many real prices there are (floor of 6 so a sparse
-  // event still reads as a shape, cap of 20 so a single bin never
-  // represents a wide span of the axis); each bin's count becomes the
-  // sparkline's height at that bin's own center, with a quadratic-Bezier-
-  // through-midpoints smoothing (the standard lightweight sparkline
-  // technique - curves through the data without full spline math) instead
-  // of jagged straight segments between bins. The comp's own value and
-  // (generalized to whichever site league is currently loaded, via
-  // data.meta.league_id - not hardcoded to any one league) the viewer's own
-  // league are picked out as thin marker ticks OVER the sparkline, not
-  // folded into the binning, so "what happened in MY league" stays visible
-  // at a glance regardless of the curve's own height there.
+  // Rendered as a DOT PLOT, not a smoothed sparkline - a curve through as
+  // few as 2-3 real prices implied a shape with no data behind it (see the
+  // conversation this was built from). Every real price is its own dot;
+  // dots within a small tolerance of each other cluster into ONE dot sized
+  // by count (clusterBidValues) rather than stacking vertically or getting
+  // an "xN" text tag - both were tried and got busy fast with several
+  // duplicate/near-duplicate bids. Axis runs 0 to niceAxisMax (a round
+  // number a bit past the highest real price), with tick labels, so "where
+  // the bulk sits" reads in absolute terms rather than just relative
+  // position between two comp-specific endpoints. Median (solid line) and
+  // mean (triangle) both always shown - median-line has a gap below its own
+  // label so the two never visually overlap. A dot beyond 1.5x the
+  // IQR past p75 renders in the "outlier" color - a real winning price far
+  // above the rest of this SAME real-world event, i.e. one league's bidder
+  // paid well beyond what everyone else did for the identical player/week.
+  // Plain HTML/CSS throughout (no SVG) - a circle sized in real px stays a
+  // circle regardless of the track's own width, where an SVG viewBox
+  // stretched non-uniformly to fill a wide container would render every
+  // dot as an ellipse.
   function priceCompDistributionHtml(c) {
-    const values = c.bid_distribution || [];
-    const max = Math.max(...values.map((v) => v.value), 0.001);
-    const binCount = Math.min(20, Math.max(6, values.length));
-    const binWidth = max / binCount;
-    const counts = new Array(binCount).fill(0);
-    values.forEach((v) => {
-      counts[Math.min(binCount - 1, Math.floor(v.value / binWidth))] += 1;
-    });
-    const maxCount = Math.max(...counts, 1);
+    const raw = (c.bid_distribution || []).map((v) => v.value);
+    if (!raw.length) return "";
+    const sorted = raw.slice().sort((a, b) => a - b);
+    const axisMax = niceAxisMax(sorted[sorted.length - 1] * 1.15, 4);
+    const xPct = (v) => (v / axisMax) * 100;
+    const p25 = percentileOf(sorted, 25), p75 = percentileOf(sorted, 75);
+    const med = median(raw), avg = meanOf(raw);
+    const iqr = p75 - p25;
 
-    // Fixed 100x(svgH) unit viewBox - x maps directly to a 0-100% axis
-    // position (matching the marker ticks' own left:X% positioning below),
-    // y is inverted (SVG grows downward) with peakH of headroom so the
-    // tallest bin's own peak doesn't touch the top edge.
-    const svgH = 36, peakH = 30;
-    const points = counts.map((count, i) => [((i + 0.5) / binCount) * 100, svgH - (count / maxCount) * peakH]);
-    let linePath = `M${points[0][0].toFixed(2)},${points[0][1].toFixed(2)}`;
-    for (let i = 0; i < points.length - 1; i++) {
-      const [x0, y0] = points[i];
-      const [x1, y1] = points[i + 1];
-      linePath += ` Q${x0.toFixed(2)},${y0.toFixed(2)} ${((x0 + x1) / 2).toFixed(2)},${((y0 + y1) / 2).toFixed(2)}`;
-    }
-    linePath += ` L${points[points.length - 1][0].toFixed(2)},${points[points.length - 1][1].toFixed(2)}`;
-    const areaPath = `M${points[0][0].toFixed(2)},${svgH} ${linePath.slice(1)} L${points[points.length - 1][0].toFixed(2)},${svgH} Z`;
-    const hitRects = counts
-      .map((count, i) => {
-        const lo = fmt(i * binWidth * 100, 1);
-        const hi = fmt((i + 1) * binWidth * 100, 1);
-        const title = count ? `${count} winning bid${count === 1 ? "" : "s"} between ${lo}% and ${hi}%` : `no winning bids between ${lo}% and ${hi}%`;
-        return `<rect x="${((i / binCount) * 100).toFixed(2)}" y="0" width="${(100 / binCount).toFixed(2)}" height="${svgH}" fill="transparent"><title>${title}</title></rect>`;
+    const clusters = clusterBidValues(sorted, axisMax / 30);
+    const baseR = 4, maxR = 9;
+    const dots = clusters
+      .map((cl) => {
+        const r = Math.min(maxR, baseR * Math.sqrt(cl.values.length));
+        const isOutlier = iqr > 1e-6 && cl.avg > p75 + iqr * 1.5;
+        const title = cl.values.length > 1 ? `${cl.values.length} winning bids near ${fmt(cl.avg * 100, 1)}%` : `${fmt(cl.avg * 100, 1)}%`;
+        return `<div class="faab-dot${isOutlier ? " faab-dot-outlier" : ""}" style="left:${xPct(cl.avg).toFixed(2)}%; width:${(r * 2).toFixed(1)}px; height:${(r * 2).toFixed(1)}px;" title="${title}"></div>`;
       })
       .join("");
-    const sparkline = `
-      <svg class="faab-heat-spark" viewBox="0 0 100 ${svgH}" preserveAspectRatio="none">
-        <path d="${areaPath}" class="faab-heat-area"></path>
-        <path d="${linePath}" class="faab-heat-line" vector-effect="non-scaling-stroke"></path>
-        ${hitRects}
-      </svg>
-    `;
-    const markers = values
+
+    const selfMineMarkers = (c.bid_distribution || [])
       .filter((v) => Math.abs(v.value - c.pct_of_remaining_budget) < 1e-9 || (data.meta.league_id !== null && data.meta.league_id !== undefined && v.source_league_id === data.meta.league_id))
       .map((v) => {
         const isSelf = Math.abs(v.value - c.pct_of_remaining_budget) < 1e-9;
         const isMine = data.meta.league_id !== null && data.meta.league_id !== undefined && v.source_league_id === data.meta.league_id;
         const label = isSelf && isMine ? " (this comp, your league)" : isSelf ? " (this comp)" : " (your league)";
-        const cls = ["faab-dist-marker", isSelf ? "faab-dist-marker-self" : "", isMine ? "faab-dist-marker-mine" : ""].filter(Boolean).join(" ");
-        return `<div class="${cls}" style="left:${(v.value / max) * 100}%" title="${fmt(v.value * 100, 1)}%${label}"></div>`;
+        const cls = ["faab-tick-marker", isSelf ? "faab-tick-marker-self" : "", isMine ? "faab-tick-marker-mine" : ""].filter(Boolean).join(" ");
+        return `<div class="${cls}" style="left:${xPct(v.value).toFixed(2)}%" title="${fmt(v.value * 100, 1)}%${label}"></div>`;
       })
       .join("");
+
+    const ticks = niceTicksJs(axisMax, 4);
+    const gridlines = ticks.map((t) => `<div class="faab-gridline" style="left:${xPct(t).toFixed(2)}%"></div>`).join("");
+    const tickLabels = ticks.map((t) => `<span class="faab-axis-tick" style="left:${xPct(t).toFixed(2)}%">${fmt(t * 100, 0)}%</span>`).join("");
+
     return `
       <div class="faab-dist">
-        <div class="faab-dist-track faab-heat-track">${sparkline}${markers}</div>
-        <div class="faab-dist-labels">
-          <span>0%</span>
-          <span class="muted">${values.length} real winning bid${values.length === 1 ? "" : "s"} across every league that won this event</span>
-          <span>${fmt(max * 100, 1)}%</span>
+        <div class="faab-chart-track">
+          <div class="faab-chart-inset">
+            ${gridlines}
+            <div class="faab-iqr-band" style="left:${xPct(p25).toFixed(2)}%; width:${Math.max(0.5, xPct(p75) - xPct(p25)).toFixed(2)}%"></div>
+            ${dots}
+            ${selfMineMarkers}
+            <div class="faab-median-line" style="left:${xPct(med).toFixed(2)}%"></div>
+            <span class="faab-median-tag" style="left:${xPct(med).toFixed(2)}%">med ${fmt(med * 100, 1)}%</span>
+            <div class="faab-mean-tick" style="left:${xPct(avg).toFixed(2)}%"></div>
+            <span class="faab-mean-tag" style="left:${xPct(avg).toFixed(2)}%">avg ${fmt(avg * 100, 1)}%</span>
+          </div>
         </div>
+        <div class="faab-axis-ticks"><div class="faab-chart-inset">${tickLabels}</div></div>
+        <p class="muted small faab-dist-caption">${raw.length} winning bid${raw.length === 1 ? "" : "s"} across every league</p>
       </div>
     `;
   }
@@ -634,30 +692,64 @@ function faabEstimateSection(player, data) {
   const condPriceMean = (est.conditional_price || {}).comp_based_mean;
   const condPriceMedian = (est.conditional_price || {}).comp_based_median;
   const samples = est.price_confidence_samples || [];
+  // Same dot-plot-family visual language as priceCompDistributionHtml
+  // (median line + mean triangle, tick-labeled axis), but a HISTOGRAM here
+  // rather than dots - this pools every real winning price behind every
+  // price comp (via price_confidence_samples, not just the K comps dist
+  // above summarizes), often 20-50+ real prices, exactly the regime where a
+  // real bar shape earns its keep instead of individual dots. Binned by
+  // WEIGHT, not raw count - each sample's own k-NN weight, split across the
+  // real per-league wins it expands into (see price_confidence_samples'
+  // docstring) - so a heavily-contested real auction doesn't count for less
+  // just because more leagues happened to lose it. Bin width is a "nice"
+  // round number (niceStep), not just an n-scaled count, so the bars land
+  // on numbers a reader would pick by hand. condPriceMean/condPriceMedian
+  // (not a value recomputed from the samples here) drive the median/mean
+  // markers - the exact same two numbers the Comp-based method card above
+  // already shows, so this chart never contradicts them.
   const distHtml = dist
     ? (() => {
-        const span = Math.max(0.001, dist.max - dist.min);
-        const pct = (v) => Math.max(0, Math.min(100, ((v - dist.min) / span) * 100));
+        const sampleValues = samples.map(([v]) => v);
+        const axisMax = niceAxisMax(Math.max(dist.max, condPriceMean || 0, condPriceMedian || 0, ...sampleValues, 0.001) * 1.15, 5);
+        const xPct = (v) => Math.max(0, Math.min(100, (v / axisMax) * 100));
         const defaultConfidence = 80;
         const defaultBid = weightedPercentileJs(samples, defaultConfidence);
-        // A losing bid can never exceed its OWN auction's winning price, and
-        // every sample here comes from one of the same comps dist.min/max
-        // is built from - so this track's existing scale already safely
-        // bounds every possible confidence-slider position, no separate
-        // axis needed for the extra markers.
+
+        const ticks = niceTicksJs(axisMax, 5);
+        const gridlines = ticks.map((t) => `<div class="faab-gridline" style="left:${xPct(t).toFixed(2)}%"></div>`).join("");
+        const tickLabels = ticks.map((t) => `<span class="faab-axis-tick" style="left:${xPct(t).toFixed(2)}%">${fmt(t * 100, 0)}%</span>`).join("");
+
+        let bars = "";
+        if (samples.length) {
+          const binWidth = niceStep(axisMax / 10);
+          const binCount = Math.max(1, Math.round(axisMax / binWidth));
+          const binWeights = new Array(binCount).fill(0);
+          samples.forEach(([v, w]) => {
+            binWeights[Math.min(binCount - 1, Math.floor(v / binWidth))] += w;
+          });
+          const maxBinWeight = Math.max(...binWeights, 1e-9);
+          bars = binWeights
+            .map((w, i) => {
+              const lo = fmt(i * binWidth * 100, 0), hi = fmt((i + 1) * binWidth * 100, 0);
+              return `<div class="faab-hist-bar" style="height:${((w / maxBinWeight) * 100).toFixed(1)}%" title="${lo}%–${hi}%"></div>`;
+            })
+            .join("");
+        }
+
         return `
           <div class="faab-dist">
-            <div class="faab-dist-track">
-              <div class="faab-dist-iqr" style="left:${pct(dist.p25)}%; width:${pct(dist.p75) - pct(dist.p25)}%;"></div>
-              <div class="faab-dist-marker" style="left:${pct(condPriceMean)}%;" title="Price if contested (mean): ${fmt(condPriceMean * 100, 1)}%"></div>
-              <div class="faab-dist-marker faab-dist-marker-median" style="left:${pct(condPriceMedian)}%;" title="Price if contested (median): ${fmt(condPriceMedian * 100, 1)}%"></div>
-              ${samples.length ? `<div class="faab-dist-marker faab-dist-marker-confidence" data-confidence-marker style="left:${pct(defaultBid)}%;"></div>` : ""}
+            <div class="faab-chart-track" data-axis-max="${axisMax}">
+              <div class="faab-chart-inset">
+                ${gridlines}
+                <div class="faab-hist-bars">${bars}</div>
+                <div class="faab-median-line" style="left:${xPct(condPriceMedian).toFixed(2)}%"></div>
+                <span class="faab-median-tag" style="left:${xPct(condPriceMedian).toFixed(2)}%">med ${fmt(condPriceMedian * 100, 1)}%</span>
+                <div class="faab-mean-tick" style="left:${xPct(condPriceMean).toFixed(2)}%"></div>
+                <span class="faab-mean-tag" style="left:${xPct(condPriceMean).toFixed(2)}%">avg ${fmt(condPriceMean * 100, 1)}%</span>
+                ${samples.length ? `<div class="faab-confidence-marker" data-confidence-marker style="left:${xPct(defaultBid).toFixed(2)}%;"></div>` : ""}
+              </div>
             </div>
-            <div class="faab-dist-labels">
-              <span>${fmt(dist.min * 100, 1)}%</span>
-              <span class="muted">${fmt(dist.p25 * 100, 1)}%–${fmt(dist.p75 * 100, 1)}% middle half of winning bids</span>
-              <span>${fmt(dist.max * 100, 1)}%</span>
-            </div>
+            <div class="faab-axis-ticks"><div class="faab-chart-inset">${tickLabels}</div></div>
           </div>
           ${samples.length
             ? `
@@ -727,7 +819,7 @@ function faabEstimateSection(player, data) {
         <tbody>
           <tr>
             <td>${escapeHtml(player.name)}<div class="muted small">Week ${inputs.week}</div></td>
-            <td>${recentCellHtml(inputs.prior_week_had_stat_row ? inputs.prior_week_actual_points : null, inputs.trailing_2_3_avg_points, inputs.season_avg_points)}</td>
+            <td>${recentCellHtml(inputs.prior_week_had_stat_row ? inputs.prior_week_actual_points : null, inputs.had_trailing_2_3_avg_points ? inputs.trailing_2_3_avg_points : null, inputs.had_season_avg_points ? inputs.season_avg_points : null)}</td>
             <td>${usageCellHtml(inputs.position, inputs.snap_pct_prior_week, inputs.had_carry_share_prior_week ? inputs.carry_share_prior_week : null, inputs.had_target_share_prior_week ? inputs.target_share_prior_week : null)}</td>
             <td>${rankCellHtml(inputs.had_weekly_rank ? inputs.weekly_rank : null, inputs.had_ros_rank ? inputs.ros_rank : null)}</td>
             <td>${flagsCellHtml(inputs.own_injury_flag, inputs.teammate_position_injury_flag)}</td>
@@ -922,8 +1014,13 @@ function wireFaabConfidenceSlider(scopeEl, player, data) {
   const samples = est?.price_confidence_samples || [];
   const dist = est?.distribution;
   if (!dist) return;
-  const span = Math.max(0.001, dist.max - dist.min);
-  const pctPos = (v) => Math.max(0, Math.min(100, ((v - dist.min) / span) * 100));
+  // Same 0-to-axisMax domain the histogram itself was drawn against (see
+  // faabEstimateSection's distHtml) - stashed on the track element rather
+  // than recomputed here, so the slider's marker always matches whatever
+  // axis the bars actually rendered at.
+  const track = scopeEl.querySelector(".faab-chart-track[data-axis-max]");
+  const axisMax = track ? Number(track.dataset.axisMax) : Math.max(0.001, dist.max);
+  const pctPos = (v) => Math.max(0, Math.min(100, (v / axisMax) * 100));
   slider.addEventListener("input", () => {
     const confidence = Number(slider.value);
     const bid = weightedPercentileJs(samples, confidence);

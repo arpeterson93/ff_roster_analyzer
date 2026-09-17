@@ -241,7 +241,7 @@ def home_away_from_schedule(schedules_df: pl.DataFrame, season: int) -> dict[tup
     return is_home
 
 
-_EASTERN = ZoneInfo("America/New_York")
+EASTERN = ZoneInfo("America/New_York")
 _UTC = ZoneInfo("UTC")
 
 
@@ -260,7 +260,7 @@ def kickoff_utc_from_schedule(schedules_df: pl.DataFrame, season: int) -> dict[t
         if not gameday or not gametime:
             continue
         try:
-            local_dt = datetime.strptime(f"{gameday} {gametime}", "%Y-%m-%d %H:%M").replace(tzinfo=_EASTERN)
+            local_dt = datetime.strptime(f"{gameday} {gametime}", "%Y-%m-%d %H:%M").replace(tzinfo=EASTERN)
         except ValueError:
             continue
         iso = local_dt.astimezone(_UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -360,6 +360,39 @@ def week_for_date(target: date, schedules_df: pl.DataFrame, season: int) -> int 
         w = row["week"]
         if w not in week_start or d < week_start[w]:
             week_start[w] = d
+
+    result = None
+    for w, start in sorted(week_start.items()):
+        if start <= target:
+            result = w
+        else:
+            break
+    return result
+
+
+def week_for_kickoff(target: datetime, schedules_df: pl.DataFrame, season: int) -> int | None:
+    """Which REG-season week has actually KICKED OFF as of `target` (a
+    timezone-aware instant), by each week's earliest real kickoff moment -
+    not just whether the calendar date has reached that week's first game
+    DAY (see week_for_date above, which is date-only and can be hours off
+    from the real kickoff time, e.g. a Thursday game that doesn't start
+    until 8:15pm ET). Used by engine/pipeline.py's _faab_week_override to
+    decide whether the current week has genuinely started yet. None if
+    `target` is before the season's first kickoff."""
+    reg = schedules_df.filter(pl.col("season") == season, pl.col("game_type") == "REG")
+    week_start: dict[int, datetime] = {}
+    for row in reg.iter_rows(named=True):
+        gameday, gametime = row.get("gameday"), row.get("gametime")
+        if not gameday or not gametime:
+            continue
+        try:
+            local_dt = datetime.strptime(f"{gameday} {gametime}", "%Y-%m-%d %H:%M").replace(tzinfo=EASTERN)
+        except ValueError:
+            continue
+        kickoff = local_dt.astimezone(_UTC)
+        w = row["week"]
+        if w not in week_start or kickoff < week_start[w]:
+            week_start[w] = kickoff
 
     result = None
     for w, start in sorted(week_start.items()):

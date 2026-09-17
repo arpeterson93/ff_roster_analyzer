@@ -123,7 +123,7 @@ function columns(data, watched) {
         if (!est) return "–";
         if (est.below_relevance_threshold) return `<span class="muted" title="Not enough recent usage to model - see FAAB Lab tab">–</span>`;
         const pct = (est.bid_probability || {}).comp_based_median;
-        return `${fmt(pct * 100, 1)}%`;
+        return `${fmt(pct * 100, 0)}%`;
       },
     },
     ...(yourTeamId !== null

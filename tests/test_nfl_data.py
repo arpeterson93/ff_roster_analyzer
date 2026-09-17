@@ -1,8 +1,8 @@
-from datetime import date
+from datetime import date, datetime, timezone
 
 import polars as pl
 
-from ingest.nfl_data import game_context_from_schedule, kickoff_utc_from_schedule, week_for_date
+from ingest.nfl_data import game_context_from_schedule, kickoff_utc_from_schedule, week_for_date, week_for_kickoff
 
 _WEEK_SCHEDULE = pl.DataFrame(
     [
@@ -28,6 +28,33 @@ def test_week_for_date_before_the_season_starts_is_none():
 
 def test_week_for_date_after_the_last_known_week_clamps_to_it():
     assert week_for_date(date(2025, 12, 1), _WEEK_SCHEDULE, 2025) == 3
+
+
+_KICKOFF_WEEK_SCHEDULE = pl.DataFrame(
+    [
+        {"season": 2025, "game_type": "REG", "week": 1, "gameday": "2025-09-04", "gametime": "20:20", "home_team": "KC", "away_team": "BAL"},
+        {"season": 2025, "game_type": "REG", "week": 2, "gameday": "2025-09-11", "gametime": "20:15", "home_team": "KC", "away_team": "CIN"},
+    ]
+)
+
+
+def test_week_for_kickoff_stays_on_the_prior_week_until_real_kickoff():
+    # Week 2's calendar date has arrived, but its 20:15 ET kickoff hasn't -
+    # this is exactly the gap week_for_date can't see (it would already
+    # return week 2 off the calendar date alone). 20:00 ET = 00:00 UTC the
+    # next day (EDT, UTC-4).
+    before_kickoff = datetime(2025, 9, 12, 0, 0, tzinfo=timezone.utc)
+    assert week_for_kickoff(before_kickoff, _KICKOFF_WEEK_SCHEDULE, 2025) == 1
+
+
+def test_week_for_kickoff_advances_once_real_kickoff_passes():
+    # 20:15 ET = 00:15 UTC the next day (EDT, UTC-4).
+    after_kickoff = datetime(2025, 9, 12, 0, 16, tzinfo=timezone.utc)
+    assert week_for_kickoff(after_kickoff, _KICKOFF_WEEK_SCHEDULE, 2025) == 2
+
+
+def test_week_for_kickoff_before_the_season_starts_is_none():
+    assert week_for_kickoff(datetime(2025, 8, 1, tzinfo=timezone.utc), _KICKOFF_WEEK_SCHEDULE, 2025) is None
 
 
 def test_kickoff_converts_eastern_to_utc_for_both_teams():
