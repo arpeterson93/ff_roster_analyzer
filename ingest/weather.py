@@ -67,6 +67,35 @@ STADIUM_COORDS: dict[str, tuple[float, float]] = {
 _DOME_ROOFS = {"dome", "closed"}
 
 
+_SNOW_CONDITIONS = ("snow",)
+_WINTRY_MIX_CONDITIONS = ("sleet", "fzra")  # fzra = freezing rain
+_THUNDERSTORM_CONDITIONS = ("tsra",)
+_RAIN_CONDITIONS = ("rain",)
+
+
+def _precip_type(icon_url: str | None) -> str | None:
+    """Rain vs snow vs wintry mix vs thunderstorm, or None for a forecast
+    with no meaningful precip (clear, cloudy, windy, etc). Classified from
+    the forecast's `icon` URL, which encodes one of NWS's own documented
+    condition codes (e.g. ".../land/night/rain_showers,20?size=small") -
+    far more reliable than pattern-matching shortForecast's free-text
+    prose, which uses dozens of different phrasings for the same condition
+    (e.g. "Patchy Drizzle" never contains the substring "rain")."""
+    if not icon_url:
+        return None
+    segment = icon_url.rstrip("/").split("/")[-1].split("?")[0]
+    condition = segment.split(",")[0].lower()
+    if any(c in condition for c in _SNOW_CONDITIONS):
+        return "Snow"
+    if any(c in condition for c in _WINTRY_MIX_CONDITIONS):
+        return "Wintry Mix"
+    if any(c in condition for c in _THUNDERSTORM_CONDITIONS):
+        return "Thunderstorm"
+    if any(c in condition for c in _RAIN_CONDITIONS):
+        return "Rain"
+    return None
+
+
 def _parse_iso(ts: str) -> datetime:
     """Accepts both a bare-UTC "...Z" timestamp (this codebase's own kickoff
     format) and NWS's own explicit-offset format - datetime.fromisoformat on
@@ -103,6 +132,7 @@ def fetch_game_weather(stadium_id: str | None, roof: str | None, kickoff_iso: st
                     "wind": period["windSpeed"],
                     "wind_direction": period["windDirection"],
                     "precip_pct": (period.get("probabilityOfPrecipitation") or {}).get("value"),
+                    "precip_type": _precip_type(period.get("icon")),
                     "short_forecast": period["shortForecast"],
                 }
         return None  # kickoff is beyond the forecast's own horizon

@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from ingest.weather import fetch_game_weather
+from ingest.weather import _precip_type, fetch_game_weather
 
 
 class _FakeResponse:
@@ -21,6 +21,15 @@ def _hourly_payload(periods):
     return {"properties": {"periods": periods}}
 
 
+def test_precip_type_classifies_from_the_icon_condition_code_not_free_text():
+    assert _precip_type("https://api.weather.gov/icons/land/night/rain_showers,20?size=small") == "Rain"
+    assert _precip_type("https://api.weather.gov/icons/land/day/snow,60?size=small") == "Snow"
+    assert _precip_type("https://api.weather.gov/icons/land/day/sleet,40?size=small") == "Wintry Mix"
+    assert _precip_type("https://api.weather.gov/icons/land/day/tsra,70?size=small") == "Thunderstorm"
+    assert _precip_type("https://api.weather.gov/icons/land/day/skc?size=small") is None
+    assert _precip_type(None) is None
+
+
 def test_fetch_game_weather_picks_the_hour_containing_kickoff():
     periods = [
         {
@@ -39,8 +48,24 @@ def test_fetch_game_weather_picks_the_hour_containing_kickoff():
         result = fetch_game_weather("CIN00", "outdoors", "2026-09-13T17:00:00Z")  # 13:00 EDT
     assert result == {
         "temperature_f": 82, "wind": "7 mph", "wind_direction": "NW",
-        "precip_pct": 0, "short_forecast": "Partly sunny",
+        "precip_pct": 0, "precip_type": None, "short_forecast": "Partly sunny",
     }
+
+
+def test_fetch_game_weather_includes_precip_type_from_the_icon():
+    periods = [
+        {
+            "startTime": "2026-12-13T12:00:00-05:00", "endTime": "2026-12-13T13:00:00-05:00",
+            "temperature": 28, "windSpeed": "12 mph", "windDirection": "N",
+            "probabilityOfPrecipitation": {"value": 70}, "shortForecast": "Snow",
+            "icon": "https://api.weather.gov/icons/land/day/snow,70?size=small",
+        },
+    ]
+    with patch("ingest.weather.requests.get") as mock_get:
+        mock_get.side_effect = [_FakeResponse(_POINTS_PAYLOAD), _FakeResponse(_hourly_payload(periods))]
+        result = fetch_game_weather("CIN00", "outdoors", "2026-12-13T17:00:00Z")  # 12:00 EST
+    assert result["precip_type"] == "Snow"
+    assert result["precip_pct"] == 70
 
 
 def test_fetch_game_weather_returns_none_for_a_dome():

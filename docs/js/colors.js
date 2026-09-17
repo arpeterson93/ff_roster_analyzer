@@ -220,21 +220,38 @@ export function impliedTotalCellHtml(p, weekEntry) {
   const total = p.position === "DST" ? weekEntry.opponent_implied_total : weekEntry.implied_total;
   if (total === null || total === undefined) return `<span class="muted">&ndash;</span>`;
   const w = weekEntry.weather;
-  const title = w ? ` title="${w.temperature_f}&deg;F, wind ${w.wind}, ${w.precip_pct ?? 0}% precip - ${w.short_forecast}"` : "";
+  const title = w ? ` title="${weatherTitle(w)}"` : "";
   return `<span${title}>${fmt(total, 1)}</span>`;
 }
 
+// Full detail for a hover tooltip - temp/wind plus precip% and, when NWS's
+// forecast icon indicates one (see ingest/weather.py's _precip_type), which
+// KIND of precip (Rain/Snow/Wintry Mix/Thunderstorm) rather than just a
+// bare percentage that could mean either in December.
+function weatherTitle(w) {
+  const precip = `${w.precip_pct ?? 0}% precip${w.precip_type ? ` (${w.precip_type})` : ""}`;
+  return `${w.temperature_f}&deg;F, wind ${w.wind}, ${precip} - ${w.short_forecast}`;
+}
+
+// precip_type (see ingest/weather.py's _precip_type) -> the one glyph that
+// actually changes a start/sit read: is it wet or is it snow. Thunderstorm
+// gets the rain glyph (still a passing-volume/fumble-risk rain game, just
+// with lightning delay risk on top) rather than its own icon - not worth a
+// third glyph for a fantasy-relevant distinction that isn't really there.
+const _PRECIP_ICON = { Rain: "🌧️", Thunderstorm: "🌧️", Snow: "❄️", "Wintry Mix": "❄️" };
+
 // Same weekEntry.weather data as impliedTotalCellHtml's hover tooltip above,
-// rendered as its own visible cell for Start/Sit, which can spare a whole
-// column for it. Only ever populated for the CURRENT week (see
-// engine/pipeline.py) - a dome game or one beyond NWS's ~7-day forecast
-// horizon carries weather: null same as any other week, so this reads as a
-// plain "-" rather than a special case.
+// rendered as its own visible cell for Start/Sit and Rankings' Overview tab,
+// which can spare a whole column for it. Only ever populated for the
+// CURRENT week (see engine/pipeline.py) - a dome game or one beyond NWS's
+// ~7-day forecast horizon carries weather: null same as any other week, so
+// this reads as a plain "-" rather than a special case.
 export function weatherCellHtml(weekEntry) {
   const w = weekEntry && weekEntry.weather;
   if (!w) return `<span class="muted">&ndash;</span>`;
-  const title = `${w.temperature_f}&deg;F, wind ${w.wind}, ${w.precip_pct ?? 0}% precip - ${w.short_forecast}`;
-  return `<span title="${title}">${w.temperature_f}&deg;F, ${w.wind}</span>`;
+  const icon = _PRECIP_ICON[w.precip_type] || "";
+  const text = `${w.temperature_f}&deg;F ${w.wind} ${w.wind_direction} ${w.precip_pct ?? 0}%${icon ? ` ${icon}` : ""}`;
+  return `<span title="${weatherTitle(w)}">${text}</span>`;
 }
 
 // "Sun 3:25 PM" in the VIEWER's own local time zone - the pipeline only ever

@@ -488,16 +488,16 @@ export function renderRankings(container, data, slug) {
   function draw() {
     container.innerHTML = `
       <div class="card">
-        <div class="modal-tabs" id="rankings-tabs">
-          ${TABS.map((t) => `<button class="modal-tab-btn${filters.tab === t.key ? " active" : ""}" data-rankings-tab="${t.key}">${t.label}</button>`).join("")}
-        </div>
         <div class="select-row rankings-filters" id="rankings-filters">
           <select id="rankings-pos-filter">${positions.map((p) => `<option value="${p}">${p}</option>`).join("")}</select>
-          <select id="rankings-team-filter">${nflTeams.map((t) => `<option value="${t}">${t === "ALL" ? "All NFL teams" : t}</option>`).join("")}</select>
-          <label><input type="checkbox" id="rankings-fa-only" /> Free agents only</label>
-          ${yourTeamId !== null ? `<label><input type="checkbox" id="rankings-watched-only" /> Watch list only</label>` : ""}
+          <select id="rankings-team-filter">${nflTeams.map((t) => `<option value="${t}">${t === "ALL" ? "All" : t}</option>`).join("")}</select>
+          <label><input type="checkbox" id="rankings-fa-only" /> Available</label>
+          ${yourTeamId !== null ? `<label><input type="checkbox" id="rankings-watched-only" /> Watch List</label>` : ""}
           ${filters.tab === "stats" ? `<select id="rankings-stats-week"><option value="season">Season</option>${weekOptions.map((w) => `<option value="${w}">Week ${w}</option>`).join("")}</select>` : ""}
           <input type="search" id="rankings-search" placeholder="Search players..." autocomplete="off" value="${escapeHtml(filters.search)}" />
+        </div>
+        <div class="modal-tabs" id="rankings-tabs">
+          ${TABS.map((t) => `<button class="modal-tab-btn${filters.tab === t.key ? " active" : ""}" data-rankings-tab="${t.key}">${t.label}</button>`).join("")}
         </div>
         <div class="table-wrap" id="rankings-table-wrap"></div>
       </div>
