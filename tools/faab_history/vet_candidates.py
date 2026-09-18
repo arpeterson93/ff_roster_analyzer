@@ -30,6 +30,7 @@ import sys
 import time
 from pathlib import Path
 
+from tools.faab_history.atomic_json import write_json
 from tools.faab_history.league_profile import (
     compare_to_baseline, fetch_settings, load_scoring_ledger, profile_settings, scoring_format_items,
 )
@@ -111,7 +112,7 @@ def main():
             else:
                 print(f"[{i}/{total}] {lid} ({profile['name']!r}): rejected - {'; '.join(verdict['reasons'])}", file=sys.stderr)
         results = list(by_id.values())
-        OUT_PATH.write_text(json.dumps(results, indent=2))
+        write_json(OUT_PATH, results, indent=2)
         time.sleep(random.uniform(*DELAY_RANGE))
 
     print(f"\n{len(results)} candidates vetted, {compatible_count} compatible with baseline settings", file=sys.stderr)

@@ -212,17 +212,51 @@ this to stay a deliberate action you run by hand, not a cron job.
 
 1. `python -m tools.faab_history.discover_public_leagues --start <id> --end <id>`
    - scans an ESPN league-id range for leagues that are public *right now*
-   and currently running real FAAB bidding.
+   and currently running real FAAB bidding. `--start`/`--end` are required
+   (no default range - you choose which id block to scan). `--year`
+   (default 2026) is the season whose settings count as "current" for that
+   check.
 2. `python -m tools.faab_history.vet_candidates` - filters those candidates
    against The O League's own settings (team count, PPR format, not IDP,
    looks like a normal points league). Any newly-encountered scoring
    category needs a human judgment call in `scoring_ledger.json` (repo
    root) before a league can pass this step - see `league_profile.py`'s
-   `load_scoring_ledger`/`check_scoring_ledger`.
+   `load_scoring_ledger`/`check_scoring_ledger`. Resumable by default -
+   skips league ids already in `vetted_candidates.json`. Qualifiers:
+   - `--year` (default 2026) - the season every candidate is checked as
+     public in.
+   - `--reverify` - re-fetches settings and re-runs the compatibility check
+     (including the scoring-ledger check) for *every* candidate, not just
+     ones not yet vetted. Needed once after `scoring_ledger.json` is
+     created or edited - existing compatible=true/false verdicts were
+     decided before the ledger existed, so a normal resumable run would
+     never revisit them.
 3. `python -m tools.faab_history.check_candidate_history` - checks which of
    each vetted candidate's *past* seasons are actually readable without
    ESPN login (being public today doesn't mean history is - The O League
-   itself needs credentials for 2019-2025 despite 2026 being open).
+   itself needs credentials for 2019-2025 despite 2026 being open), and
+   separately confirms each of those accessible seasons was actually
+   running FAAB that year (a league can switch onto FAAB partway through
+   its ESPN history). Resumable by default - skips league ids already in
+   `history_availability.json`. Qualifiers:
+   - `--start-year`/`--end-year` (default 2019/2025) - the fixed window
+     checked by default, matching when The O League itself started FAAB
+     bidding.
+   - `--extend-earlier` - after the fixed window, keeps walking backward
+     one year at a time (`--start-year` - 1, - 2, ...) for as long as each
+     earlier season stays accessible without credentials *and* confirmed
+     FAAB, stopping at the first season that comes back private, doesn't
+     exist, or was real-but-not-FAAB (plain waiver priority) - whichever
+     comes first. Off by default: it adds real unbounded per-league request
+     volume to a rate-limited public API, worth opting into deliberately
+     for a candidate whose real history likely predates 2019 rather than on
+     every routine run.
+   - `--reverify` - re-checks *every* compatible candidate's years, not
+     just ones not yet in `history_availability.json`. Needed once after
+     the per-season FAAB-enabled check was added (2026-09-16) - leagues
+     checked before then were only ever verified for transaction
+     accessibility, never for whether each accessible season was actually
+     running FAAB, and a normal resumable run would never revisit them.
 4. `python -m tools.faab_history.pull_public_league_bids` and
    `python -m tools.faab_history.pull_public_league_rosters` - pull the
    accessible (league, year) pairs from step 3. Both default to every
@@ -233,28 +267,66 @@ this to stay a deliberate action you run by hand, not a cron job.
    `o-league-training-table.json` (O League only - what `evaluate_model.py`
    backtests against) and `combined-training-table.json` (pooled - what the
    live model at `engine.faab_estimate.POOLED_TRAINING_TABLE_PATH` actually
-   trains on).
+   trains on). No command-line qualifiers.
 6. Sanity-check before publishing - `python -m tools.faab_history.evaluate_model`
    (backtest) and a look at the Waiver Bid Backtest artifact are the two
    established ways to confirm a change didn't quietly make things worse
    (see the "does pooling help" section on that artifact for the shape of
-   this check).
+   this check). Qualifiers:
+   - `--table <path>` (default `o-league-training-table.json`) - which
+     training table to evaluate against; point at
+     `combined-training-table.json` to include the other pooled leagues.
+   - `--holdout-league-id <id>` (default none) - restricts the *test*
+     holdout to just this one league's events; every other league's events
+     fold into training unconditionally regardless of the normal train/test
+     split. Use `--table combined-training-table.json --holdout-league-id
+     355398` (The O League) to see whether pooling other public leagues'
+     bids actually improves prediction of The O League's own held-out bids,
+     rather than assuming it does.
+   - `--out <path>` (default `eval_results.json`) - where results are
+     written.
 7. `python -m tools.faab_history.publish_release_data combined-training-table.json`
    (and any of the three raw files that changed) - uploads to the
    `faab-data` release and updates the pinned checksum in
-   `fetch_release_data.py` in the same step. Commit that updated file.
+   `fetch_release_data.py` in the same step. Commit that updated file. Takes
+   one or more filenames as plain positional arguments (not flags) - not
+   resumable/incremental, just re-uploads and re-hashes whatever you name;
+   requires the `gh` CLI installed and authenticated locally, and is meant
+   to be run by hand, never from CI.
 
-**FAAB training data storage:** `combined-training-table.json` (~436MB,
-over GitHub's 100MB per-file push limit) and the three raw pulled-data files
-it's built from aren't committed to git - they're assets on this repo's
-`faab-data` GitHub Release instead (a release's file attachments live
-outside git's own object store entirely, so they're exempt from both the
-100MB limit and git's repo-size concerns; unlike Git LFS, a public repo's
-release-asset bandwidth isn't metered the way LFS's stingy free tier is,
-which matters given the daily cron re-downloads it). `.github/workflows/build.yml`
-runs `python -m tools.faab_history.fetch_release_data` before the pipeline
-to pull the one file it needs; `--all` also fetches the three raw inputs,
-only needed to rebuild the training table from scratch per the steps above.
+Pastable in Command Prompt (uses the venv's own python explicitly, not
+whatever bare `python` resolves to on PATH - a stale system Python with an
+ancient polars silently crashed build_training_table.py with an
+unrelated-looking `AttributeError` the one time this pointed at the wrong
+interpreter; several of these steps run long enough that it's easy to end up
+running one from a fresh terminal that never had the venv activated):
+.venv\Scripts\python.exe -m tools.faab_history.discover_public_leagues --start <id> --end <id>
+.venv\Scripts\python.exe -m tools.faab_history.vet_candidates
+.venv\Scripts\python.exe -m tools.faab_history.check_candidate_history --extend-earlier --reverify
+.venv\Scripts\python.exe -m tools.faab_history.pull_public_league_bids
+.venv\Scripts\python.exe -m tools.faab_history.pull_public_league_rosters
+.venv\Scripts\python.exe -m tools.faab_history.build_training_table
+.venv\Scripts\python.exe -m tools.faab_history.evaluate_model
+.venv\Scripts\python.exe -m tools.faab_history.publish_release_data combined-training-table.json other-leagues-bids-raw.json other-leagues-bids.json other-leagues-rostered-by-week.json
+
+**FAAB training data storage:** `combined-training-table.json` (2.7GB and
+growing as more leagues get pooled in - well over GitHub's 100MB per-file
+push limit) and the three raw pulled-data files it's built from aren't
+committed to git - they're assets on this repo's `faab-data` GitHub Release
+instead (a release's file attachments live outside git's own object store
+entirely, so they're exempt from both the 100MB limit and git's repo-size
+concerns; unlike Git LFS, a public repo's release-asset bandwidth isn't
+metered the way LFS's stingy free tier is, which matters given the daily
+cron re-downloads it). `publish_release_data.py` gzip-compresses each file
+before uploading it (~5-7% of raw size for JSON this repetitive - 2.7GB
+becomes ~130MB) since GitHub Releases separately caps a single asset at
+2GB, which the raw file alone already exceeds; `fetch_release_data.py`
+downloads the compressed asset and decompresses it locally, transparently
+to every other script that just expects the plain `.json` file to be
+there. `.github/workflows/build.yml` runs
+`python -m tools.faab_history.fetch_release_data` before the pipeline to
+pull the one file it needs; `--all` also fetches the three raw inputs, only
+needed to rebuild the training table from scratch per the steps above.
 
 ## Deployment (manual steps, one-time)
 

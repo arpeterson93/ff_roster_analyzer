@@ -24,6 +24,8 @@ from pathlib import Path
 
 import requests
 
+from tools.faab_history.atomic_json import write_json
+
 # fantasy.espn.com/apis/v3/... now returns an empty, unusable 202 for API calls
 # (discovered live 2026-09-10) - reads have moved to this host, which returns
 # real 200 JSON for the same paths.
@@ -109,7 +111,7 @@ def main():
                 f"[{len(found)} public found so far, {faab_count} of those use FAAB]",
                 file=sys.stderr,
             )
-            OUT_PATH.write_text(json.dumps(found, indent=2))
+            write_json(OUT_PATH, found, indent=2)
         else:
             if status.startswith("exists_but_private"):
                 exists_count += 1
@@ -120,7 +122,7 @@ def main():
                 f"{exists_count} real-but-private leagues seen (through id {lid})",
                 file=sys.stderr,
             )
-            OUT_PATH.write_text(json.dumps(found, indent=2))
+            write_json(OUT_PATH, found, indent=2)
         if checked % LONG_PAUSE_EVERY == 0:
             pause = random.uniform(*LONG_PAUSE_RANGE)
             print(f"...taking a longer break ({pause:.0f}s)", file=sys.stderr)
@@ -128,7 +130,7 @@ def main():
         else:
             time.sleep(random.uniform(*DELAY_RANGE))
 
-    OUT_PATH.write_text(json.dumps(found, indent=2))
+    write_json(OUT_PATH, found, indent=2)
     faab_count = sum(1 for r in found if r["uses_faab"])
     print(f"\nscanned {args.start}-{args.end} ({checked} new checks): {len(found)} public leagues, {faab_count} use FAAB", file=sys.stderr)
 

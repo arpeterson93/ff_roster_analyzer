@@ -45,6 +45,7 @@ from pathlib import Path
 
 import requests
 
+from tools.faab_history.atomic_json import write_json
 from tools.faab_history.league_profile import HEADERS, fetch_settings, profile_settings
 
 VETTED_PATH = Path(__file__).parent / "vetted_candidates.json"
@@ -192,7 +193,7 @@ def main():
             f"AND confirmed FAAB [{usable_count} leagues with usable history so far]\n",
             file=sys.stderr,
         )
-        OUT_PATH.write_text(json.dumps(list(by_id.values()), indent=2))
+        write_json(OUT_PATH, list(by_id.values()), indent=2)
 
     print(f"\n{len(by_id)} compatible candidates checked, {usable_count} have at least one openly accessible, confirmed-FAAB historical season", file=sys.stderr)
 

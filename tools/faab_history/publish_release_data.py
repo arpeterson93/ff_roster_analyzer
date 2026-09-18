@@ -5,6 +5,17 @@ would otherwise leave as a manual, easy-to-forget follow-up (fetch_release_data.
 deliberately refuses a checksum mismatch, so a forgotten refresh here means
 every future fetch of this file starts failing instead of just being stale).
 
+Gzip-compresses the file before uploading (as `<filename>.gz`, not the raw
+filename) rather than uploading it as-is - GitHub Releases hard-caps a
+single asset at 2GB, and combined-training-table.json alone crossed that
+raw (2.7GB, confirmed live 2026-09-18 - a flat 422 rejection, not a slow
+failure) as the pooled multi-league dataset kept growing. This JSON is
+repetitive enough (thousands of rows sharing the same field names) that it
+compresses to roughly 5-7% of its raw size, so gzip alone buys enormous
+headroom rather than needing to split the file into parts - and shrinks
+every daily pipeline run's download too, since fetch_release_data.py
+decompresses on its end.
+
 Requires the `gh` CLI installed and authenticated locally - this is a
 publish step you run yourself when a file changes, never from CI.
 
@@ -14,7 +25,9 @@ Usage:
 """
 from __future__ import annotations
 
+import gzip
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -44,17 +57,26 @@ def publish(filename: str) -> None:
     path = DEST_DIR / filename
     if not path.exists():
         raise FileNotFoundError(f"{path} does not exist locally - nothing to publish")
-    print(f"{filename}: hashing...")
-    digest = sha256_of_file(path)
-    print(f"{filename}: uploading to release '{TAG}' ({path.stat().st_size / 1e6:.0f} MB)...")
-    result = subprocess.run(
-        ["gh", "release", "upload", TAG, str(path), "--clobber", "--repo", REPO],
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"gh release upload failed for {filename}:\n{result.stderr}")
+    gz_path = DEST_DIR / f"{filename}.gz"
+    try:
+        print(f"{filename}: compressing...")
+        with open(path, "rb") as f_in, gzip.open(gz_path, "wb", compresslevel=6) as f_out:
+            shutil.copyfileobj(f_in, f_out)
+        raw_mb = path.stat().st_size / 1e6
+        gz_mb = gz_path.stat().st_size / 1e6
+        print(f"{filename}: hashing compressed asset...")
+        digest = sha256_of_file(gz_path)
+        print(f"{filename}: uploading {gz_path.name} to release '{TAG}' ({gz_mb:.0f} MB, compressed from {raw_mb:.0f} MB)...")
+        result = subprocess.run(
+            ["gh", "release", "upload", TAG, str(gz_path), "--clobber", "--repo", REPO],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"gh release upload failed for {gz_path.name}:\n{result.stderr}")
+    finally:
+        gz_path.unlink(missing_ok=True)
     _update_pinned_hash(filename, digest)
-    print(f"{filename}: done - pinned sha256 in fetch_release_data.py updated to {digest}")
+    print(f"{filename}: done - pinned sha256 (of the compressed asset) in fetch_release_data.py updated to {digest}")
 
 
 def main() -> int:
@@ -64,6 +86,11 @@ def main() -> int:
     for arg in sys.argv[1:]:
         publish(Path(arg).name)  # accepts either a bare filename or a full path
     print("\nDon't forget to commit the updated fetch_release_data.py.")
+    print(
+        "If this replaced a previously-uncompressed asset (published before this gzip step existed), "
+        "the old un-suffixed asset is still sitting on the release, unused - delete it by hand "
+        "(gh release view faab-data --repo " + REPO + ", or the GitHub web UI) once you've confirmed the new one works."
+    )
     return 0
 
 

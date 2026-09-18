@@ -50,6 +50,7 @@ from pathlib import Path
 
 from espn_api.football import League
 
+from tools.faab_history.atomic_json import write_json
 from tools.faab_history.pull_o_league_bids import WEEKS, classify, collapse_contingent_bids, fetch_season
 
 HISTORY_PATH = Path(__file__).parent / "history_availability.json"
@@ -68,7 +69,7 @@ def write_classified(raw_rows: list[dict]) -> list[dict]:
     # docstring.
     classified = classify(deduped, freeagent_flat_cost_dollars=0.0)
     classified.sort(key=lambda r: (r["source_league_id"], r["season"], r["week"], r["team_id"]))
-    OUT_PATH.write_text(json.dumps(classified, indent=2))
+    write_json(OUT_PATH, classified, indent=2)
     return classified
 
 
@@ -121,7 +122,7 @@ def main():
             raw_rows.extend(season_rows)
             print(f"  {len(season_rows)} raw transaction rows", file=sys.stderr)
 
-            RAW_OUT_PATH.write_text(json.dumps(raw_rows, indent=2))
+            write_json(RAW_OUT_PATH, raw_rows, indent=2)
             classified = write_classified(raw_rows)
             leagues_done = len({r["source_league_id"] for r in classified})
             print(f"  [{len(classified)} bids across {leagues_done} leagues written so far]", file=sys.stderr)

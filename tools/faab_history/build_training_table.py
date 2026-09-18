@@ -126,6 +126,7 @@ from engine.faab_estimate import (
 from engine.scoring import ScoringRules
 from ingest import nfl_data as nd
 from ingest.ids import build_id_map
+from tools.faab_history.atomic_json import write_json
 from tools.faab_history.league_profile import fetch_settings, profile_settings, scoring_format_items
 
 O_LEAGUE_ID = 355398
@@ -1086,8 +1087,8 @@ def main():
     # budget fields as None - this single combined pass is the fix.
     annotate_budget_remaining(all_out_rows, league_season_budgets)
 
-    OUT_PATH.write_text(json.dumps([r for r in all_out_rows if r["source_league_id"] == O_LEAGUE_ID], indent=2))
-    COMBINED_OUT_PATH.write_text(json.dumps(all_out_rows, indent=2))
+    write_json(OUT_PATH, [r for r in all_out_rows if r["source_league_id"] == O_LEAGUE_ID], indent=2)
+    write_json(COMBINED_OUT_PATH, all_out_rows, indent=2)
 
     print(f"\nwrote {sum(1 for r in all_out_rows if r['source_league_id'] == O_LEAGUE_ID)} rows to {OUT_PATH}")
     print(f"wrote {len(all_out_rows)} rows ({len({r['source_league_id'] for r in all_out_rows})} leagues) to {COMBINED_OUT_PATH}")
@@ -1103,7 +1104,7 @@ def main():
         eid = r["add_player_id"]
         if eid in all_unresolved and eid not in unresolved_names:
             unresolved_names[eid] = r["add_player_name"]
-    UNRESOLVED_PLAYERS_PATH.write_text(json.dumps(unresolved_names, indent=2, sort_keys=True))
+    write_json(UNRESOLVED_PLAYERS_PATH, unresolved_names, indent=2, sort_keys=True)
     print(f"unresolved ESPN player ids (no nflverse match) across all leagues: {len(all_unresolved)} - see {UNRESOLVED_PLAYERS_PATH}")
     resolved_count = sum(1 for r in all_out_rows if r["gsis_id"])
     print(f"resolved to a gsis_id: {resolved_count}/{len(all_out_rows)}")

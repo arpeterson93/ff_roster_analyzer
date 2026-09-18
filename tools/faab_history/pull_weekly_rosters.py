@@ -21,6 +21,8 @@ from pathlib import Path
 
 from espn_api.football import League
 
+from tools.faab_history.atomic_json import write_json
+
 LEAGUE_ID = 355398
 WEEKS = range(1, 18)
 OUT_PATH = Path(__file__).parent / "o-league-rostered-by-week.json"
@@ -59,7 +61,7 @@ def main():
             result[str(season)][str(week)] = ids
             print(f"  week {week}: {len(ids)} rostered players", file=sys.stderr)
 
-    OUT_PATH.write_text(json.dumps(result, indent=2))
+    write_json(OUT_PATH, result, indent=2)
     print(f"wrote {OUT_PATH}")
 
 

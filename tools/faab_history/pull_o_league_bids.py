@@ -32,6 +32,8 @@ from pathlib import Path
 
 from espn_api.football import League
 
+from tools.faab_history.atomic_json import write_json
+
 LEAGUE_ID = 355398
 WEEKS = range(1, 18)
 
@@ -180,7 +182,7 @@ def main():
     classified.sort(key=lambda r: (r["season"], r["week"], r["team_id"]))
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(classified, indent=2))
+    write_json(args.out, classified, indent=2)
     signal_counts: dict[str, int] = {}
     for r in classified:
         signal_counts[r["signal"]] = signal_counts.get(r["signal"], 0) + 1

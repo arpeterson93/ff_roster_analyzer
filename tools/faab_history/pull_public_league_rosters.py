@@ -41,6 +41,7 @@ from pathlib import Path
 
 from espn_api.football import League
 
+from tools.faab_history.atomic_json import write_json
 from tools.faab_history.pull_weekly_rosters import WEEKS, rostered_ids_for_week
 
 HISTORY_PATH = Path(__file__).parent / "history_availability.json"
@@ -109,7 +110,7 @@ def main():
 
             weeks_done = len(result[lid_str][str(year)])
             print(f"  {weeks_done} weeks with rosters written", file=sys.stderr)
-            OUT_PATH.write_text(json.dumps(result, indent=2))
+            write_json(OUT_PATH, result, indent=2)
 
     leagues_done = len(result)
     print(f"\ndone - {leagues_done} leagues written to {OUT_PATH}", file=sys.stderr)

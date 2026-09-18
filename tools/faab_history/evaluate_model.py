@@ -64,6 +64,7 @@ from engine.faab_estimate import (
     target_pct,
     week_bucket_dummies,
 )
+from tools.faab_history.atomic_json import write_json
 
 SEED = 20260910
 TEST_FRACTION = 0.2
@@ -344,7 +345,7 @@ def main():
             }
         )
 
-    args.out.write_text(json.dumps(results, indent=2))
+    write_json(args.out, results, indent=2)
     print(f"wrote {len(results)} holdout evaluations to {args.out}")
 
 
