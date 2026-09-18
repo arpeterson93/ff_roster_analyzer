@@ -156,6 +156,42 @@ export function seasonTotalPoints(p, currentWeek) {
   return played.reduce((sum, w) => sum + w.actual.points, 0);
 }
 
+// Snap %/Att %/Tgt % share: a true sum(numerator)/sum(denominator) across
+// the weeks actually played when `statsWeek` is "season", not an average of
+// each week's own already-divided percentage (see engine/faab_estimate.py's
+// build_snap_counts_index for why that distinction matters) - or a single
+// week's own share when `statsWeek` is a week number. getNum/getDenom each
+// read one weekly entry; positionGate restricts Att % (RB carry share) to
+// RB - meaningless for any other position, same convention engine/
+// faab_estimate.py's recent_carry_share already established. Shared by
+// Rankings' Stats tab (season or one selected week) and the player modal's
+// Game Log (always one specific week).
+export function usageShare(p, statsWeek, currentWeek, getNum, getDenom, positionGate) {
+  if (positionGate && p.position !== positionGate) return null;
+  const weeks = statsWeek === "season" ? (p.weekly || []).filter((w) => w.week < currentWeek) : [(p.weekly || []).find((w) => w.week === statsWeek) || {}];
+  let num = 0, denom = 0, any = false;
+  for (const w of weeks) {
+    const n = getNum(w);
+    const d = getDenom(w);
+    if (n === null || n === undefined || d === null || d === undefined) continue;
+    num += n;
+    denom += d;
+    any = true;
+  }
+  if (!any || !denom) return null;
+  return num / denom;
+}
+
+export function snapPct(p, statsWeek, currentWeek) {
+  return usageShare(p, statsWeek, currentWeek, (w) => w.offense_snaps, (w) => w.team_offense_snaps, null);
+}
+export function attPct(p, statsWeek, currentWeek) {
+  return usageShare(p, statsWeek, currentWeek, (w) => w.actual?.stats?.carries, (w) => w.team_rb_carries, "RB");
+}
+export function tgtPct(p, statsWeek, currentWeek) {
+  return usageShare(p, statsWeek, currentWeek, (w) => w.actual?.stats?.targets, (w) => w.team_targets, null);
+}
+
 // ESPN's own CDN, keyed off the espn_id every player already carries - a
 // D/ST "player" has no individual headshot, so it gets its team's logo
 // instead (keyed off nfl_team; ESPN's logo path accepts both "was" and

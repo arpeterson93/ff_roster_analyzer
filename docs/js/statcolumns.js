@@ -52,35 +52,66 @@ export function blocksForPosition(position) {
 // reasonable pick, matching the order requested for that tab.
 export const STATS_TAB_BLOCKS = OFFENSE_BLOCKS.QB;
 
+// The last flatColumns INDEX belonging to each block - the vertical-divider
+// CSS class ("block-end", see styles.css) needs this on both the header's
+// per-column cells and every body row's matching cell for the border to
+// read as one continuous line down the table, not a header-only rule.
+// Exported separately (not just computed inside groupedHeaderHtml) since
+// Rankings' Stats tab builds its own header directly rather than through
+// groupedHeaderHtml (it needs sortable <th>s for Star/Rank/Player/Team,
+// which groupedHeaderHtml's plain lead columns don't support) but still
+// needs this same boundary set for its own header AND for statCellsHtml.
+export function blockEndIndices(blocks) {
+  const ends = new Set();
+  let idx = -1;
+  for (const [, cols] of blocks) {
+    idx += cols.length;
+    ends.add(idx);
+  }
+  return ends;
+}
+
 // Grouped <thead> markup (two <tr>s: block headers, then column labels) for
 // a table whose first N columns are `leadColumns` (e.g. Wk/Opp) and last
-// column is FPts.
-export function groupedHeaderHtml(position, leadColumns) {
-  const blocks = blocksForPosition(position);
+// column is FPts. extraBlocks (e.g. the player modal Game Log's Usage
+// block, skill positions only) appends after position's own blocks.
+export function groupedHeaderHtml(position, leadColumns, extraBlocks = []) {
+  const blocks = [...blocksForPosition(position), ...extraBlocks];
+  const ends = blockEndIndices(blocks);
   const lead = leadColumns.map(() => "<th></th>").join("");
   const groupRow = blocks
-    .map(([group, cols]) => `<th colspan="${cols.length}">${group ? escapeAttr(group) : ""}</th>`)
+    .map(([group, cols]) => `<th colspan="${cols.length}" class="block-end">${group ? escapeAttr(group) : ""}</th>`)
     .join("");
-  const labelRow = blocks.flatMap(([, cols]) => cols.map(([, label]) => `<th>${escapeAttr(label)}</th>`)).join("");
+  let i = -1;
+  const labelRow = blocks
+    .flatMap(([, cols]) =>
+      cols.map(([, label]) => {
+        i += 1;
+        return `<th${ends.has(i) ? ` class="block-end"` : ""}>${escapeAttr(label)}</th>`;
+      })
+    )
+    .join("");
   return {
     top: `<tr class="group-header-row">${lead}${groupRow}<th></th></tr>`,
     bottom: `<tr>${leadColumns.map((l) => `<th>${escapeAttr(l)}</th>`).join("")}${labelRow}<th>FPts</th></tr>`,
     flatColumns: blocks.flatMap(([, cols]) => cols),
+    blockEnds: ends,
   };
 }
 
-export function statCellsHtml(stats, flatColumns) {
+export function statCellsHtml(stats, flatColumns, blockEnds) {
   return flatColumns
-    .map(([key]) => {
+    .map(([key], i) => {
+      const cls = blockEnds && blockEnds.has(i) ? ` class="block-end"` : "";
       // A two-element array key (e.g. ["completions","attempts"]) renders as
       // a single "12/18"-style ratio cell instead of two separate columns -
       // see PASSING_BLOCK's C/A column above.
       if (Array.isArray(key)) {
         const [k1, k2] = key;
         const v1 = stats?.[k1], v2 = stats?.[k2];
-        return `<td>${v1 !== null && v1 !== undefined && v2 !== null && v2 !== undefined ? `${v1}/${v2}` : "-"}</td>`;
+        return `<td${cls}>${v1 !== null && v1 !== undefined && v2 !== null && v2 !== undefined ? `${v1}/${v2}` : "-"}</td>`;
       }
-      return `<td>${stats && stats[key] !== null && stats[key] !== undefined ? stats[key] : "-"}</td>`;
+      return `<td${cls}>${stats && stats[key] !== null && stats[key] !== undefined ? stats[key] : "-"}</td>`;
     })
     .join("");
 }

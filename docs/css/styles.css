@@ -158,6 +158,18 @@ th { color: var(--ink-500); font-weight: 600; font-size: 11px; text-transform: u
    alignment, so "Rushing" reads as labeling Att/Yds/TD together rather
    than looking stuck to just the first of the three. */
 .group-header-row th { text-align: center; }
+/* Vertical divider between grouped stat sections (Passing/Rushing/
+   Receiving/Misc/Usage) - the group-header labels alone read as centered
+   text floating over their span, not a clearly bounded section, especially
+   once two adjacent single-column blocks (e.g. a K/DST block with no
+   internal columns of its own) sit right next to each other with nothing
+   but a font-weight change marking the boundary. Applied to the group
+   header's own <th colspan> AND the one column ending each block, in both
+   the header's label row and every body row (see docs/js/statcolumns.js's
+   blockEndIndices/statCellsHtml and docs/js/rankings.js's renderStatsTable)
+   so the line reads as one continuous rule down the table rather than a
+   header-only decoration. */
+.block-end { border-right: 1px solid var(--border); }
 tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
 
 .row-meta { margin-top: 2px; line-height: 1.2; }

@@ -1,5 +1,5 @@
 import { fmt, escapeHtml, getYourTeam } from "./state.js";
-import { POSITION_COLOR, opponentCellHtml, teamLabel, playerPhotoHtml, weeklyProjection, colorForRatio, ratioForRank } from "./colors.js";
+import { POSITION_COLOR, opponentCellHtml, teamLabel, playerPhotoHtml, weeklyProjection, colorForRatio, ratioForRank, snapPct, attPct, tgtPct } from "./colors.js";
 import { openModal } from "./modal.js";
 import { groupedHeaderHtml, statCellsHtml } from "./statcolumns.js";
 
@@ -233,14 +233,28 @@ function playLogDetailHtml(plays, incompletions = [], gameDurationMin = 60, zero
   `;
 }
 
+// Snap %/Att %/Tgt % (see colors.js's snapPct/attPct/tgtPct) - a skill-
+// position-only concept, appended after Misc rather than baked into
+// statcolumns.js's own OFFENSE_BLOCKS: a kicker's own participation lives
+// under snap_counts' SPECIAL-TEAMS snaps, not offense_snaps, and neither K
+// nor DST has carries/targets at all, so neither gets this block.
+const USAGE_BLOCK = ["Usage", [["_snap_pct", "Snap%"], ["_att_pct", "Att%"], ["_tgt_pct", "Tgt%"]]];
+const _USAGE_POSITIONS = new Set(["QB", "RB", "WR", "TE"]);
+
+function fmtUsagePct(v) {
+  return v === null || v === undefined ? "-" : `${Math.round(v * 100)}%`;
+}
+
 // Same grouped stat columns as the points-against modal, so a position's
 // actual-results columns read identically in both places. A played week
 // with a per-play breakdown available (data.gameLogPlays - offense/kicker
 // only, see engine/play_log.py) is clickable to expand it; weeks without
 // one (DST, or a build from before this existed) render exactly as before.
 function gameLogTable(player, data) {
-  const { top, bottom, flatColumns } = groupedHeaderHtml(player.position, ["Wk", "Opp"]);
+  const extraBlocks = _USAGE_POSITIONS.has(player.position) ? [USAGE_BLOCK] : [];
+  const { top, bottom, flatColumns, blockEnds } = groupedHeaderHtml(player.position, ["Wk", "Opp"], extraBlocks);
   const colCount = flatColumns.length + 3;
+  const currentWeek = data.meta.current_week;
   const playsByWeek = (data.gameLogPlays || {})[player.id] || {};
   const rows = (player.weekly || [])
     .filter((w) => w.actual)
@@ -253,7 +267,15 @@ function gameLogTable(player, data) {
       const incompletions = weekDetail?.incompletions || [];
       const zeroPointPlays = weekDetail?.zero_point_plays || [];
       const hasDetail = scoringPlays.length > 0 || incompletions.length > 0 || zeroPointPlays.length > 0;
-      const mainRow = `<tr class="game-log-row ${hasDetail ? "clickable-row" : ""}" data-week="${w.week}"><td>${w.week}</td><td>${opponentCellHtml(w)}</td>${statCellsHtml(w.actual.stats, flatColumns)}<td><strong>${fpts}</strong></td></tr>`;
+      const stats = extraBlocks.length
+        ? {
+            ...w.actual.stats,
+            _snap_pct: fmtUsagePct(snapPct(player, w.week, currentWeek)),
+            _att_pct: fmtUsagePct(attPct(player, w.week, currentWeek)),
+            _tgt_pct: fmtUsagePct(tgtPct(player, w.week, currentWeek)),
+          }
+        : w.actual.stats;
+      const mainRow = `<tr class="game-log-row ${hasDetail ? "clickable-row" : ""}" data-week="${w.week}"><td>${w.week}</td><td>${opponentCellHtml(w)}</td>${statCellsHtml(stats, flatColumns, blockEnds)}<td><strong>${fpts}</strong></td></tr>`;
       const detailRow = hasDetail
         ? `<tr class="game-log-detail" data-week-detail="${w.week}" hidden><td colspan="${colCount}">${playLogDetailHtml(scoringPlays, incompletions, weekDetail?.game_duration_min, zeroPointPlays)}</td></tr>`
         : "";

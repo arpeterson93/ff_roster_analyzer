@@ -99,8 +99,13 @@ def test_fetch_game_weather_returns_none_on_a_fetch_failure_rather_than_raising(
         assert fetch_game_weather("CIN00", "outdoors", "2026-09-13T17:00:00Z") is None
 
 
-def test_fetch_game_weather_attempts_a_retractable_roof_with_unknown_state():
-    with patch("ingest.weather.requests.get") as mock_get:
-        mock_get.side_effect = [_FakeResponse(_POINTS_PAYLOAD), _FakeResponse(_hourly_payload([]))]
-        fetch_game_weather("HOU00", None, "2026-09-13T17:00:00Z")
-    assert mock_get.call_count == 2
+def test_fetch_game_weather_treats_a_retractable_roof_stadium_as_an_always_dome():
+    # Real precipitation is exactly the condition under which these teams
+    # close the roof, so a forecast fetched while it's reported "open" would
+    # too often describe a game that ends up played indoors anyway - never
+    # attempted at all, regardless of that game's own reported roof state
+    # (open/closed/unknown all skip it the same way a permanent dome does).
+    for roof in (None, "outdoors", "open", "closed"):
+        with patch("ingest.weather.requests.get") as mock_get:
+            assert fetch_game_weather("HOU00", roof, "2026-09-13T17:00:00Z") is None
+        mock_get.assert_not_called()

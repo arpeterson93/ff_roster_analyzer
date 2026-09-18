@@ -6,10 +6,13 @@ WAF/soft-block risk ingest/espn_injuries.py already has to work around, and
 it's a real hourly forecast rather than a same-day snapshot.
 
 Only meaningful within NWS's own ~7-day-out hourly horizon, and only for a
-stadium with a real sky above it - a dome, an unmapped stadium, or a kickoff
-beyond that horizon all return None rather than a stale or wrong-window
-guess. Callers gate on `roof` (see engine/pipeline.py) before ever calling
-this, since a dome's "forecast" is a non-question.
+stadium with a real sky above it - fetch_game_weather itself is what gates
+this (not its caller, engine/pipeline.py, which just passes the raw `roof`
+value through): a permanent dome, a retractable-roof stadium (treated as an
+always-dome regardless of that game's own reported roof state - see
+_RETRACTABLE_ROOF_STADIUMS), an unmapped stadium, or a kickoff beyond the
+forecast horizon all return None rather than a stale, wrong-window, or
+misleading-once-the-roof-closes guess.
 """
 from __future__ import annotations
 
@@ -58,13 +61,28 @@ STADIUM_COORDS: dict[str, tuple[float, float]] = {
     "PHO00": (33.5276, -112.2626),  # State Farm Stadium, Glendale (retractable)
     "DAL00": (32.7473, -97.0945),  # AT&T Stadium, Arlington (retractable)
     "SFO01": (37.4030, -121.9700),  # Levi's Stadium, Santa Clara
+    "CLE00": (41.5061, -81.6995),  # FirstEnergy Stadium, Cleveland
+    "MIA00": (25.9580, -80.2389),  # Hard Rock Stadium, Miami Gardens
+    "WAS00": (38.9077, -76.8645),  # FedExField, Landover
+    "GNB00": (44.5013, -88.0622),  # Lambeau Field, Green Bay
 }
 
-# A permanently closed roof - no forecast is ever meaningful there. A
-# retractable roof's actual pregame state ("dome" vs "outdoors" per game) is
-# often still unresolved (None) days out, so None/"outdoors"/"retractable"
-# all still attempt a real forecast rather than guessing the roof will close.
+# A permanently closed roof - no forecast is ever meaningful there.
 _DOME_ROOFS = {"dome", "closed"}
+
+# Retractable-roof stadiums are treated as permanent domes for weather
+# purposes, same as DET00/LAX01/MIN01/VEG00/NOR00 above, rather than
+# switching on that game's own reported `roof` value the way _DOME_ROOFS
+# does for everyone else. Real precipitation is exactly the condition under
+# which these teams close the roof - so a forecast showing rain/snow for one
+# of these games is the forecast for a game that, by the time it kicks off,
+# is disproportionately likely to not actually happen outdoors, making it
+# actively misleading rather than just unhelpful. The one case this
+# sacrifices - a retractable roof confirmed open for a genuinely nice-
+# weather game - was already a low-value forecast (nothing dramatic to
+# report) even under the old per-game roof check, so there's little real
+# signal being given up here. See the conversation this was built from.
+_RETRACTABLE_ROOF_STADIUMS = {"HOU00", "IND00", "ATL97", "PHO00", "DAL00"}
 
 
 _SNOW_CONDITIONS = ("snow",)
@@ -107,7 +125,7 @@ def fetch_game_weather(stadium_id: str | None, roof: str | None, kickoff_iso: st
     """Best-effort hourly forecast for the specific hour containing kickoff.
     Never raises - a live pipeline run's weather is a nice-to-have, not
     something a transient NWS outage should take the whole build down over."""
-    if roof in _DOME_ROOFS or not stadium_id or not kickoff_iso:
+    if roof in _DOME_ROOFS or stadium_id in _RETRACTABLE_ROOF_STADIUMS or not stadium_id or not kickoff_iso:
         return None
     coords = STADIUM_COORDS.get(stadium_id)
     if coords is None:

@@ -2,12 +2,13 @@ import { fmt, escapeHtml, getYourTeam } from "./state.js";
 import {
   POSITION_COLOR, INJURY_BADGE, impliedTotalCellHtml, opponentCellHtml, sortByPositionOrder, teamLabel,
   pointsWeeksAgo, seasonAvgPoints, seasonTotalPoints, weatherCellHtml, rosCellHtml,
+  snapPct, attPct, tgtPct,
 } from "./colors.js";
 import { openPlayerModal } from "./playermodal.js";
 import { openPointsAgainstModal } from "./pointsagainstmodal.js";
 import { loadWatchlist, setWatched } from "./watchlist.js";
 import { compareCheckboxHtml, wireCompareCheckboxes } from "./compare.js";
-import { STATS_TAB_BLOCKS, blocksForPosition, statCellsHtml } from "./statcolumns.js";
+import { STATS_TAB_BLOCKS, blocksForPosition, blockEndIndices, statCellsHtml } from "./statcolumns.js";
 
 const FLEX_POSITIONS = ["RB", "WR", "TE"];
 
@@ -218,39 +219,6 @@ function statsFpts(p, statsWeek, currentWeek) {
   return weekEntryFor(p, statsWeek).actual?.points ?? null;
 }
 
-// Snap %/Att %/Tgt % share: a true sum(numerator)/sum(denominator) across
-// the weeks actually played in "season" mode, not an average of each
-// week's own already-divided percentage (see engine/faab_estimate.py's
-// build_snap_counts_index for why that distinction matters). getNum/
-// getDenom each read one weekly entry; positionGate restricts Att % (RB
-// carry share) to RB - meaningless for any other position, same convention
-// engine/faab_estimate.py's recent_carry_share already established.
-function usageShare(p, statsWeek, currentWeek, getNum, getDenom, positionGate) {
-  if (positionGate && p.position !== positionGate) return null;
-  const weeks = statsWeek === "season" ? (p.weekly || []).filter((w) => w.week < currentWeek) : [weekEntryFor(p, statsWeek)];
-  let num = 0, denom = 0, any = false;
-  for (const w of weeks) {
-    const n = getNum(w);
-    const d = getDenom(w);
-    if (n === null || n === undefined || d === null || d === undefined) continue;
-    num += n;
-    denom += d;
-    any = true;
-  }
-  if (!any || !denom) return null;
-  return num / denom;
-}
-
-function snapPct(p, statsWeek, currentWeek) {
-  return usageShare(p, statsWeek, currentWeek, (w) => w.offense_snaps, (w) => w.team_offense_snaps, null);
-}
-function attPct(p, statsWeek, currentWeek) {
-  return usageShare(p, statsWeek, currentWeek, (w) => w.actual?.stats?.carries, (w) => w.team_rb_carries, "RB");
-}
-function tgtPct(p, statsWeek, currentWeek) {
-  return usageShare(p, statsWeek, currentWeek, (w) => w.actual?.stats?.targets, (w) => w.team_targets, null);
-}
-
 // The trailing single-value columns after the grouped stat block (which is
 // rendered directly via statCellsHtml, not through this column-def list -
 // see renderStatsTable). Snap %/Att %/Tgt % are skill-position usage
@@ -326,7 +294,8 @@ function sortValue(p, key, data, filters) {
 }
 
 function sortableThHtml(c) {
-  return `<th data-key="${c.key}" ${c.title ? `title="${escapeHtml(c.title)}"` : ""}>${c.label}${sortState.key === c.key ? (sortState.dir === 1 ? " ▲" : " ▼") : ""}</th>`;
+  const cls = c.className ? ` class="${c.className}"` : "";
+  return `<th data-key="${c.key}"${cls} ${c.title ? `title="${escapeHtml(c.title)}"` : ""}>${c.label}${sortState.key === c.key ? (sortState.dir === 1 ? " ▲" : " ▼") : ""}</th>`;
 }
 
 // ---------- row filtering (shared by every tab) ----------
@@ -427,20 +396,36 @@ function renderStatsTable(wrap, container, data, filters, watched) {
   const trailing = statsTrailingColumns(data, filters);
   const blocks = statsBlocksFor(filters.position);
   const flatColumns = blocks.flatMap(([, cols]) => cols);
+  const blockEnds = blockEndIndices(blocks);
   const rows = filteredSortedRows(data, filters, watched);
 
   const topLead = common.map(() => "<th></th>").join("");
-  const topGroups = blocks.map(([group, cols]) => `<th colspan="${cols.length}">${escapeHtml(group)}</th>`).join("");
-  const topTrail = trailing.map(() => "<th></th>").join("");
+  const topGroups = blocks.map(([group, cols]) => `<th colspan="${cols.length}" class="block-end">${escapeHtml(group)}</th>`).join("");
+  // Snap%/Att%/Tgt% (present together, or not at all - see
+  // statsTrailingColumns) get their own "Usage" group label spanning all
+  // three, same as the player modal's Game Log; FPTS stays its own
+  // unlabeled trailing column either way.
+  const hasUsage = trailing.some((c) => c.key === "_snap_pct");
+  const topTrail = hasUsage ? `<th colspan="3" class="block-end">Usage</th><th></th>` : trailing.map(() => "<th></th>").join("");
   // Every column sorts by its own stat key EXCEPT the combined C/A column
   // (an array key, "completions"+"attempts" - no single sensible sort
   // value), which stays a plain unclickable header.
   const bottomLabels = flatColumns
-    .map(([key, label]) => (Array.isArray(key) ? `<th>${escapeHtml(label)}</th>` : sortableThHtml({ key, label })))
+    .map(([key, label], i) => {
+      const className = blockEnds.has(i) ? "block-end" : "";
+      return Array.isArray(key)
+        ? `<th${className ? ` class="${className}"` : ""}>${escapeHtml(label)}</th>`
+        : sortableThHtml({ key, label, className });
+    })
     .join("");
+  // The Usage group's own boundary (see topTrail above) needs the same
+  // continuous line through the label row and every body row, not just the
+  // top group-header cell - Tgt% is Usage's last column either way (Snap%/
+  // Att%/Tgt%/FPTS is a fixed order - see statsTrailingColumns).
+  const isTrailingBlockEnd = (c) => hasUsage && c.key === "_tgt_pct";
   const header = `
     <tr class="group-header-row">${topLead}${topGroups}${topTrail}</tr>
-    <tr>${common.map((c) => sortableThHtml(c)).join("")}${bottomLabels}${trailing.map((c) => sortableThHtml(c)).join("")}</tr>
+    <tr>${common.map((c) => sortableThHtml(c)).join("")}${bottomLabels}${trailing.map((c) => sortableThHtml(isTrailingBlockEnd(c) ? { ...c, className: "block-end" } : c)).join("")}</tr>
   `;
 
   const body = rows
@@ -448,8 +433,8 @@ function renderStatsTable(wrap, container, data, filters, watched) {
     .map((p) => {
       const isYours = getYourTeam(data.meta.slug) !== null && p.fantasy_team_id === getYourTeam(data.meta.slug);
       const commonCells = common.map((c) => `<td>${c.fmt ? c.fmt(p[c.key], p) : (p[c.key] ?? "–")}</td>`).join("");
-      const statCells = statCellsHtml(statsForWeek(p, filters.statsWeek, cw), flatColumns);
-      const trailingCells = trailing.map((c) => `<td>${c.fmt(undefined, p)}</td>`).join("");
+      const statCells = statCellsHtml(statsForWeek(p, filters.statsWeek, cw), flatColumns, blockEnds);
+      const trailingCells = trailing.map((c) => `<td${isTrailingBlockEnd(c) ? ` class="block-end"` : ""}>${c.fmt(undefined, p)}</td>`).join("");
       return `<tr data-player-id="${p.id}" class="clickable-row ${isYours ? "your-team-row" : ""}">${commonCells}${statCells}${trailingCells}</tr>`;
     })
     .join("");
