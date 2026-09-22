@@ -369,23 +369,18 @@ function wirePriceCompRows(scopeEl) {
   });
 }
 
-// ESPN wk is a second, independent number shown alongside our own Proj/SD -
-// never blended into it (see engine/pipeline.py's espn_future_projections).
-// The current week's own ESPN number lives on the player record itself
-// (espn_projected_week, from get_teams()) rather than in weekly[].
-// espn_projected (only fetched for future weeks - see
-// EspnClient.get_future_espn_projections), so this falls back to that for
-// whichever row is the current week.
-function espnWeekProjection(player, w, currentWeek) {
-  return w.week === currentWeek ? player.espn_projected_week : w.espn_projected;
-}
-
 function projectionTable(player, currentWeek) {
   // opponentCellHtml already colors/labels the Opp cell by matchup rank
-  // (see colors.js) - a separate Matchup column repeated that. Proj defers
-  // to ESPN for the current week (weeklyProjection, same rule Start/Sit and
-  // Schedule use) - SD is only ever ours (ESPN doesn't publish one), so it
-  // stays w.sd regardless of week.
+  // (see colors.js) - a separate Matchup column repeated that. Proj IS
+  // ESPN's own projection now, taken outright (see engine/valuation.py's
+  // module docstring) - weeklyProjection's current-week special case just
+  // prefers the fresher live fetch (espn_projected_week) over the batched
+  // one, same number either way. "Our proj" is the old proprietary rank ->
+  // curve -> baseline*matchup method, kept as a reference-only column where
+  // ESPN's own number used to sit - w.our_projected, no current-week
+  // special-casing needed since it's computed the same way every week. SD
+  // is only ever ours (ESPN doesn't publish one), so it stays w.sd
+  // regardless of week.
   // !w.actual alone isn't enough to mean "still to come" - a past bye week
   // or a past week where this player had no stat row (inactive, hadn't
   // joined the league yet) also has no actual, but it already happened -
@@ -393,12 +388,12 @@ function projectionTable(player, currentWeek) {
   // is what actually means "remaining".
   const rows = (player.weekly || [])
     .filter((w) => !w.actual && w.week >= currentWeek)
-    .map((w) => `<tr><td>${w.week}</td><td>${opponentCellHtml(w)}</td><td>${fmt(weeklyProjection(player, w.week, currentWeek), 1)}</td><td>${fmt(w.sd, 1)}</td><td>${fmt(espnWeekProjection(player, w, currentWeek), 1)}</td></tr>`)
+    .map((w) => `<tr><td>${w.week}</td><td>${opponentCellHtml(w)}</td><td>${fmt(weeklyProjection(player, w.week, currentWeek), 1)}</td><td>${fmt(w.sd, 1)}</td><td>${fmt(w.our_projected, 1)}</td></tr>`)
     .join("");
   // Only a total-points projection is computed for future weeks (not a full
   // stat line), so this can't show the grouped stat columns the game log
   // does - just the scalar projection + uncertainty.
-  return `<table><thead><tr><th>Wk</th><th>Opp</th><th>Proj</th><th>SD</th><th>ESPN wk</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table><thead><tr><th>Wk</th><th>Opp</th><th>Proj</th><th>SD</th><th>Our proj</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 // JS port of engine/faab_estimate.py's weighted_percentile - same "first

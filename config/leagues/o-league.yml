@@ -26,6 +26,7 @@ strength:
   replacement_from_waivers: true   # trade/pickup math uses value_delta_ww
   max_pickups: 10
   max_trade_targets: 10
+  trade_fairness_ratio: 0.5        # min(gain_self, gain_partner) / max(...) must clear this to surface a trade
 sim:
   iterations: 10000
   seed: 2026

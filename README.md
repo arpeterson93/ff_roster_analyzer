@@ -33,8 +33,19 @@ FantasyPros ecrData ──┘        GitHub Actions: daily cron + push + dispatc
 
 ## Methodology
 
-The valuation method mirrors the logic from the original Google Sheet, with
-every input now sourced automatically instead of copy-pasted:
+**Weekly projections come from ESPN directly**, taken outright with no
+adjustment on top - `EspnClient.get_future_espn_projections` (one
+`mRoster?scoringPeriodId=<week>` request per remaining week for rostered
+players, one no-position-filter `free_agents(week=...)` request per week for
+everyone else) plus the current week's own live fetch
+(`espn_projected_week`, from `get_teams()`). An ROS total is a plain sum of
+those weekly numbers.
+
+Our own proprietary method only fills in a week ESPN hasn't published a
+projection for yet (their own coverage doesn't reliably reach the full rest
+of season) - it's the same rank→curve→baseline×matchup approach this site
+used exclusively before, now demoted to a gap-filler and a reference-only
+column (`our_projected` / the player modal's "Our proj"):
 
 1. Start from each player's **consensus rest-of-season positional rank**
    (FantasyPros direct scrape, format-aware: standard for `o-league`, half
@@ -44,34 +55,32 @@ every input now sourced automatically instead of copy-pasted:
    empirical rank→PPG curve built from actual weekly fantasy output in
    2022–2025 (computed with this league's real scoring rules), blended with
    the current season's own curve as it accumulates games.
-3. Sum the baseline across all remaining weeks (through the last playoff
-   week) for an **expected ROS total**.
-4. **Adjust week-to-week** by the opponent's points-allowed-by-position
+3. **Adjust week-to-week** by the opponent's points-allowed-by-position
    index (season/trailing-5/blend, opponent-strength adjusted, damped 50%
-   toward the baseline) - except the **current week**, which instead maps
-   FantasyPros' *weekly* consensus rank directly to the curve baseline,
-   since their weekly rank already reflects that week's specific matchup
-   (layering our own opponent adjustment on top would double-count it).
-   Falls back to the baseline*matchup method if no weekly rank is available.
-   An `OUT`/`INJURY_RESERVE`/`SUSPENSION`/`DOUBTFUL` status still zeroes the
-   current week regardless of either method.
-5. **Reconcile**: rescale the weekly-adjusted values so they still sum to
-   the ROS total from step 3 — matchup strength redistributes value across
-   weeks, it doesn't change the season total.
+   toward the baseline).
+
+An `OUT`/`INJURY_RESERVE`/`SUSPENSION`/`DOUBTFUL` status (or a known IR
+return week) zeroes the affected week(s) outright - no redistribution onto
+the remaining weeks, so the season total visibly reflects the missed time.
+
+We switched to ESPN-primary because our own curve has real signal only down
+to however many players at a position get enough games to qualify each
+season (~33 for kickers) - every free agent ranked deeper than that clamped
+to the exact same floor value, making several "different" waiver
+suggestions secretly identical. ESPN's own per-player number doesn't have
+that ceiling. Stacking our own opponent adjustment on top of ESPN's number
+would also double-count it, since their projection is presumably already
+matchup-aware.
 
 Player value for trades and team strength is **lineup-delta ("next man
 down")**: the drop in a team's optimal-lineup ROS points if a player were
 removed, computed both roster-only (`value_delta`) and with the best
 available free agent backfilling the position (`value_delta_ww`, used as
-the primary basis for trade verdicts and pickup suggestions).
-
-The player modal's "ESPN wk" column is a second, independent number - ESPN's
-own per-week projection (`EspnClient.get_future_espn_projections`, one
-`mRoster?scoringPeriodId=<week>` request per remaining week for rostered
-players, one no-position-filter `free_agents(week=...)` request per week for
-everyone else) - shown purely for comparison. It never feeds into the
-method above; the current week's own baseline*matchup step (4) already
-prefers a weekly-rank-based source over it.
+the primary basis for trade verdicts and pickup suggestions). A recommended
+trade must also clear a **fairness ratio** (`trade_fairness_ratio`,
+`min(gain_self, gain_partner) / max(...)`) - both sides being merely
+positive isn't enough, since that alone lets through wildly lopsided offers
+a real partner would never accept.
 
 **Future option, not built:** an alternative curve-construction method
 pairing historical ROS rankings with the players' subsequent actual PPG,
@@ -261,14 +270,32 @@ this to stay a deliberate action you run by hand, not a cron job.
    `python -m tools.faab_history.pull_public_league_rosters` - pull the
    accessible (league, year) pairs from step 3. Both default to every
    league found accessible; pass `--league-id <id>` to pull just one.
-5. `python -m tools.faab_history.build_training_table` - joins The O
+5. `python -m tools.faab_history.validate_league_seasons` - a second, softer
+   pass beyond step 2's structural compatibility check: flags any (league,
+   season) whose real bid activity sits in the extreme tails of the pooled
+   distribution (near-zero team participation, a reported budget that looks
+   wrong, bidding far quieter or more frantic than everywhere else) for
+   *human* review - it's a report, not an automatic filter, since "quiet but
+   real" and "broken" both look like a low bid rate from the outside. Prints
+   a table and writes `league_season_validity_report.json`; hand-exclude any
+   confirmed problem the same way as `KNOWN_BAD_BID_TRANSACTION_IDS` (drop
+   the league from `vetted_candidates.json`'s compatible set, or a specific
+   transaction id) before the next step. No command-line qualifiers.
+6. `python -m tools.faab_history.build_training_table` - joins The O
    League's own bids plus everything pulled above against nflverse data and
-   each source league's own scoring rules, writing both
-   `o-league-training-table.json` (O League only - what `evaluate_model.py`
-   backtests against) and `combined-training-table.json` (pooled - what the
-   live model at `engine.faab_estimate.POOLED_TRAINING_TABLE_PATH` actually
-   trains on). No command-line qualifiers.
-6. Sanity-check before publishing - `python -m tools.faab_history.evaluate_model`
+   one shared baseline scoring standard (`baseline_scoring.json`, repo root -
+   every pooled row's points-based features are computed under this ONE
+   standard regardless of which league placed the bid, so a 28-point PPR
+   game and a 20-point Standard game for the same real box score train as
+   the same situation; only the bid *dollars* stay denominated in each
+   league's own budget), writing both `o-league-training-table.json` (O
+   League only - what `evaluate_model.py` backtests against) and
+   `combined-training-table.json` (pooled - what the live model at
+   `engine.faab_estimate.POOLED_TRAINING_TABLE_PATH` actually trains on). A
+   league-season with zero real transactions never contributes synthetic
+   no-bid rows (see `build_no_bid_rows`'s own docstring) even if it has a
+   roster pull. No command-line qualifiers.
+7. Sanity-check before publishing - `python -m tools.faab_history.evaluate_model`
    (backtest) and a look at the Waiver Bid Backtest artifact are the two
    established ways to confirm a change didn't quietly make things worse
    (see the "does pooling help" section on that artifact for the shape of
@@ -285,7 +312,7 @@ this to stay a deliberate action you run by hand, not a cron job.
      rather than assuming it does.
    - `--out <path>` (default `eval_results.json`) - where results are
      written.
-7. `python -m tools.faab_history.publish_release_data combined-training-table.json`
+8. `python -m tools.faab_history.publish_release_data combined-training-table.json`
    (and any of the three raw files that changed) - uploads to the
    `faab-data` release and updates the pinned checksum in
    `fetch_release_data.py` in the same step. Commit that updated file. Takes
@@ -305,6 +332,7 @@ running one from a fresh terminal that never had the venv activated):
 .venv\Scripts\python.exe -m tools.faab_history.check_candidate_history --extend-earlier --reverify
 .venv\Scripts\python.exe -m tools.faab_history.pull_public_league_bids
 .venv\Scripts\python.exe -m tools.faab_history.pull_public_league_rosters
+.venv\Scripts\python.exe -m tools.faab_history.validate_league_seasons
 .venv\Scripts\python.exe -m tools.faab_history.build_training_table
 .venv\Scripts\python.exe -m tools.faab_history.evaluate_model
 .venv\Scripts\python.exe -m tools.faab_history.publish_release_data combined-training-table.json other-leagues-bids-raw.json other-leagues-bids.json other-leagues-rostered-by-week.json

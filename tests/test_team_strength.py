@@ -12,6 +12,7 @@ from engine.team_strength import (
     position_strength,
     rank_and_compare,
     slot_strength,
+    trade_targets,
 )
 
 SLOTS = {"RB": 2}
@@ -333,3 +334,84 @@ def test_pickups_only_returns_positive_gain_sorted():
     assert len(result) == 1  # only the strong FA beats a rostered starter
     assert result[0]["add"] == "fa_strong"
     assert result[0]["gain"] > 0
+
+
+# --- trade_targets fairness ratio: both sides > 0 alone lets through wildly
+# lopsided "trades" (send a duplicate kicker, take back a real bench RB) -
+# see the conversation this was built from. Two positions (RB/K) with a weak
+# K free-agent pool, week-varying RB output (a bye week), and 3 weeks so a
+# "throwaway" bench RB can earn real value by covering a bye - the same shape
+# a real roster produces, not just a toy constant-ppw swap.
+_TRADE_SLOTS = {"RB": 1, "K": 1}
+_TRADE_ELIGIBILITY = {"RB": {"RB"}, "K": {"K"}}
+_TRADE_WEEKS = [1, 2, 3]
+
+
+def _wk(pid, pos, weekly: dict) -> PlayerCtx:
+    return PlayerCtx(id=pid, position=pos, ros_total=sum(weekly.values()), weekly=weekly)
+
+
+def _trade_setup(a_k2_ppw: float):
+    """My team: a real RB1, a weak everyday RB2 (covers RB1's bye), and TWO
+    kickers - a starter and a near-duplicate backup (a_k2) I'd give away.
+    Partner: a real RB1 plus a genuinely idle bench RB2 (never once beats
+    RB1, even on RB1's off weeks - not a real trade chip on its own) and NO
+    rostered kicker at all (relies on a weak FA kicker). a_k2_ppw controls
+    how much the kicker side of the trade is worth to the partner, without
+    touching my own side's gain at all."""
+    players = {
+        "a_rb1": _wk("a_rb1", "RB", {1: 20.0, 2: 0.0, 3: 20.0}),  # bye week 2
+        "a_rb2": _wk("a_rb2", "RB", {1: 1.0, 2: 1.0, 3: 1.0}),
+        "a_k1": _wk("a_k1", "K", {1: 5.0, 2: 5.0, 3: 5.0}),
+        "a_k2": _wk("a_k2", "K", {w: a_k2_ppw for w in _TRADE_WEEKS}),
+        "b_rb1": _wk("b_rb1", "RB", {1: 10.0, 2: 10.0, 3: 10.0}),
+        "b_rb2": _wk("b_rb2", "RB", {1: 9.0, 2: 9.0, 3: 9.0}),
+    }
+    free_agents = {"K": [_wk("fa_k", "K", {1: 0.5, 2: 0.5, 3: 0.5})]}
+    team_a = ["a_rb1", "a_rb2", "a_k1", "a_k2"]
+    team_b = ["b_rb1", "b_rb2"]
+    return players, free_agents, team_a, team_b
+
+
+def test_trade_targets_excludes_a_lopsided_trade_below_the_fairness_ratio():
+    # a_k2 barely edges out the FA kicker (0.6 > 0.5) - the partner gains
+    # almost nothing from it, while I gain a lot from b_rb2 covering my RB1's
+    # bye (real, sizeable gain). Both sides are positive but nowhere close.
+    players, free_agents, team_a, team_b = _trade_setup(a_k2_ppw=0.6)
+    results = trade_targets(
+        team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=players,
+        free_agents_by_pos=free_agents, weeks=_TRADE_WEEKS, slots=_TRADE_SLOTS,
+        eligibility=_TRADE_ELIGIBILITY, max_trade_targets=20, fairness_ratio=0.5,
+    )
+    matches = [r for r in results if r["give"] == ["a_k2"] and r["get"] == ["b_rb2"]]
+    assert matches == []
+
+
+def test_trade_targets_includes_a_trade_within_the_fairness_ratio():
+    # Same roster shape, but a_k2 is a real, useful kicker - the partner's
+    # gain (a real kicker over a weak FA stream) is now comparable in size
+    # to my own gain, so the trade clears the fairness bar.
+    players, free_agents, team_a, team_b = _trade_setup(a_k2_ppw=4.0)
+    results = trade_targets(
+        team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=players,
+        free_agents_by_pos=free_agents, weeks=_TRADE_WEEKS, slots=_TRADE_SLOTS,
+        eligibility=_TRADE_ELIGIBILITY, max_trade_targets=20, fairness_ratio=0.5,
+    )
+    matches = [r for r in results if r["give"] == ["a_k2"] and r["get"] == ["b_rb2"]]
+    assert len(matches) == 1
+    assert matches[0]["gain_self"] > 0
+    assert matches[0]["gain_partner"] > 0
+
+
+def test_trade_targets_fairness_ratio_zero_reduces_to_the_old_both_positive_check():
+    # fairness_ratio=0.0 (min/max always >= 0) is a no-op on top of the
+    # existing > 0 check - the lopsided trade from the exclusion test above
+    # reappears once fairness is switched off.
+    players, free_agents, team_a, team_b = _trade_setup(a_k2_ppw=0.6)
+    results = trade_targets(
+        team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=players,
+        free_agents_by_pos=free_agents, weeks=_TRADE_WEEKS, slots=_TRADE_SLOTS,
+        eligibility=_TRADE_ELIGIBILITY, max_trade_targets=20, fairness_ratio=0.0,
+    )
+    matches = [r for r in results if r["give"] == ["a_k2"] and r["get"] == ["b_rb2"]]
+    assert len(matches) == 1

@@ -413,13 +413,23 @@ def trade_targets(
     max_trade_targets: int,
     candidate_pool_size: int = 10,
     two_for_one_pool_size: int = 6,
+    fairness_ratio: float = 0.5,
 ) -> list[dict]:
     """1-for-1 swaps with every other team (top `candidate_pool_size` by
     ros_total each side) plus 2-for-1 swaps (top `two_for_one_pool_size` each
     side), scored by each side's real before/after lineup-total delta (with
     waiver-wire streaming assumed for any position a trade leaves empty - see
     evaluate_with_streaming - so a trade isn't flagged as a big loss for a
-    side that could trivially backfill the position on the wire instead)."""
+    side that could trivially backfill the position on the wire instead).
+
+    Both sides' gain must be positive AND within `fairness_ratio` of each
+    other (min/max >= fairness_ratio) - `gain_self > 0 and gain_partner > 0`
+    alone lets through wildly lopsided "trades" like offering a bench kicker
+    (near-zero gain to you, since dropping him barely moves your lineup) for
+    a real bench upgrade (any positive gain, however large, satisfies
+    "> 0") that no actual manager would accept. A ratio (not a fixed point
+    gap) scales correctly with trade size and time of season - early-season
+    gains run much larger in absolute points than late-season ones."""
     from engine.trades import evaluate_with_streaming  # local import: trades.py also imports this module
 
     def top_n(pids: list[str], n: int) -> list[str]:
@@ -455,7 +465,11 @@ def trade_targets(
                 slots=slots,
                 eligibility=eligibility,
             )
-            if result.side_a.gain > 0 and result.side_b.gain > 0:
+            if (
+                result.side_a.gain > 0
+                and result.side_b.gain > 0
+                and min(result.side_a.gain, result.side_b.gain) / max(result.side_a.gain, result.side_b.gain) >= fairness_ratio
+            ):
                 results.append(
                     {
                         "partner_team_id": partner_id,

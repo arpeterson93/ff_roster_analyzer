@@ -106,14 +106,14 @@ export function teamLabel(team) {
   return team.manager || team.name || "";
 }
 
-// The single site-wide rule for "our own proprietary Proj number vs ESPN's"
-// - the current week always defers to ESPN (espn_projected_week, which only
-// ever covers the current week - see ingest/espn_client.py), every other
-// week uses our own proprietary number (p.weekly[].projected). Every view
-// that shows a "Proj" column should read from here rather than
-// reimplementing this rule locally - that's exactly how the player modal's
-// Proj column drifted out of sync with Start/Sit and Schedule once, before
-// this existed.
+// The single site-wide rule for which "Proj" number to show. p.weekly[].projected
+// is already ESPN's own projection taken outright for every week ESPN has
+// published one (see engine/valuation.py's module docstring) - the current
+// week just prefers the fresher live fetch (espn_projected_week, from
+// get_teams()) over the batched future-weeks one. Every view that shows a
+// "Proj" column should read from here rather than reimplementing this rule
+// locally - that's exactly how the player modal's Proj column drifted out
+// of sync with Start/Sit and Schedule once, before this existed.
 export function weeklyProjection(p, week, currentWeek) {
   if (week === currentWeek) return p.espn_projected_week;
   const w = (p.weekly || []).find((e) => e.week === week);

@@ -672,12 +672,12 @@ def run_league(cfg: dict) -> dict:
         warnings.append(f"espn.com/nfl/injuries fetch failed ({exc}); IR players only zeroed for the current week")
         ir_return_weeks_by_espn_id = {}
 
-    # ESPN's own per-week projection for every remaining week, shown
-    # alongside our proprietary number as a second, independent data point
-    # (see docs/js/playermodal.js's "ESPN wk" column) - never fed into
-    # project_player below, which stays our own baseline*matchup method for
-    # every week beyond the current one. The current week already has this
-    # from espn_projected_week (get_teams()), so only future weeks need it.
+    # ESPN's own per-week projection for every remaining week - this IS the
+    # primary number project_player uses now (see engine/valuation.py's
+    # module docstring); our own baseline*matchup method only fills in a
+    # week ESPN hasn't published yet. The current week already has this from
+    # espn_projected_week (get_teams()), so only future weeks need it here -
+    # _register merges the two into one per-player {week: points} dict.
     # Best-effort: ~2x(final_week - current_week) extra ESPN requests, so a
     # transient failure here shouldn't take down the whole build.
     try:
@@ -885,12 +885,19 @@ def run_league(cfg: dict) -> dict:
         # actually moved them to IR (or rosters them at all).
         ir_return_week = ir_return_weeks_by_espn_id.get(p.espn_id)
 
+        # One merged {week: points} dict, current week included - see the
+        # espn_future_projections fetch above for why the current week comes
+        # from a separate ESPN call than every other week.
+        espn_weekly = dict(espn_future_projections.get(p.espn_id, {}))
+        if p.espn_projected_week is not None:
+            espn_weekly[current_week] = p.espn_projected_week
+
         proj = project_player(
             position=p.position, nfl_team=p.nfl_team, ros_pos_rank=ros_pos_rank,
-            injury_status=p.injury_status, week_pos_rank=week_pos_rank,
+            injury_status=p.injury_status,
             curve=curve, matchup_index=matchup_index, current_week=current_week, final_week=final_week,
             reg_season_count=reg_season_count, opponent=opponent, cfg=val_cfg,
-            espn_week_projection=p.espn_projected_week, ir_return_week=ir_return_week,
+            espn_weekly_projections=espn_weekly, ir_return_week=ir_return_week,
         )
 
         players_ctx[res.id] = PlayerCtx(
@@ -948,7 +955,7 @@ def run_league(cfg: dict) -> dict:
                         "week": w, "opponent": opponent.get((p.nfl_team, w)), "home": is_home.get((p.nfl_team, w)),
                         "kickoff": kickoff.get((p.nfl_team, w)),
                         "index": None, "rank": None, "projected": None, "sd": None,
-                        "espn_projected": None,
+                        "our_projected": None,
                         "actual": _actual_weekly_stats(p.position, p.nfl_team, res.id, w, weeks_played, actual_offense_by_id_week, actual_dst_by_team_week, active_by_id_week, opponent, player_rules),
                         "implied_total": (game_context.get((p.nfl_team, w)) or {}).get("implied_total"),
                         "opponent_implied_total": (game_context.get((p.nfl_team, w)) or {}).get("opponent_implied_total"),
@@ -961,7 +968,7 @@ def run_league(cfg: dict) -> dict:
                         "week": wp.week, "opponent": wp.opponent, "home": is_home.get((p.nfl_team, wp.week)),
                         "kickoff": kickoff.get((p.nfl_team, wp.week)),
                         "index": wp.index, "rank": wp.rank, "projected": wp.projected, "sd": wp.sd,
-                        "espn_projected": espn_future_projections.get(p.espn_id, {}).get(wp.week),
+                        "our_projected": wp.our_projected,
                         "actual": _actual_weekly_stats(p.position, p.nfl_team, res.id, wp.week, weeks_played, actual_offense_by_id_week, actual_dst_by_team_week, active_by_id_week, opponent, player_rules),
                         # implied_total is this player's OWN team; opponent_implied_total
                         # is the team they're facing that week - for a DST, the opponent's
@@ -1147,6 +1154,7 @@ def run_league(cfg: dict) -> dict:
         targets = trade_targets(
             t.team_id, roster_ids, other_rosters, players_ctx, free_agents_ctx, weeks,
             settings.slots, settings.slot_eligibility, strength_cfg["max_trade_targets"],
+            fairness_ratio=strength_cfg["trade_fairness_ratio"],
         )
         partner_summary = []
         for ot in espn_teams:
