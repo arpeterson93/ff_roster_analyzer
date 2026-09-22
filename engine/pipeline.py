@@ -104,6 +104,15 @@ _DST_STAT_FIELDS = [
     "points_allowed", "blocked_kicks",
 ]
 
+# nflverse's player_stats only includes a row for a player who recorded at
+# least one offensive stat that week - a player who was active but drew zero
+# targets/carries/etc. (e.g. Mike Gesicki, 2026 wk2: active, zero targets)
+# has NO row at all, indistinguishable from a bye/inactive/practice-squad
+# week unless cross-checked against his own roster status. "ACT" on
+# nflverse's weekly roster status is the closest available signal for
+# "should count as a real 0", not "didn't play" - see _actual_weekly_stats.
+ACTIVE_ROSTER_STATUS = "ACT"
+
 
 def _actual_stats_row(row: dict, fields: list[str]) -> dict:
     stats = {f: row.get(f) for f in fields}
@@ -113,6 +122,36 @@ def _actual_stats_row(row: dict, fields: list[str]) -> dict:
         + (row.get("receiving_2pt_conversions") or 0)
     )
     return stats
+
+
+def _actual_weekly_stats(
+    position, nfl_team, pid, week, weeks_played_, offense_lookup, dst_lookup, active_lookup, opponent, player_rules
+):
+    """Real (not projected) stat line + points for one already-played week -
+    powers both the Game Log and every FAAB "prior week"/season-average
+    feature (see run_league's own weekly[] comment). None means a genuinely
+    missing week (future, bye, inactive, practice squad); a played week with
+    zero recorded production is a real 0, not None - see active_lookup."""
+    if week > weeks_played_:
+        return None
+    if position == "DST":
+        row = dst_lookup.get((nfl_team, week))
+        if not row:
+            return None
+        stats = _actual_stats_row(row, _DST_STAT_FIELDS)
+        stats["xpr"] = None  # not available from nflverse - see engine/points_against.py
+        return {"stats": stats, "points": row["_points"]}
+    row = offense_lookup.get((pid, week))
+    if row:
+        return {"stats": _actual_stats_row(row, _OFFENSE_STAT_FIELDS), "points": player_rules.points_for_row(row)}
+    if opponent.get((nfl_team, week)) is not None and (pid, week) in active_lookup:
+        # Active roster status, team actually played that week (not a bye),
+        # but no player_stats row at all - a real 0 (e.g. zero targets), not
+        # a missing week the way a bye/inactive/practice-squad week
+        # legitimately is.
+        zero_row = {f: 0 for f in _OFFENSE_STAT_FIELDS}
+        return {"stats": _actual_stats_row(zero_row, _OFFENSE_STAT_FIELDS), "points": 0.0}
+    return None
 
 
 def _id_lookup(ranks_df, id_map: ids_mod.IdMap) -> dict[str, dict]:
@@ -699,6 +738,18 @@ def run_league(cfg: dict) -> dict:
         pid = id_map.resolve(gsis_id=row["player_id"], name=row["player_display_name"], pos=row["position"], team=row["team"]).id
         actual_offense_by_id_week[(pid, row["week"])] = row
         gsis_by_pid[pid] = row["player_id"]
+
+    # Active-roster-but-no-stats-row weeks (see ACTIVE_ROSTER_STATUS above) -
+    # keyed the same way as actual_offense_by_id_week so _actual_weekly_stats
+    # can tell "genuinely didn't play" apart from "played, just produced
+    # nothing player_stats records".
+    active_by_id_week: set[tuple[str, int]] = set()
+    for row in nd.rosters_weekly(season, current_season=season).iter_rows(named=True):
+        if row["status"] != ACTIVE_ROSTER_STATUS or row["position"] not in offense_positions or not row["gsis_id"]:
+            continue
+        pid = id_map.resolve(gsis_id=row["gsis_id"], name=row["full_name"], pos=row["position"], team=row["team"]).id
+        active_by_id_week.add((pid, row["week"]))
+
     # DST's own weekly output needs the game's final score to compute PA
     # (points allowed) and fantasy points - not present on the team_stats row
     # itself, so pull each week's opponent score in the same way
@@ -794,21 +845,6 @@ def run_league(cfg: dict) -> dict:
     espn_lineup_slot: dict[str, str] = {}
     ir_ids: set[str] = set()
     unmapped: list[dict] = []
-
-    def _actual_weekly_stats(position, nfl_team, pid, week, weeks_played_, offense_lookup, dst_lookup):
-        if week > weeks_played_:
-            return None
-        if position == "DST":
-            row = dst_lookup.get((nfl_team, week))
-            if not row:
-                return None
-            stats = _actual_stats_row(row, _DST_STAT_FIELDS)
-            stats["xpr"] = None  # not available from nflverse - see engine/points_against.py
-            return {"stats": stats, "points": row["_points"]}
-        row = offense_lookup.get((pid, week))
-        if not row:
-            return None
-        return {"stats": _actual_stats_row(row, _OFFENSE_STAT_FIELDS), "points": player_rules.points_for_row(row)}
 
     def _usage_stats_for_week(position, nfl_team, pid, week, weeks_played_):
         """Raw counts (not pre-divided percentages) for the Rankings Stats
@@ -913,7 +949,7 @@ def run_league(cfg: dict) -> dict:
                         "kickoff": kickoff.get((p.nfl_team, w)),
                         "index": None, "rank": None, "projected": None, "sd": None,
                         "espn_projected": None,
-                        "actual": _actual_weekly_stats(p.position, p.nfl_team, res.id, w, weeks_played, actual_offense_by_id_week, actual_dst_by_team_week),
+                        "actual": _actual_weekly_stats(p.position, p.nfl_team, res.id, w, weeks_played, actual_offense_by_id_week, actual_dst_by_team_week, active_by_id_week, opponent, player_rules),
                         "implied_total": (game_context.get((p.nfl_team, w)) or {}).get("implied_total"),
                         "opponent_implied_total": (game_context.get((p.nfl_team, w)) or {}).get("opponent_implied_total"),
                         "weather": None,
@@ -926,7 +962,7 @@ def run_league(cfg: dict) -> dict:
                         "kickoff": kickoff.get((p.nfl_team, wp.week)),
                         "index": wp.index, "rank": wp.rank, "projected": wp.projected, "sd": wp.sd,
                         "espn_projected": espn_future_projections.get(p.espn_id, {}).get(wp.week),
-                        "actual": _actual_weekly_stats(p.position, p.nfl_team, res.id, wp.week, weeks_played, actual_offense_by_id_week, actual_dst_by_team_week),
+                        "actual": _actual_weekly_stats(p.position, p.nfl_team, res.id, wp.week, weeks_played, actual_offense_by_id_week, actual_dst_by_team_week, active_by_id_week, opponent, player_rules),
                         # implied_total is this player's OWN team; opponent_implied_total
                         # is the team they're facing that week - for a DST, the opponent's
                         # number is the one that actually matters (how many points the

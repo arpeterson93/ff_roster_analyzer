@@ -1,4 +1,9 @@
-from engine.pipeline import _faab_week_override, _positional_ranks_from_overall
+import pytest
+
+from engine.pipeline import _OFFENSE_STAT_FIELDS, _actual_weekly_stats, _faab_week_override, _positional_ranks_from_overall
+from engine.scoring import ScoringRules
+
+REY_SCORING = ScoringRules.from_espn([{"id": 42, "abbr": "REY", "points": 0.1}])
 
 
 def test_positional_rank_is_derived_from_overall_order_within_each_position():
@@ -51,3 +56,72 @@ def test_faab_week_bumps_again_once_the_new_current_weeks_games_start():
 def test_faab_week_before_the_season_has_started_at_all():
     # week_for_date returns None before the season's first game.
     assert _faab_week_override(current_week=1, week_started=None) == 1
+
+
+# --- _actual_weekly_stats: a played week with zero recorded production is a
+# real 0, not a missing week (see the 2026 wk2 Mike Gesicki case this was
+# built from: active, zero targets, no player_stats row at all that week).
+
+OPPONENT = {("CIN", 2): "PIT"}  # CIN played week 2; no entry at all = bye
+
+
+def test_active_with_no_stat_row_counts_as_a_real_zero():
+    result = _actual_weekly_stats(
+        "TE", "CIN", "gesicki", 2, weeks_played_=2,
+        offense_lookup={}, dst_lookup={}, active_lookup={("gesicki", 2)},
+        opponent=OPPONENT, player_rules=REY_SCORING,
+    )
+    assert result["points"] == 0.0
+    assert result["stats"] == {**{f: 0 for f in _OFFENSE_STAT_FIELDS}, "two_pt_conversions": 0}
+
+
+def test_a_real_stat_row_is_used_even_if_also_marked_active():
+    row = {"receiving_yards": 55}
+    result = _actual_weekly_stats(
+        "TE", "CIN", "gesicki", 2, weeks_played_=2,
+        offense_lookup={("gesicki", 2): row}, dst_lookup={}, active_lookup={("gesicki", 2)},
+        opponent=OPPONENT, player_rules=REY_SCORING,
+    )
+    assert result["points"] == pytest.approx(5.5)
+
+
+def test_bye_week_stays_none_even_if_the_roster_status_says_active():
+    # A player is still "ACT" on his roster during a bye - only the opponent
+    # map (no game at all that week) can tell a bye apart from a real 0.
+    result = _actual_weekly_stats(
+        "TE", "CIN", "gesicki", 3, weeks_played_=3,
+        offense_lookup={}, dst_lookup={}, active_lookup={("gesicki", 3)},
+        opponent=OPPONENT, player_rules=REY_SCORING,  # no ("CIN", 3) entry = bye
+    )
+    assert result is None
+
+
+def test_not_active_and_no_stat_row_stays_none():
+    # Genuinely inactive/practice-squad/not-on-the-team-yet - no fabricated 0.
+    result = _actual_weekly_stats(
+        "TE", "CIN", "gesicki", 2, weeks_played_=2,
+        offense_lookup={}, dst_lookup={}, active_lookup=set(),
+        opponent=OPPONENT, player_rules=REY_SCORING,
+    )
+    assert result is None
+
+
+def test_future_week_stays_none_regardless_of_active_status():
+    result = _actual_weekly_stats(
+        "TE", "CIN", "gesicki", 5, weeks_played_=2,
+        offense_lookup={}, dst_lookup={}, active_lookup={("gesicki", 5)},
+        opponent={("CIN", 5): "BAL"}, player_rules=REY_SCORING,
+    )
+    assert result is None
+
+
+def test_dst_path_is_unaffected_by_the_active_lookup():
+    # DST never consults active_lookup/opponent at all - team_stats rows are
+    # keyed straight off dst_lookup, same as before this change.
+    result = _actual_weekly_stats(
+        "DST", "CIN", "cin-dst", 2, weeks_played_=2,
+        offense_lookup={}, dst_lookup={("CIN", 2): {"_points": 7.0}}, active_lookup=set(),
+        opponent=OPPONENT, player_rules=REY_SCORING,
+    )
+    assert result["points"] == 7.0
+    assert result["stats"]["xpr"] is None
