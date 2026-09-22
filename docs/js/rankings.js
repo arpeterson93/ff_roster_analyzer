@@ -302,10 +302,21 @@ function sortableThHtml(c) {
 
 function filteredSortedRows(data, filters, watched) {
   const search = filters.search.trim().toLowerCase();
+  const yourTeamId = getYourTeam(data.meta.slug);
   let rows = data.players.filter((p) => {
     if (search && !p.name.toLowerCase().includes(search)) return false;
-    if (filters.watchedOnly && !watched.has(p.id)) return false;
-    if (filters.faOnly && p.fantasy_team_id !== null) return false;
+    // My Team is additive, not exclusive: with Available and/or Watch List
+    // also checked, show their (AND'd, same as before) match OR My Team's
+    // roster - e.g. Available + My Team shows free agents plus your own
+    // players, not just whichever filter "wins".
+    if (filters.myTeamOnly || filters.faOnly || filters.watchedOnly) {
+      const isMyTeam = filters.myTeamOnly && p.fantasy_team_id === yourTeamId;
+      const passesAvailWatch =
+        (filters.faOnly || filters.watchedOnly) &&
+        (!filters.faOnly || p.fantasy_team_id === null) &&
+        (!filters.watchedOnly || watched.has(p.id));
+      if (!isMyTeam && !passesAvailWatch) return false;
+    }
     if (filters.team !== "ALL" && p.nfl_team !== filters.team) return false;
     if (filters.position === "ALL") return true;
     if (filters.position === "FLEX") return FLEX_POSITIONS.includes(p.position);
@@ -467,7 +478,7 @@ export function renderRankings(container, data, slug) {
   const weekOptions = [];
   for (let w = 1; w <= data.meta.current_week; w++) weekOptions.push(w);
 
-  const filters = { tab: "overview", position: "ALL", faOnly: false, team: "ALL", watchedOnly: false, search: "", statsWeek: "season" };
+  const filters = { tab: "overview", position: "ALL", faOnly: false, team: "ALL", watchedOnly: false, myTeamOnly: false, search: "", statsWeek: "season" };
   let watched = new Set();
 
   function draw() {
@@ -476,6 +487,7 @@ export function renderRankings(container, data, slug) {
         <div class="select-row rankings-filters" id="rankings-filters">
           <select id="rankings-pos-filter">${positions.map((p) => `<option value="${p}">${p}</option>`).join("")}</select>
           <select id="rankings-team-filter">${nflTeams.map((t) => `<option value="${t}">${t === "ALL" ? "All" : t}</option>`).join("")}</select>
+          ${yourTeamId !== null ? `<label><input type="checkbox" id="rankings-myteam-only" /> My Team</label>` : ""}
           <label><input type="checkbox" id="rankings-fa-only" /> Available</label>
           ${yourTeamId !== null ? `<label><input type="checkbox" id="rankings-watched-only" /> Watch List</label>` : ""}
           ${filters.tab === "stats" ? `<select id="rankings-stats-week"><option value="season">Season</option>${weekOptions.map((w) => `<option value="${w}">Week ${w}</option>`).join("")}</select>` : ""}
@@ -520,6 +532,14 @@ export function renderRankings(container, data, slug) {
       filters.team = e.target.value;
       render(container, data, filters, watched);
     });
+    const myTeamOnlyEl = container.querySelector("#rankings-myteam-only");
+    if (myTeamOnlyEl) {
+      myTeamOnlyEl.checked = filters.myTeamOnly;
+      myTeamOnlyEl.addEventListener("change", (e) => {
+        filters.myTeamOnly = e.target.checked;
+        render(container, data, filters, watched);
+      });
+    }
     container.querySelector("#rankings-fa-only").checked = filters.faOnly;
     container.querySelector("#rankings-fa-only").addEventListener("change", (e) => {
       filters.faOnly = e.target.checked;
