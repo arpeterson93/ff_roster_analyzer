@@ -4,6 +4,7 @@ import pytest
 from engine.matchups import (
     MatchupIndex,
     _index_for_basis,
+    _league_avg_by_pos,
     _rank_positions,
     allowed_by_team_week_pos,
     compute_matchup_index,
@@ -51,16 +52,45 @@ def test_points_by_team_week_pos():
 
 
 def test_index_for_basis_matches_hand_computation():
+    # Each ratio's denominator is the OPPONENT's own average EXCLUDING the
+    # week being measured (leave-one-out) - e.g. B's weeks are {8, 6, 10}, so
+    # the denominator for B's week-1 game (opponent A) is (6+10)/2 = 8, not
+    # B's own plain 3-week average of 8 (same value here by coincidence; see
+    # week 2/3 below where the leave-one-out and plain averages diverge).
     df = pl.DataFrame(_rows())
     points = points_by_team_week_pos(df, 2025, ["WR"], REY_SCORING)
     index, allowed = _index_for_basis(points, OPPONENT, TEAM_WEEKS, ["WR"], lambda ws: ws)
 
-    assert index["WR"]["A"] == pytest.approx((1.0 + 16 / 18 + 12 / (32 / 3)) / 3)
-    assert index["WR"]["B"] == pytest.approx((10 / 10 + 14 / (32 / 3) + 18 / 18) / 3)
-    assert index["WR"]["C"] == pytest.approx((6 / (32 / 3) + 12 / 10 + 10 / 8) / 3)
-    assert index["WR"]["D"] == pytest.approx((20 / 18 + 6 / 8 + 8 / 10) / 3)
+    assert index["WR"]["A"] == pytest.approx((8 / 8 + 16 / 19 + 12 / 10) / 3)
+    assert index["WR"]["B"] == pytest.approx((10 / 10 + 14 / 9 + 18 / 18) / 3)
+    assert index["WR"]["C"] == pytest.approx((6 / 13 + 12 / 9 + 10 / 7) / 3)
+    assert index["WR"]["D"] == pytest.approx((20 / 17 + 6 / 9 + 8 / 11) / 3)
 
     assert allowed["WR"]["A"] == pytest.approx((8 + 16 + 12) / 3)
+
+
+def test_index_for_basis_excludes_the_defenses_own_game_from_the_opponents_average():
+    # A single defense (X) plays the same offense (O) in week 1 and a
+    # different one (P) in week 2. O also plays a third team (Y) in week 3
+    # for an unrelated, much lower output. If the self-game weren't excluded,
+    # O's average would be pulled toward its own week-1 output against X,
+    # inflating X's index; excluding it means only O's OTHER games (week 3)
+    # feed the denominator for X's week-1 ratio.
+    opponent = {("X", 1): "O", ("O", 1): "X", ("X", 2): "P", ("P", 2): "X", ("O", 3): "Y", ("Y", 3): "O"}
+    team_weeks = {"X": [1, 2], "O": [1, 3], "P": [2], "Y": [3]}
+    points = {
+        ("O", 1, "WR"): 30.0,  # O's huge output happens to come in the very game vs X
+        ("O", 3, "WR"): 10.0,  # O's only OTHER game - this is what should normalize X's week-1 ratio
+        ("P", 2, "WR"): 10.0,
+    }
+    index, _ = _index_for_basis(points, opponent, team_weeks, ["WR"], lambda ws: ws)
+    # X's week-2 ratio (opponent P) has no denominator at all - P has only
+    # ONE recorded week, so there's no "other game" to leave P's own average
+    # in with, and that ratio is skipped entirely (same as any denom<=0
+    # week). Only the week-1 ratio survives, and it must use O's week-3-only
+    # average (10), not a plain 2-game average of (30+10)/2=20 that would
+    # include X's own game.
+    assert index["WR"]["X"] == pytest.approx(30 / 10)
 
 
 def test_allowed_by_team_week_pos_is_the_opponents_raw_output():
@@ -250,6 +280,53 @@ def test_prior_season_fallback_weight():
     cur_index_1wk, _ = _index_for_basis(cur_points, OPPONENT, week1_only, ["WR"], lambda ws: ws)
     w = 1 / 3
     assert half_a == pytest.approx(w * cur_index_1wk["WR"]["A"] + (1 - w) * prior_a, abs=1e-6)
+
+
+def test_adjusted_allowed_ppg_and_pa_factor_tie_to_the_current_season_index():
+    prior_df = pl.DataFrame(_rows_for(OUTPUT, 2024))
+    current_df = pl.DataFrame(_rows_for(CURRENT_OUTPUT, 2025))
+    prior_points = points_by_team_week_pos(prior_df, 2024, ["WR"], REY_SCORING)
+    current_points = points_by_team_week_pos(current_df, 2025, ["WR"], REY_SCORING)
+
+    result = compute_matchup_index(
+        current_points, prior_points, 2025, 2024, weeks_played=3, opponent=OPPONENT,
+        prior_opponent=OPPONENT, positions=["WR"],
+        pa_basis="season", pa_l5_weight=0.5, pa_prior_season_weeks=3,
+        index_clamp=(0.0, 10.0),
+    )
+
+    cur_season_index, cur_season_allowed = _index_for_basis(current_points, OPPONENT, TEAM_WEEKS, ["WR"], lambda ws: ws)
+    league_avg = _league_avg_by_pos(current_points, TEAM_WEEKS, ["WR"])
+
+    for team in ["A", "B", "C", "D"]:
+        expected_adjusted = league_avg["WR"] * cur_season_index["WR"][team]
+        assert result.adjusted_allowed_ppg["WR"][team] == pytest.approx(expected_adjusted)
+        assert result.pa_factor["WR"][team] == pytest.approx(expected_adjusted / cur_season_allowed["WR"][team])
+
+    # Raw allowed_ppg is untouched by the adjustment - Adjusted is a separate
+    # field, not a mutation of Raw.
+    assert result.allowed_ppg["WR"]["A"] == pytest.approx(cur_season_allowed["WR"]["A"])
+
+
+def test_adjusted_allowed_ppg_falls_back_to_prior_season_when_no_current_weeks_played():
+    prior_df = pl.DataFrame(_rows_for_season(OUTPUT, 2024))
+    prior_points = points_by_team_week_pos(prior_df, 2024, ["WR"], REY_SCORING)
+    current_points = {}
+
+    result = compute_matchup_index(
+        current_points, prior_points, 2025, 2024, weeks_played=0, opponent=OPPONENT,
+        prior_opponent=PRIOR_OPPONENT, positions=["WR"],
+        pa_basis="season", pa_l5_weight=0.5, pa_prior_season_weeks=6, index_clamp=(0.0, 10.0),
+    )
+
+    prior_team_weeks = team_weeks_from_opponent(PRIOR_OPPONENT, ["A", "B", "C", "D"], [1, 2, 3])
+    prior_index, prior_allowed = _index_for_basis(prior_points, PRIOR_OPPONENT, prior_team_weeks, ["WR"], lambda ws: ws)
+    prior_league_avg = _league_avg_by_pos(prior_points, prior_team_weeks, ["WR"])
+
+    for team in ["A", "B", "C", "D"]:
+        expected_adjusted = prior_league_avg["WR"] * prior_index["WR"][team]
+        assert result.adjusted_allowed_ppg["WR"][team] == pytest.approx(expected_adjusted)
+        assert result.pa_factor["WR"][team] == pytest.approx(expected_adjusted / prior_allowed["WR"][team])
 
 
 # Reuses OPPONENT's 4-team round robin (week1: A-B/C-D, week2: A-C/B-D,

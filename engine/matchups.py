@@ -20,6 +20,8 @@ class MatchupIndex:
     rank: dict[str, dict[str, int]] = field(default_factory=dict)
     allowed_ppg: dict[str, dict[str, float]] = field(default_factory=dict)
     l5_allowed_ppg: dict[str, dict[str, float]] = field(default_factory=dict)
+    adjusted_allowed_ppg: dict[str, dict[str, float]] = field(default_factory=dict)
+    pa_factor: dict[str, dict[str, float]] = field(default_factory=dict)
     season_used: int | None = None
 
 
@@ -104,12 +106,20 @@ def _index_for_basis(
 ) -> tuple[dict[str, dict[str, float]], dict[str, dict[str, float]]]:
     """Returns (index, allowed_ppg) for each position/team, using only the weeks
     weeks_subset_fn(team) selects out of that team's played weeks (season = all,
-    l5 = the trailing 5)."""
-    offense_avg: dict[tuple[str, str], float] = {}
+    l5 = the trailing 5).
+
+    Each week's ratio is normalized by the opponent's own average output
+    EXCLUDING that very week (leave-one-out) - a defense's adjustment factor
+    must never benefit from its own result against that opponent, which a
+    plain per-team average would otherwise partly be built from."""
+    offense_avg_excl: dict[tuple[str, str, int], float] = {}
     for team, weeks in team_weeks.items():
         for pos in positions:
-            vals = [team_week_pos_points.get((team, w, pos), 0.0) for w in weeks]
-            offense_avg[(team, pos)] = float(np.mean(vals)) if vals else 0.0
+            vals = {w: team_week_pos_points.get((team, w, pos), 0.0) for w in weeks}
+            total = sum(vals.values())
+            n = len(vals)
+            for w in weeks:
+                offense_avg_excl[(team, pos, w)] = (total - vals[w]) / (n - 1) if n > 1 else 0.0
 
     index: dict[str, dict[str, float]] = {pos: {} for pos in positions}
     allowed_ppg: dict[str, dict[str, float]] = {pos: {} for pos in positions}
@@ -124,12 +134,25 @@ def _index_for_basis(
                     continue
                 allowed = team_week_pos_points.get((opp, w, pos), 0.0)
                 allowed_vals.append(allowed)
-                denom = offense_avg.get((opp, pos), 0.0)
+                denom = offense_avg_excl.get((opp, pos, w), 0.0)
                 if denom > 0:
                     ratios.append(allowed / denom)
             index[pos][defense] = float(np.mean(ratios)) if ratios else 1.0
             allowed_ppg[pos][defense] = float(np.mean(allowed_vals)) if allowed_vals else 0.0
     return index, allowed_ppg
+
+
+def _league_avg_by_pos(
+    points: dict[tuple[str, int, str], float], team_weeks: dict[str, list[int]], positions: list[str]
+) -> dict[str, float]:
+    """Plain (non-excluding) league-wide average points scored per team-week
+    at each position - the population baseline used to express the
+    opponent-adjusted index back in point units for adjusted_allowed_ppg."""
+    result: dict[str, float] = {}
+    for pos in positions:
+        vals = [points.get((t, w, pos), 0.0) for t, weeks in team_weeks.items() for w in weeks]
+        result[pos] = float(np.mean(vals)) if vals else 0.0
+    return result
 
 
 def _clamp(value: float, bounds: tuple[float, float]) -> float:
@@ -237,10 +260,20 @@ def compute_matchup_index(
     result = MatchupIndex()
 
     if weeks_played <= 0:
+        prior_league_avg = _league_avg_by_pos(prior_points, prior_team_weeks, positions)
         for pos in positions:
             result.index[pos] = {t: _clamp(v, index_clamp) for t, v in prior_index[pos].items()}
             result.allowed_ppg[pos] = dict(prior_allowed[pos])
             result.l5_allowed_ppg[pos] = dict(prior_allowed[pos])
+            result.adjusted_allowed_ppg[pos] = {
+                t: prior_league_avg[pos] * prior_index[pos].get(t, 1.0) for t in prior_allowed[pos]
+            }
+            result.pa_factor[pos] = {
+                t: (result.adjusted_allowed_ppg[pos][t] / result.allowed_ppg[pos][t])
+                if result.allowed_ppg[pos].get(t, 0.0) > 0
+                else 1.0
+                for t in prior_allowed[pos]
+            }
         result.rank = _rank_positions(result.index)
         result.season_used = prior_season
         return result
@@ -268,6 +301,8 @@ def compute_matchup_index(
             for pos in positions
         }
 
+    league_avg = _league_avg_by_pos(cur_points, played_weeks, positions)
+
     w = min(weeks_played / pa_prior_season_weeks, 1.0) if pa_prior_season_weeks > 0 else 1.0
     for pos in positions:
         blended = {}
@@ -278,6 +313,19 @@ def compute_matchup_index(
         result.index[pos] = blended
         result.allowed_ppg[pos] = dict(cur_season_allowed[pos])
         result.l5_allowed_ppg[pos] = dict(cur_l5_allowed[pos])
+        # Raw/Adjusted stay pure current-season (matching allowed_ppg above),
+        # not blended with prior-season data - a display lens on the same
+        # cur_season_index that also seeds `blended`, never the prior-season
+        # fallback that only affects the site-wide projection-driving index.
+        result.adjusted_allowed_ppg[pos] = {
+            t: league_avg[pos] * cur_season_index[pos].get(t, 1.0) for t in teams
+        }
+        result.pa_factor[pos] = {
+            t: (result.adjusted_allowed_ppg[pos][t] / result.allowed_ppg[pos][t])
+            if result.allowed_ppg[pos].get(t, 0.0) > 0
+            else 1.0
+            for t in teams
+        }
 
     result.rank = _rank_positions(result.index)
     result.season_used = current_season if w >= 1.0 else prior_season

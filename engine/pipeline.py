@@ -766,6 +766,7 @@ def run_league(cfg: dict) -> dict:
             team: {
                 "current": {str(w): current_allowed.get((team, w, pos), 0.0) for w in current_team_weeks.get(team, [])},
                 "prior": {str(w): prior_allowed.get((team, w, pos), 0.0) for w in prior_team_weeks.get(team, [])},
+                "pa_factor": matchup_index.pa_factor.get(pos, {}).get(team, 1.0),
             }
             for team in all_nfl_teams
         }
@@ -1258,6 +1259,8 @@ def run_league(cfg: dict) -> dict:
                 "rank": matchup_index.rank[pos][team],
                 "allowed_ppg": matchup_index.allowed_ppg[pos][team],
                 "l5_allowed_ppg": matchup_index.l5_allowed_ppg[pos][team],
+                "adjusted_allowed_ppg": matchup_index.adjusted_allowed_ppg.get(pos, {}).get(team, matchup_index.allowed_ppg[pos][team]),
+                "pa_factor": matchup_index.pa_factor.get(pos, {}).get(team, 1.0),
             }
             for team in matchup_index.index[pos]
         }
