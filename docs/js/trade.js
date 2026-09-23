@@ -396,13 +396,28 @@ function realGain(beforeTotal, afterRoster, players, freeAgentsByPos, weeks, slo
   return after - beforeTotal;
 }
 
+// Both sides' gain must be positive, and the fairness ratio only bounds the
+// direction where mySide comes out ahead - the reverse (mySide getting LESS
+// than the partner) is deliberately left unbounded, since overpaying to
+// land a specific player is a real call only the person making the offer
+// can make, not something this filter should second-guess (see the
+// conversation this was built from, and engine/team_strength.py's
+// trade_targets, which applies the identical rule). mySide null (viewing
+// two teams that aren't "mine") falls back to the old symmetric bound -
+// with no side to call "mine," there's no one to grant the unbounded call
+// to, so both directions stay protected.
+function passesFairness(gainA, gainB, fairnessRatio, mySide) {
+  if (mySide === "a" && gainA <= gainB) return true;
+  if (mySide === "b" && gainB <= gainA) return true;
+  return Math.min(gainA, gainB) / Math.max(gainA, gainB) >= fairnessRatio;
+}
+
 // Generates candidate multi-player trades between two rosters and scores
-// them with the SAME rules the server-side recommender uses (both sides'
-// real lineup-delta gain > 0, AND within fairnessRatio of each other - see
-// engine/team_strength.py's trade_targets) - not a duplicate implementation,
-// a client-side twin of the same idea, extended to "locked" players (see
-// lockedA/lockedB) and larger combos than the server bothers precomputing
-// for every team pair.
+// them with the SAME rules the server-side recommender uses (see
+// engine/team_strength.py's trade_targets and its identical passesFairness
+// rule) - not a duplicate implementation, a client-side twin of the same
+// idea, extended to "locked" players (see lockedA/lockedB) and larger
+// combos than the server bothers precomputing for every team pair.
 //
 // Two-phase for speed: the exact lineup-delta evaluation is an exponential
 // bitmask DP over roster size (see optimalLineupTotal), run once per side
@@ -412,16 +427,34 @@ function realGain(beforeTotal, afterRoster, players, freeAgentsByPos, weeks, slo
 // (no DP at all); only the top `verifyBudget` of those get the real,
 // expensive evaluation, and only THOSE real numbers ever get shown or
 // filtered on - the heuristic is purely for choosing what's worth verifying,
-// never a substitute for the real rule.
+// never a substitute for the real rule. The heuristic ranks by TOTAL surplus
+// (both sides summed) when mySide is known, not by how balanced a combo
+// looks - a min()-based rank would systematically bury exactly the
+// deliberately-lopsided-in-my-disfavor combos passesFairness now allows
+// through, before they ever reached the real evaluation. Falls back to the
+// old balance-seeking min() when mySide is null, matching passesFairness'
+// own symmetric fallback. The exact locked-only combo (nothing added to
+// either side) is ALWAYS verified regardless of its heuristic rank - it's
+// the one trade the caller explicitly asked about, and a coarse heuristic
+// over a big lumpy player-value space has no business silently dropping it.
 function tradeSuggestions(opts) {
   var rosterA = opts.rosterA, rosterB = opts.rosterB;
   var lockedA = opts.lockedA || [], lockedB = opts.lockedB || [];
   var players = opts.players, freeAgentsByPos = opts.freeAgentsByPos;
   var weeks = opts.weeks, slots = opts.slots, eligibility = opts.eligibility;
   var fairnessRatio = opts.fairnessRatio || 0;
-  var poolSize = opts.poolSize || 6;
+  var mySide = opts.mySide || null;
+  // Unbounded by default (the whole roster, minus locked players, is fair
+  // game) - a smaller pool used to mean a player outside the top 6 by
+  // ros_total could never appear in an auto-generated suggestion at all,
+  // even if there were only 2 real candidates to search. Safe to leave
+  // uncapped: the expensive exact evaluation is bounded by verifyBudget
+  // regardless of how many raw combos exist (see this function's own
+  // comment) - a bigger pool only makes phase 1's cheap ranking sort a
+  // longer (still trivially fast) list, not the slow part run more times.
+  var poolSize = opts.poolSize || Infinity;
   var maxPerSide = opts.maxPerSide || 3;
-  var verifyBudget = opts.verifyBudget || 30;
+  var verifyBudget = opts.verifyBudget || 50;
   var maxResults = opts.maxResults || 15;
 
   var lockedASet = {}; lockedA.forEach(function (id) { lockedASet[id] = true; });
@@ -435,14 +468,18 @@ function tradeSuggestions(opts) {
   var raw = [];
   giveAOptions.forEach(function (giveA) {
     giveBOptions.forEach(function (giveB) {
-      raw.push({
-        giveA: giveA, giveB: giveB,
-        heuristic: Math.min(heuristicGain(giveA, giveB, players), heuristicGain(giveB, giveA, players)),
-      });
+      var hA = heuristicGain(giveA, giveB, players), hB = heuristicGain(giveB, giveA, players);
+      raw.push({ giveA: giveA, giveB: giveB, heuristic: mySide ? hA + hB : Math.min(hA, hB) });
     });
   });
   raw.sort(function (x, y) { return y.heuristic - x.heuristic; });
   var candidates = raw.slice(0, verifyBudget);
+
+  var isLockedOnly = function (c) { return c.giveA.length === lockedA.length && c.giveB.length === lockedB.length; };
+  if (!candidates.some(isLockedOnly)) {
+    var lockedOnly = raw.find(isLockedOnly);
+    if (lockedOnly) candidates = candidates.concat([lockedOnly]);
+  }
 
   var beforeAWk = lineupTotalWithStreamingByWeek(rosterA, players, freeAgentsByPos, weeks, slots, eligibility);
   var beforeBWk = lineupTotalWithStreamingByWeek(rosterB, players, freeAgentsByPos, weeks, slots, eligibility);
@@ -456,7 +493,7 @@ function tradeSuggestions(opts) {
     var gainA = realGain(beforeA, rosters.afterRosterA, players, freeAgentsByPos, weeks, slots, eligibility);
     var gainB = realGain(beforeB, rosters.afterRosterB, players, freeAgentsByPos, weeks, slots, eligibility);
     if (gainA <= 0 || gainB <= 0) return;
-    if (Math.min(gainA, gainB) / Math.max(gainA, gainB) < fairnessRatio) return;
+    if (!passesFairness(gainA, gainB, fairnessRatio, mySide)) return;
     results.push({ giveA: c.giveA, giveB: c.giveB, gainA: gainA, gainB: gainB });
   });
   results.sort(function (x, y) { return y.gainA - x.gainA; });

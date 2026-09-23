@@ -422,14 +422,20 @@ def trade_targets(
     evaluate_with_streaming - so a trade isn't flagged as a big loss for a
     side that could trivially backfill the position on the wire instead).
 
-    Both sides' gain must be positive AND within `fairness_ratio` of each
-    other (min/max >= fairness_ratio) - `gain_self > 0 and gain_partner > 0`
-    alone lets through wildly lopsided "trades" like offering a bench kicker
-    (near-zero gain to you, since dropping him barely moves your lineup) for
-    a real bench upgrade (any positive gain, however large, satisfies
-    "> 0") that no actual manager would accept. A ratio (not a fixed point
-    gap) scales correctly with trade size and time of season - early-season
-    gains run much larger in absolute points than late-season ones."""
+    Both sides' gain must be positive, and the fairness ratio only bounds
+    the direction where team_id (side_a, "my team") comes out ahead -
+    `gain_self > 0 and gain_partner > 0` alone lets through wildly lopsided
+    "trades" like offering a bench kicker (near-zero gain to you, since
+    dropping him barely moves your lineup) for a real bench upgrade (any
+    positive gain, however large, satisfies "> 0") that no actual manager on
+    the OTHER side would accept. But the reverse - my team getting LESS than
+    the partner - is deliberately left unbounded: overpaying to land a
+    specific player is a real, legitimate call only the person making the
+    offer can make, not something this filter should second-guess on their
+    behalf (see the conversation this was built from). A ratio (not a fixed
+    point gap) scales correctly with trade size and time of season -
+    early-season gains run much larger in absolute points than late-season
+    ones."""
     from engine.trades import evaluate_with_streaming  # local import: trades.py also imports this module
 
     def top_n(pids: list[str], n: int) -> list[str]:
@@ -465,11 +471,11 @@ def trade_targets(
                 slots=slots,
                 eligibility=eligibility,
             )
-            if (
-                result.side_a.gain > 0
-                and result.side_b.gain > 0
-                and min(result.side_a.gain, result.side_b.gain) / max(result.side_a.gain, result.side_b.gain) >= fairness_ratio
-            ):
+            passes_fairness = (
+                result.side_a.gain <= result.side_b.gain  # I'm breaking even or overpaying - my call, not bounded
+                or result.side_b.gain / result.side_a.gain >= fairness_ratio  # I'm ahead - bound it for the partner's sake
+            )
+            if result.side_a.gain > 0 and result.side_b.gain > 0 and passes_fairness:
                 results.append(
                     {
                         "partner_team_id": partner_id,
