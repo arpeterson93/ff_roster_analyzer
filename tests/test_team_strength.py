@@ -417,14 +417,14 @@ def test_trade_targets_fairness_ratio_zero_reduces_to_the_old_both_positive_chec
     assert len(matches) == 1
 
 
-def test_trade_targets_does_not_bound_my_team_overpaying():
-    # I give away a luxury duplicate RB that's worth 0 to ME (my starter
-    # already outscores it every week) for a modest kicker upgrade - tiny
-    # gain for me (0.3), a huge gain for the partner (their duplicate RB
-    # now covers a bye their bare cupboard otherwise couldn't). Ratio is
-    # ~0.012, nowhere near 0.5 - the old symmetric rule would reject this,
-    # but overpaying to land a specific player is my call to make, not the
-    # filter's (see the conversation this was built from).
+def test_trade_targets_stays_symmetric_even_when_my_team_would_be_overpaying():
+    # Unlike the Trade Calculator's client-side twin (docs/js/trade.js's
+    # tradeSuggestions), these passive/browse-only suggestions stay
+    # symmetric in BOTH directions - I give away a luxury duplicate RB
+    # that's worth 0 to ME for a modest kicker upgrade (tiny gain for me,
+    # huge gain for the partner from covering their bye) - ratio ~0.012,
+    # nowhere near 0.5, so this stays excluded even though I'm the one
+    # "overpaying" (see the conversation this was built from).
     slots = {"RB": 1, "K": 1}
     eligibility = {"RB": {"RB"}, "K": {"K"}}
     weeks = [1, 2, 3]
@@ -444,34 +444,4 @@ def test_trade_targets_does_not_bound_my_team_overpaying():
         eligibility=eligibility, max_trade_targets=20, fairness_ratio=0.5,
     )
     matches = [r for r in results if r["give"] == ["a_rb2"] and r["get"] == ["b_k1"]]
-    assert len(matches) == 1
-    assert matches[0]["gain_self"] == pytest.approx(0.3)
-    assert matches[0]["gain_partner"] == pytest.approx(24.7)
-    assert matches[0]["gain_self"] < matches[0]["gain_partner"]
-
-
-def test_trade_targets_still_bounds_the_case_where_i_come_out_ahead():
-    # Same fixture, reversed: now IT'S the partner overpaying (giving up
-    # their bye-saving RB for my nearly-worthless kicker upgrade) - this
-    # direction still has to clear the fairness ratio, since it's the
-    # partner who'd be getting fleeced, not me.
-    slots = {"RB": 1, "K": 1}
-    eligibility = {"RB": {"RB"}, "K": {"K"}}
-    weeks = [1, 2, 3]
-    players = {
-        "b_rb1": _wk("b_rb1", "RB", {1: 20.0, 2: 20.0, 3: 20.0}),
-        "b_rb2": _wk("b_rb2", "RB", {1: 15.0, 2: 15.0, 3: 15.0}),
-        "a_rb1": _wk("a_rb1", "RB", {1: 10.0, 2: 0.0, 3: 10.0}),
-        "a_k1": _wk("a_k1", "K", {1: 0.6, 2: 0.6, 3: 0.6}),
-    }
-    free_agents = {"K": [_wk("fa_k", "K", {1: 0.5, 2: 0.5, 3: 0.5})]}
-    team_a = ["a_rb1", "a_k1"]
-    team_b = ["b_rb1", "b_rb2"]
-
-    results = trade_targets(
-        team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=players,
-        free_agents_by_pos=free_agents, weeks=weeks, slots=slots,
-        eligibility=eligibility, max_trade_targets=20, fairness_ratio=0.5,
-    )
-    matches = [r for r in results if r["give"] == ["a_k1"] and r["get"] == ["b_rb2"]]
     assert matches == []
