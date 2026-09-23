@@ -489,3 +489,92 @@ def trade_targets(
                 )
     results.sort(key=lambda r: r["gain_self"], reverse=True)
     return results[:max_trade_targets]
+
+
+def _robust_slot_order(slots: dict[str, int], eligibility: dict[str, set[str]]) -> list[tuple[str, str]]:
+    """expand_slots' own instance order, stably resorted so every single-
+    position slot (QB/RB/WR/TE/K) fills before any multi-position slot
+    (FLEX) - slot_value_matrix's fill order depends on FLEX only ever
+    seeing leftovers (every other position's real starter already
+    claimed), and a league's raw slots dict has no guaranteed key order to
+    rely on for that. Stable, so WR1 still precedes WR2 and FLEX1 still
+    precedes FLEX2 exactly as expand_slots already ordered them."""
+    instances = expand_slots(slots)
+    return sorted(instances, key=lambda inst: len(eligibility.get(inst[1], set())) > 1)
+
+
+def slot_value_matrix(
+    team_player_ids: list[str],
+    players: dict[str, PlayerCtx],
+    free_agents_by_pos: dict[str, list[PlayerCtx]],
+    weeks: list[int],
+    slots: dict[str, int],
+    eligibility: dict[str, set[str]],
+    depth_weight: float = 0.5,
+) -> dict[str, dict[str, float]]:
+    """{slot_instance_label: {"starting_value", "depth_value", "total"}},
+    summed across `weeks` - see the conversation this was built from for
+    the full derivation. Unlike depth_values_by_week (a per-PLAYER lineup-
+    delta via the real optimizer), this is a per-SLOT points-above-
+    replacement read: each starting slot, in a fixed fill order (see
+    _robust_slot_order), claims the single best-projected still-unclaimed
+    rostered player eligible for it that week - so FLEX only ever sees
+    leftovers, never a player RB/WR/TE/etc. already claimed - and is
+    scored against the best AVAILABLE (unrostered, same eligibility)
+    player that week. Starting value CAN go negative: a real rostered
+    player who's actually worse than a free agent is a real, informative
+    signal (this slot should probably be upgraded), not something to
+    hide. Depth value is every OTHER still-unclaimed eligible rostered
+    player after that slot's own pick (reduced by what PRECEDES it in the
+    fill order, never by what comes after - WR2's depth excludes WR1's
+    starter, but RB's own depth is untouched by what FLEX later claims)
+    scored the same way but floored at 0 per player - depth can only ever
+    help, never hurt, since a real bench player is never forced into the
+    lineup. A slot/depth-layer with no eligible unclaimed candidate that
+    week (a true bye, or a thin position with nothing left) contributes
+    exactly 0 - skipped entirely, never computed as 0 minus replacement,
+    since there's no real asset there to devalue."""
+    instances = _robust_slot_order(slots, eligibility)
+    best_available_cache: dict[tuple[str, ...], dict[int, float]] = {}
+
+    def best_available(base_positions: set[str], w: int) -> float:
+        key = tuple(sorted(base_positions))
+        by_week = best_available_cache.setdefault(key, {})
+        if w not in by_week:
+            candidates = [fa.weekly.get(w, 0.0) for pos in base_positions for fa in free_agents_by_pos.get(pos, [])]
+            by_week[w] = max(candidates, default=0.0)
+        return by_week[w]
+
+    starting_by_instance = {label: 0.0 for label, _ in instances}
+    depth_by_instance = {label: 0.0 for label, _ in instances}
+
+    for w in weeks:
+        claimed: set[str] = set()
+        for instance_label, base_label in instances:
+            elig = eligibility.get(base_label, set())
+            pool = [
+                pid
+                for pid in team_player_ids
+                if pid in players
+                and players[pid].position in elig
+                and pid not in claimed
+                and players[pid].weekly.get(w, 0.0) > 0
+            ]
+            if not pool:
+                continue  # true bye/no candidate - no asset here, contributes nothing
+            pool.sort(key=lambda pid: players[pid].weekly.get(w, 0.0), reverse=True)
+            replacement = best_available(elig, w)
+            starter = pool[0]
+            starting_by_instance[instance_label] += players[starter].weekly.get(w, 0.0) - replacement
+            claimed.add(starter)
+            for pid in pool[1:]:
+                depth_by_instance[instance_label] += max(0.0, players[pid].weekly.get(w, 0.0) - replacement)
+
+    return {
+        label: {
+            "starting_value": starting_by_instance[label],
+            "depth_value": depth_by_instance[label],
+            "total": starting_by_instance[label] + depth_weight * depth_by_instance[label],
+        }
+        for label, _ in instances
+    }

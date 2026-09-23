@@ -12,6 +12,7 @@ from engine.team_strength import (
     position_strength,
     rank_and_compare,
     slot_strength,
+    slot_value_matrix,
     trade_targets,
 )
 
@@ -469,3 +470,130 @@ def test_trade_targets_stays_symmetric_even_when_my_team_would_be_overpaying():
     )
     matches = [r for r in results if r["give"] == ["a_rb2"] and r["get"] == ["b_k1"]]
     assert matches == []
+
+
+# --- slot_value_matrix: points-above-replacement PER SLOT (not per player) -
+# see the conversation this was built from. This fixture reproduces the
+# real Week-4 "Balls Deep" (O-League) worked example hand-derived in that
+# conversation, using the league's real slot config (QB/RB/WR x2/TE/K/FLEX
+# x2) and real (rounded) projections, so these numbers are a direct check
+# against that derivation, not just internally-consistent arithmetic.
+_SVM_SLOTS = {"QB": 1, "RB": 1, "WR": 2, "TE": 1, "K": 1, "RB/WR/TE": 2}
+_SVM_ELIGIBILITY = {"QB": {"QB"}, "RB": {"RB"}, "WR": {"WR"}, "TE": {"TE"}, "K": {"K"}, "RB/WR/TE": {"RB", "WR", "TE"}}
+_SVM_WEEKS = [4]
+
+
+def _svm_team():
+    players = {
+        "williams": _wk("williams", "QB", {4: 26.26}),
+        "jones": _wk("jones", "QB", {4: 17.45}),
+        "walker": _wk("walker", "RB", {4: 16.28}),
+        "montgomery": _wk("montgomery", "RB", {4: 11.59}),
+        "stevenson": _wk("stevenson", "RB", {4: 10.29}),
+        "monangai": _wk("monangai", "RB", {4: 8.38}),
+        "allen": _wk("allen", "RB", {4: 4.27}),
+        "stbrown": _wk("stbrown", "WR", {4: 12.27}),
+        "adams": _wk("adams", "WR", {4: 7.65}),
+        "johnston": _wk("johnston", "WR", {4: 7.08}),
+        "stribling": _wk("stribling", "WR", {4: 5.47}),
+        "ridley": _wk("ridley", "WR", {4: 4.84}),
+        "pitts": _wk("pitts", "TE", {4: 6.01}),
+        "ferguson": _wk("ferguson", "TE", {4: 5.03}),
+        "pineiro": _wk("pineiro", "K", {4: 8.80}),
+    }
+    team = list(players.keys())
+    free_agents = {
+        "QB": [_wk("willis", "QB", {4: 17.24})],
+        "RB": [_wk("harris", "RB", {4: 4.80})],
+        "WR": [_wk("reed", "WR", {4: 6.52})],
+        "TE": [_wk("schultz", "TE", {4: 5.01})],
+        "K": [_wk("santos", "K", {4: 10.02})],
+    }
+    return players, team, free_agents
+
+
+def test_slot_value_matrix_matches_the_real_worked_example():
+    players, team, free_agents = _svm_team()
+    result = slot_value_matrix(team, players, free_agents, _SVM_WEEKS, _SVM_SLOTS, _SVM_ELIGIBILITY)
+
+    expected = {
+        "QB": (9.02, 0.21),
+        "RB": (11.48, 15.86),
+        "WR1": (5.75, 1.69),
+        "WR2": (1.13, 0.56),
+        "TE": (1.00, 0.02),
+        "FLEX1": (5.07, 6.19),
+        "FLEX2": (3.77, 2.42),
+        "K": (-1.22, 0.0),
+    }
+    for label, (starting, depth) in expected.items():
+        assert result[label]["starting_value"] == pytest.approx(starting, abs=1e-2), label
+        assert result[label]["depth_value"] == pytest.approx(depth, abs=1e-2), label
+        assert result[label]["total"] == pytest.approx(starting + 0.5 * depth, abs=1e-2), label
+
+
+def test_slot_value_matrix_wr1_and_wr2_depth_reads_genuinely_differ():
+    # WR1's depth pool excludes only its own pick (nothing WR-type precedes
+    # it); WR2's depth pool ALSO excludes WR1's starter, since WR1 precedes
+    # WR2 in the fill order - the two numbers must NOT be equal.
+    players, team, free_agents = _svm_team()
+    result = slot_value_matrix(team, players, free_agents, _SVM_WEEKS, _SVM_SLOTS, _SVM_ELIGIBILITY)
+    assert result["WR1"]["depth_value"] != pytest.approx(result["WR2"]["depth_value"])
+    assert result["WR1"]["depth_value"] == pytest.approx(1.69, abs=1e-2)
+    assert result["WR2"]["depth_value"] == pytest.approx(0.56, abs=1e-2)
+
+
+def test_slot_value_matrix_flex1_and_flex2_depth_reads_genuinely_differ():
+    players, team, free_agents = _svm_team()
+    result = slot_value_matrix(team, players, free_agents, _SVM_WEEKS, _SVM_SLOTS, _SVM_ELIGIBILITY)
+    assert result["FLEX1"]["depth_value"] != pytest.approx(result["FLEX2"]["depth_value"])
+
+
+def test_slot_value_matrix_starter_can_go_negative():
+    # This team's only kicker projects below the best available kicker -
+    # a real, informative signal, not something to hide behind a floor.
+    players, team, free_agents = _svm_team()
+    result = slot_value_matrix(team, players, free_agents, _SVM_WEEKS, _SVM_SLOTS, _SVM_ELIGIBILITY)
+    assert result["K"]["starting_value"] < 0
+
+
+def test_slot_value_matrix_true_bye_contributes_zero_not_negative():
+    # A single-RB team whose only RB is on bye (0.0 that week, same sentinel
+    # engine/valuation.py already uses) has no real asset to devalue - 0,
+    # not "0 minus a positive replacement value" (which would be negative).
+    slots = {"RB": 1}
+    eligibility = {"RB": {"RB"}}
+    weeks = [1]
+    players = {"only_rb": _wk("only_rb", "RB", {1: 0.0})}
+    free_agents = {"RB": [_wk("fa_rb", "RB", {1: 12.0})]}
+    result = slot_value_matrix(["only_rb"], players, free_agents, weeks, slots, eligibility)
+    assert result["RB"]["starting_value"] == 0.0
+    assert result["RB"]["depth_value"] == 0.0
+
+
+def test_slot_value_matrix_below_replacement_starter_is_negative_not_zeroed():
+    # Contrast with the bye case above - a REAL rostered player who's worse
+    # than the best free agent is a genuine negative-value asset.
+    slots = {"RB": 1}
+    eligibility = {"RB": {"RB"}}
+    weeks = [1]
+    players = {"weak_rb": _wk("weak_rb", "RB", {1: 3.0})}
+    free_agents = {"RB": [_wk("fa_rb", "RB", {1: 12.0})]}
+    result = slot_value_matrix(["weak_rb"], players, free_agents, weeks, slots, eligibility)
+    assert result["RB"]["starting_value"] == pytest.approx(-9.0)
+
+
+def test_slot_value_matrix_montgomery_style_double_counts_by_design():
+    # A player not claimed as a base-position starter contributes to BOTH
+    # his own position's depth chain AND a FLEX slot's starting value -
+    # intentional (two independent "what if this exact role needed him"
+    # lenses, not one real simultaneous lineup) - see the conversation this
+    # was built from.
+    players, team, free_agents = _svm_team()
+    result = slot_value_matrix(team, players, free_agents, _SVM_WEEKS, _SVM_SLOTS, _SVM_ELIGIBILITY)
+    # Montgomery (11.59) is the top of RB's OWN depth chain (RB depth's
+    # first/largest contributor) AND separately FLEX1's starting pick -
+    # confirmed indirectly via the exact depth/starting totals above, which
+    # only reconcile to the hand-derived numbers if both readings happened.
+    assert result["RB"]["depth_value"] == pytest.approx(15.86, abs=1e-2)
+    assert result["FLEX1"]["starting_value"] == pytest.approx(5.07, abs=1e-2)

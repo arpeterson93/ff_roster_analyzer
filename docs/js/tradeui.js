@@ -104,6 +104,32 @@ function suggestionsTableHtml(suggestions, playersById) {
   return `<table><thead><tr><th>Team A gives</th><th>Team B gives</th><th>A gain</th><th>B gain</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
+// Slot | Starting | Depth | Total, one row per slot instance in
+// window.FFTrade.slotValueMatrix's own order (QB, RB, WR1, WR2, TE, K,
+// FLEX1, FLEX2 for a standard league) - see that function's docstring in
+// docs/js/trade.js for the full derivation. Reflects whatever roster is
+// passed in - the CURRENT roster when nothing's checked, or the post-trade
+// roster once givesA/givesB are set, so checking boxes updates this table
+// live the same way it updates the picker and the single-trade detail
+// below it.
+function slotMatrixTableHtml(matrix) {
+  const labels = Object.keys(matrix);
+  const teamTotal = labels.reduce((acc, label) => acc + matrix[label].total, 0);
+  const rows = labels
+    .map((label) => {
+      const m = matrix[label];
+      return `<tr>
+        <td>${escapeHtml(label)}</td>
+        <td>${m.startingValue >= 0 ? "+" : ""}${fmt(m.startingValue, 1)}</td>
+        <td>${fmt(m.depthValue, 1)}</td>
+        <td><strong>${m.total >= 0 ? "+" : ""}${fmt(m.total, 1)}</strong></td>
+      </tr>`;
+    })
+    .join("");
+  return `<table><thead><tr><th>Slot</th><th>Starting</th><th>Depth</th><th>Total</th></tr></thead><tbody>${rows}</tbody>
+    <tfoot><tr><td colspan="3">Team total</td><td><strong>${teamTotal >= 0 ? "+" : ""}${fmt(teamTotal, 1)}</strong></td></tr></tfoot></table>`;
+}
+
 // Runs the (potentially multi-second, fully unlocked) search - see
 // docs/js/trade.js's tradeSuggestions for why this can be slow with nothing
 // locked, and fast once players are. The setTimeout lets the "Generating..."
@@ -287,11 +313,25 @@ export function renderTrade(container, data) {
           </div>
         </div>
         <div class="card">
+          <h3 style="margin:0 0 8px">Team value (starting + depth, per slot)</h3>
+          <p class="muted small">Points above replacement, per starting slot - reflects the trade as currently checked above, or each team's unmodified roster if nothing's checked yet. See the conversation this was built from for the full derivation.</p>
+          <div class="trade-result">
+            <div class="trade-side">
+              <h3>${escapeHtml(teamLabel(teamA))}</h3>
+              <div class="table-wrap" id="trade-matrix-a"></div>
+            </div>
+            <div class="trade-side">
+              <h3>${escapeHtml(teamLabel(teamB))}</h3>
+              <div class="table-wrap" id="trade-matrix-b"></div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
           <div class="select-row">
             <h3 style="margin:0">Suggested trades</h3>
             <button id="trade-suggest-refresh" type="button">Refresh suggestions</button>
           </div>
-          <p class="muted small">Check a box above first to lock that player into every suggestion below - the rest of each trade is built up around your locks.</p>
+          <p class="muted small">Check a box above first to lock that player into every suggestion below - the rest of each trade is built up around your locks. "A gain"/"B gain" are Team value totals (above), not the lineup-total numbers shown further down once you pick a trade to inspect in detail.</p>
           <div class="table-wrap" id="trade-suggestions">${suggestionsTableHtml(state.suggestions, playersById)}</div>
         </div>
         <div id="trade-result"></div>
@@ -349,6 +389,28 @@ export function renderTrade(container, data) {
     });
 
     evaluate();
+    renderMatrices();
+
+    // Reflects whatever's currently checked (or the unmodified roster if
+    // nothing is) - afterRosters is a no-op when givesA/givesB are empty,
+    // so this is always safe to call regardless of evaluate()'s own "pick
+    // at least one player" gate above.
+    function renderMatrices() {
+      const players = buildPlayersMap(data);
+      const weeks = [];
+      for (let w = data.meta.current_week; w <= data.meta.final_week; w++) weeks.push(w);
+      const slots = data.meta.slots;
+      const eligibility = data.meta.slot_eligibility;
+      const rosters = window.FFTrade.afterRosters([...state.givesA], [...state.givesB], rostA.map((p) => p.id), rostB.map((p) => p.id));
+      const matrixA = window.FFTrade.slotValueMatrix({
+        teamPlayerIds: rosters.afterRosterA, players, freeAgentsByPos, weeks, slots, eligibility,
+      });
+      const matrixB = window.FFTrade.slotValueMatrix({
+        teamPlayerIds: rosters.afterRosterB, players, freeAgentsByPos, weeks, slots, eligibility,
+      });
+      container.querySelector("#trade-matrix-a").innerHTML = slotMatrixTableHtml(matrixA);
+      container.querySelector("#trade-matrix-b").innerHTML = slotMatrixTableHtml(matrixB);
+    }
 
     function evaluate() {
       const resultEl = container.querySelector("#trade-result");

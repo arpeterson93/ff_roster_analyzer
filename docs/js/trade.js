@@ -386,14 +386,100 @@ function heuristicGain(give, get, players) {
   return value - cost;
 }
 
-// Real gain for one side, reusing lineupTotalWithStreamingByWeek directly
-// (skipping evaluateTradeWithStreaming's per-week detail objects/rawGiven
-// bookkeeping - the suggestion search only needs the two scalar totals).
-function realGain(beforeTotal, afterRoster, players, freeAgentsByPos, weeks, slots, eligibility) {
-  var afterWk = lineupTotalWithStreamingByWeek(afterRoster, players, freeAgentsByPos, weeks, slots, eligibility);
-  var after = 0;
-  for (var w in afterWk) after += afterWk[w];
-  return after - beforeTotal;
+// expandSlots' own instance order, stably resorted so every single-
+// position slot (QB/RB/WR/TE/K) fills before any multi-position slot
+// (FLEX) - slotValueMatrix's fill order depends on FLEX only ever seeing
+// leftovers (every other position's real starter already claimed), and a
+// league's raw slots dict has no guaranteed key order to rely on for
+// that. Array.sort is stable (guaranteed since ES2019), so WR1 still
+// precedes WR2 and FLEX1 still precedes FLEX2 exactly as expandSlots
+// already ordered them - twin of engine/team_strength.py's
+// _robust_slot_order.
+function robustSlotOrder(slots, eligibility) {
+  return expandSlots(slots).slice().sort(function (a, b) {
+    var aMulti = (eligibility[a.base] || []).length > 1 ? 1 : 0;
+    var bMulti = (eligibility[b.base] || []).length > 1 ? 1 : 0;
+    return aMulti - bMulti;
+  });
+}
+
+// {instance: {startingValue, depthValue, total}} - twin of
+// engine/team_strength.py's slot_value_matrix, see that function's own
+// docstring for the full derivation (points-above-replacement PER SLOT,
+// not per player - starting value can go negative, depth is floored at 0
+// per player and only reduced by what PRECEDES a slot in the fill order).
+function slotValueMatrix(opts) {
+  var teamPlayerIds = opts.teamPlayerIds, players = opts.players, freeAgentsByPos = opts.freeAgentsByPos;
+  var weeks = opts.weeks, slots = opts.slots, eligibility = opts.eligibility;
+  var depthWeight = opts.depthWeight !== undefined ? opts.depthWeight : 0.5;
+
+  var instances = robustSlotOrder(slots, eligibility);
+  var bestAvailableCache = {};
+
+  function bestAvailable(basePositions, w) {
+    var key = basePositions.slice().sort().join(",") + "|" + w;
+    if (bestAvailableCache[key] !== undefined) return bestAvailableCache[key];
+    var best = 0;
+    basePositions.forEach(function (pos) {
+      (freeAgentsByPos[pos] || []).forEach(function (fa) {
+        var v = (fa.weekly && fa.weekly[w] !== undefined) ? fa.weekly[w] : 0;
+        if (v > best) best = v;
+      });
+    });
+    bestAvailableCache[key] = best;
+    return best;
+  }
+
+  var startingByInstance = {}, depthByInstance = {};
+  instances.forEach(function (inst) {
+    startingByInstance[inst.instance] = 0;
+    depthByInstance[inst.instance] = 0;
+  });
+
+  weeks.forEach(function (w) {
+    var claimed = {};
+    instances.forEach(function (inst) {
+      var elig = eligibility[inst.base] || [];
+      var pool = teamPlayerIds.filter(function (pid) {
+        var p = players[pid];
+        if (!p || elig.indexOf(p.position) === -1 || claimed[pid]) return false;
+        var v = (p.weekly && p.weekly[w] !== undefined) ? p.weekly[w] : 0;
+        return v > 0;
+      });
+      if (pool.length === 0) return; // true bye/no candidate - no asset here, contributes nothing
+      pool.sort(function (a, b) { return players[b].weekly[w] - players[a].weekly[w]; });
+      var replacement = bestAvailable(elig, w);
+      var starter = pool[0];
+      startingByInstance[inst.instance] += players[starter].weekly[w] - replacement;
+      claimed[starter] = true;
+      for (var i = 1; i < pool.length; i++) {
+        depthByInstance[inst.instance] += Math.max(0, players[pool[i]].weekly[w] - replacement);
+      }
+    });
+  });
+
+  var result = {};
+  instances.forEach(function (inst) {
+    var starting = startingByInstance[inst.instance], depth = depthByInstance[inst.instance];
+    result[inst.instance] = { startingValue: starting, depthValue: depth, total: starting + depthWeight * depth };
+  });
+  return result;
+}
+
+// Sum of every slot's `total` (starting + depthWeight*depth) - one team's
+// whole roster reduced to a single number, for before/after trade
+// comparison. Cheap (no exponential DP, just small per-slot sorts), unlike
+// the bitmask-DP lineup evaluator (see optimalLineupTotal) - see
+// tradeSuggestions' own comment for why that cost difference is what makes
+// this the primary trade-suggestion signal now, not just a ranking hint.
+function slotValueTeamTotal(teamPlayerIds, players, freeAgentsByPos, weeks, slots, eligibility) {
+  var matrix = slotValueMatrix({
+    teamPlayerIds: teamPlayerIds, players: players, freeAgentsByPos: freeAgentsByPos,
+    weeks: weeks, slots: slots, eligibility: eligibility,
+  });
+  var total = 0;
+  Object.keys(matrix).forEach(function (label) { total += matrix[label].total; });
+  return total;
 }
 
 // Both sides' gain must be positive, and the fairness ratio only bounds the
@@ -419,24 +505,34 @@ function passesFairness(gainA, gainB, fairnessRatio, mySide) {
 // idea, extended to "locked" players (see lockedA/lockedB) and larger
 // combos than the server bothers precomputing for every team pair.
 //
-// Two-phase for speed: the exact lineup-delta evaluation is an exponential
-// bitmask DP over roster size (see optimalLineupTotal), run once per side
-// per remaining week - fine for evaluating ONE trade interactively, much too
-// slow to run against every raw combination (pool=6/cap=3 alone generates
-// >1500 combos). Phase 1 cheaply ranks every raw combo with heuristicGain
-// (no DP at all); only the top `verifyBudget` of those get the real,
-// expensive evaluation, and only THOSE real numbers ever get shown or
-// filtered on - the heuristic is purely for choosing what's worth verifying,
-// never a substitute for the real rule. The heuristic ranks by TOTAL surplus
-// (both sides summed) when mySide is known, not by how balanced a combo
-// looks - a min()-based rank would systematically bury exactly the
-// deliberately-lopsided-in-my-disfavor combos passesFairness now allows
-// through, before they ever reached the real evaluation. Falls back to the
-// old balance-seeking min() when mySide is null, matching passesFairness'
-// own symmetric fallback. The exact locked-only combo (nothing added to
-// either side) is ALWAYS verified regardless of its heuristic rank - it's
-// the one trade the caller explicitly asked about, and a coarse heuristic
-// over a big lumpy player-value space has no business silently dropping it.
+// gainA/gainB are now slotValueTeamTotal deltas (points-above-replacement
+// PER SLOT, summed across the whole roster), not the bitmask-DP lineup-
+// delta evaluateTradeWithStreaming uses - see the conversation this was
+// built from for the full derivation and why it's the more holistic read.
+// That also changes the performance shape: slotValueTeamTotal has no
+// exponential DP (just small per-slot sorts), so it's cheap enough to be
+// the REAL signal for a much bigger verify budget than the old bitmask-DP
+// version could afford, not just a coarse ranking hint. Still two-phase,
+// since an unlocked, fully-unbounded-pool search can generate well over a
+// million raw combos and even a cheap per-candidate cost adds up at that
+// scale: phase 1 ranks every raw combo with heuristicGain (O(1) per
+// candidate, no slot-matrix math at all); only the top `verifyBudget` get
+// the real slotValueTeamTotal evaluation, and only THOSE real numbers ever
+// get shown or filtered on. The heuristic ranks by TOTAL surplus (both
+// sides summed) when mySide is known, not by how balanced a combo looks -
+// a min()-based rank would systematically bury exactly the deliberately-
+// lopsided-in-my-disfavor combos passesFairness now allows through, before
+// they ever reached the real evaluation. Falls back to the old balance-
+// seeking min() when mySide is null, matching passesFairness' own
+// symmetric fallback. The exact locked-only combo (nothing added to either
+// side) is ALWAYS verified regardless of its heuristic rank - it's the one
+// trade the caller explicitly asked about, and a coarse heuristic over a
+// big lumpy player-value space has no business silently dropping it.
+//
+// The single-trade detail view (checkbox picker, weekly before/after
+// table) is unaffected - it still runs evaluateTradeWithStreaming, the
+// real lineup-optimizer read, unchanged. This function only drives which
+// trades get SUGGESTED and how they're ranked/filtered against each other.
 function tradeSuggestions(opts) {
   var rosterA = opts.rosterA, rosterB = opts.rosterB;
   var lockedA = opts.lockedA || [], lockedB = opts.lockedB || [];
@@ -448,13 +544,16 @@ function tradeSuggestions(opts) {
   // game) - a smaller pool used to mean a player outside the top 6 by
   // ros_total could never appear in an auto-generated suggestion at all,
   // even if there were only 2 real candidates to search. Safe to leave
-  // uncapped: the expensive exact evaluation is bounded by verifyBudget
-  // regardless of how many raw combos exist (see this function's own
-  // comment) - a bigger pool only makes phase 1's cheap ranking sort a
-  // longer (still trivially fast) list, not the slow part run more times.
+  // uncapped: the real evaluation is bounded by verifyBudget regardless of
+  // how many raw combos exist (see this function's own comment) - a
+  // bigger pool only makes phase 1's cheap ranking sort a longer (still
+  // trivially fast) list, not the slow part run more times.
   var poolSize = opts.poolSize || Infinity;
   var maxPerSide = opts.maxPerSide || 3;
-  var verifyBudget = opts.verifyBudget || 50;
+  // ~40x the old bitmask-DP-era budget (50) - slotValueTeamTotal has no
+  // exponential DP, so verifying this many is still a sub-few-second search
+  // even fully unlocked, and far fewer real candidates get missed.
+  var verifyBudget = opts.verifyBudget || 2000;
   var maxResults = opts.maxResults || 15;
 
   var lockedASet = {}; lockedA.forEach(function (id) { lockedASet[id] = true; });
@@ -481,17 +580,14 @@ function tradeSuggestions(opts) {
     if (lockedOnly) candidates = candidates.concat([lockedOnly]);
   }
 
-  var beforeAWk = lineupTotalWithStreamingByWeek(rosterA, players, freeAgentsByPos, weeks, slots, eligibility);
-  var beforeBWk = lineupTotalWithStreamingByWeek(rosterB, players, freeAgentsByPos, weeks, slots, eligibility);
-  var beforeA = 0, beforeB = 0;
-  for (var wa in beforeAWk) beforeA += beforeAWk[wa];
-  for (var wb in beforeBWk) beforeB += beforeBWk[wb];
+  var beforeA = slotValueTeamTotal(rosterA, players, freeAgentsByPos, weeks, slots, eligibility);
+  var beforeB = slotValueTeamTotal(rosterB, players, freeAgentsByPos, weeks, slots, eligibility);
 
   var results = [];
   candidates.forEach(function (c) {
     var rosters = afterRosters(c.giveA, c.giveB, rosterA, rosterB);
-    var gainA = realGain(beforeA, rosters.afterRosterA, players, freeAgentsByPos, weeks, slots, eligibility);
-    var gainB = realGain(beforeB, rosters.afterRosterB, players, freeAgentsByPos, weeks, slots, eligibility);
+    var gainA = slotValueTeamTotal(rosters.afterRosterA, players, freeAgentsByPos, weeks, slots, eligibility) - beforeA;
+    var gainB = slotValueTeamTotal(rosters.afterRosterB, players, freeAgentsByPos, weeks, slots, eligibility) - beforeB;
     if (gainA <= 0 || gainB <= 0) return;
     if (!passesFairness(gainA, gainB, fairnessRatio, mySide)) return;
     results.push({ giveA: c.giveA, giveB: c.giveB, gainA: gainA, gainB: gainB });
@@ -509,6 +605,8 @@ if (typeof module !== "undefined" && module.exports) {
     lineupAssignmentForWeek: lineupAssignmentForWeek,
     lineupAssignmentForWeekWithStreaming: lineupAssignmentForWeekWithStreaming,
     tradeSuggestions: tradeSuggestions,
+    slotValueMatrix: slotValueMatrix,
+    afterRosters: afterRosters,
   };
 
   if (require.main === module) {
@@ -566,7 +664,32 @@ if (typeof module !== "undefined" && module.exports) {
       return { name: c.name, gain_a: result.sideA.gain, gain_b: result.sideB.gain, favors: result.favors };
     });
 
-    console.log(JSON.stringify({ cases: results, streaming_cases: streamingResults }));
+    // slot_value_matrix_cases are also fully self-contained, same reasoning
+    // as streaming_cases above.
+    var slotValueMatrixResults = (fixture.slot_value_matrix_cases || []).map(function (c) {
+      var casePlayers = {};
+      Object.keys(c.players).forEach(function (id) {
+        var p = c.players[id];
+        var weekly = {};
+        Object.keys(p.weekly).forEach(function (w) { weekly[w] = p.weekly[w]; });
+        casePlayers[id] = { position: p.position, weekly: weekly, ros_total: p.ros_total };
+      });
+      var freeAgentsByPos = {};
+      Object.keys(c.free_agents || {}).forEach(function (pos) {
+        freeAgentsByPos[pos] = c.free_agents[pos].map(function (fa) {
+          var weekly = {};
+          Object.keys(fa.weekly).forEach(function (w) { weekly[w] = fa.weekly[w]; });
+          return { id: fa.id, position: fa.position, weekly: weekly, ros_total: fa.ros_total };
+        });
+      });
+      var result = slotValueMatrix({
+        teamPlayerIds: c.roster, players: casePlayers, freeAgentsByPos: freeAgentsByPos,
+        weeks: c.weeks, slots: c.slots, eligibility: c.eligibility,
+      });
+      return { name: c.name, matrix: result };
+    });
+
+    console.log(JSON.stringify({ cases: results, streaming_cases: streamingResults, slot_value_matrix_cases: slotValueMatrixResults }));
   }
 } else if (typeof window !== "undefined") {
   window.FFTrade = {
@@ -577,5 +700,7 @@ if (typeof module !== "undefined" && module.exports) {
     lineupAssignmentForWeek: lineupAssignmentForWeek,
     lineupAssignmentForWeekWithStreaming: lineupAssignmentForWeekWithStreaming,
     tradeSuggestions: tradeSuggestions,
+    slotValueMatrix: slotValueMatrix,
+    afterRosters: afterRosters,
   };
 }

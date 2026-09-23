@@ -1,58 +1,435 @@
 {
   "_comment": "Small 2-team league state for engine.trades / docs/js/trade.js parity checks. slots={QB:1,RB:1}, eligibility={QB:{QB},RB:{RB}}, weeks=[1,2,3].",
-  "slots": {"QB": 1, "RB": 1},
-  "eligibility": {"QB": ["QB"], "RB": ["RB"]},
-  "weeks": [1, 2, 3],
-  "players": {
-    "qbA1": {"position": "QB", "ppw": 18.0, "ros_total": 54.0},
-    "rbA1": {"position": "RB", "ppw": 20.0, "ros_total": 60.0},
-    "rbA2": {"position": "RB", "ppw": 5.0, "ros_total": 15.0},
-    "qbB1": {"position": "QB", "ppw": 10.0, "ros_total": 30.0},
-    "rbB1": {"position": "RB", "ppw": 8.0, "ros_total": 24.0},
-    "rbB2": {"position": "RB", "ppw": 22.0, "ros_total": 66.0}
+  "slots": {
+    "QB": 1,
+    "RB": 1
   },
-  "roster_a": ["qbA1", "rbA1", "rbA2"],
-  "roster_b": ["qbB1", "rbB1", "rbB2"],
+  "eligibility": {
+    "QB": [
+      "QB"
+    ],
+    "RB": [
+      "RB"
+    ]
+  },
+  "weeks": [
+    1,
+    2,
+    3
+  ],
+  "players": {
+    "qbA1": {
+      "position": "QB",
+      "ppw": 18.0,
+      "ros_total": 54.0
+    },
+    "rbA1": {
+      "position": "RB",
+      "ppw": 20.0,
+      "ros_total": 60.0
+    },
+    "rbA2": {
+      "position": "RB",
+      "ppw": 5.0,
+      "ros_total": 15.0
+    },
+    "qbB1": {
+      "position": "QB",
+      "ppw": 10.0,
+      "ros_total": 30.0
+    },
+    "rbB1": {
+      "position": "RB",
+      "ppw": 8.0,
+      "ros_total": 24.0
+    },
+    "rbB2": {
+      "position": "RB",
+      "ppw": 22.0,
+      "ros_total": 66.0
+    }
+  },
+  "roster_a": [
+    "qbA1",
+    "rbA1",
+    "rbA2"
+  ],
+  "roster_b": [
+    "qbB1",
+    "rbB1",
+    "rbB2"
+  ],
   "cases": [
     {
       "name": "favors_a_bench_for_starter",
-      "gives_a": ["rbA2"],
-      "gives_b": ["rbB2"],
-      "expected": {"gain_a": 6.0, "gain_b": -42.0, "favors": "a"}
+      "gives_a": [
+        "rbA2"
+      ],
+      "gives_b": [
+        "rbB2"
+      ],
+      "expected": {
+        "gain_a": 6.0,
+        "gain_b": -42.0,
+        "favors": "a"
+      }
     },
     {
       "name": "favors_b_starter_for_worse_starter",
-      "gives_a": ["rbA1"],
-      "gives_b": ["rbB1"],
-      "expected": {"gain_a": -36.0, "gain_b": 0.0, "favors": "b"}
+      "gives_a": [
+        "rbA1"
+      ],
+      "gives_b": [
+        "rbB1"
+      ],
+      "expected": {
+        "gain_a": -36.0,
+        "gain_b": 0.0,
+        "favors": "b"
+      }
     },
     {
       "name": "even_bench_swap",
-      "gives_a": ["rbA2"],
-      "gives_b": ["rbB1"],
-      "expected": {"gain_a": 0.0, "gain_b": 0.0, "favors": "even"}
+      "gives_a": [
+        "rbA2"
+      ],
+      "gives_b": [
+        "rbB1"
+      ],
+      "expected": {
+        "gain_a": 0.0,
+        "gain_b": 0.0,
+        "favors": "even"
+      }
     }
   ],
   "streaming_cases": [
     {
       "_comment": "Same scenario as test_trades.py's test_evaluate_with_streaming_discounts_a_trade_the_wire_could_replace: team A's only kicker is on bye week 2; team B's kicker offer only helps by the edge over what a week-2 wire kicker already provides (8 - 7 = 1), not the full 0 -> 8 swing a plain evaluate() would give.",
       "name": "kicker_bye_discounted_by_wire",
-      "slots": {"K": 1},
-      "eligibility": {"K": ["K"]},
-      "weeks": [1, 2],
+      "slots": {
+        "K": 1
+      },
+      "eligibility": {
+        "K": [
+          "K"
+        ]
+      },
+      "weeks": [
+        1,
+        2
+      ],
       "players": {
-        "kA1": {"position": "K", "ros_total": 10.0, "weekly": {"1": 10.0, "2": 0.0}},
-        "kB1": {"position": "K", "ros_total": 16.0, "weekly": {"1": 8.0, "2": 8.0}},
-        "otherB": {"position": "K", "ros_total": 2.0, "weekly": {"1": 1.0, "2": 1.0}}
+        "kA1": {
+          "position": "K",
+          "ros_total": 10.0,
+          "weekly": {
+            "1": 10.0,
+            "2": 0.0
+          }
+        },
+        "kB1": {
+          "position": "K",
+          "ros_total": 16.0,
+          "weekly": {
+            "1": 8.0,
+            "2": 8.0
+          }
+        },
+        "otherB": {
+          "position": "K",
+          "ros_total": 2.0,
+          "weekly": {
+            "1": 1.0,
+            "2": 1.0
+          }
+        }
       },
       "free_agents": {
-        "K": [{"id": "fa_k", "position": "K", "ros_total": 14.0, "weekly": {"1": 7.0, "2": 7.0}}]
+        "K": [
+          {
+            "id": "fa_k",
+            "position": "K",
+            "ros_total": 14.0,
+            "weekly": {
+              "1": 7.0,
+              "2": 7.0
+            }
+          }
+        ]
       },
-      "roster_a": ["kA1"],
-      "roster_b": ["kB1", "otherB"],
+      "roster_a": [
+        "kA1"
+      ],
+      "roster_b": [
+        "kB1",
+        "otherB"
+      ],
       "gives_a": [],
-      "gives_b": ["kB1"],
-      "expected": {"gain_a": 1.0, "gain_b": -14.0, "favors": "a"}
+      "gives_b": [
+        "kB1"
+      ],
+      "expected": {
+        "gain_a": 1.0,
+        "gain_b": -14.0,
+        "favors": "a"
+      }
+    }
+  ],
+  "slot_value_matrix_cases": [
+    {
+      "name": "week4_o_league_real_worked_example",
+      "slots": {
+        "QB": 1,
+        "RB": 1,
+        "WR": 2,
+        "TE": 1,
+        "K": 1,
+        "RB/WR/TE": 2
+      },
+      "eligibility": {
+        "QB": [
+          "QB"
+        ],
+        "RB": [
+          "RB"
+        ],
+        "WR": [
+          "WR"
+        ],
+        "TE": [
+          "TE"
+        ],
+        "K": [
+          "K"
+        ],
+        "RB/WR/TE": [
+          "RB",
+          "WR",
+          "TE"
+        ]
+      },
+      "weeks": [
+        4
+      ],
+      "players": {
+        "williams": {
+          "position": "QB",
+          "ros_total": 26.26,
+          "weekly": {
+            "4": 26.26
+          }
+        },
+        "jones": {
+          "position": "QB",
+          "ros_total": 17.45,
+          "weekly": {
+            "4": 17.45
+          }
+        },
+        "walker": {
+          "position": "RB",
+          "ros_total": 16.28,
+          "weekly": {
+            "4": 16.28
+          }
+        },
+        "montgomery": {
+          "position": "RB",
+          "ros_total": 11.59,
+          "weekly": {
+            "4": 11.59
+          }
+        },
+        "stevenson": {
+          "position": "RB",
+          "ros_total": 10.29,
+          "weekly": {
+            "4": 10.29
+          }
+        },
+        "monangai": {
+          "position": "RB",
+          "ros_total": 8.38,
+          "weekly": {
+            "4": 8.38
+          }
+        },
+        "allen": {
+          "position": "RB",
+          "ros_total": 4.27,
+          "weekly": {
+            "4": 4.27
+          }
+        },
+        "stbrown": {
+          "position": "WR",
+          "ros_total": 12.27,
+          "weekly": {
+            "4": 12.27
+          }
+        },
+        "adams": {
+          "position": "WR",
+          "ros_total": 7.65,
+          "weekly": {
+            "4": 7.65
+          }
+        },
+        "johnston": {
+          "position": "WR",
+          "ros_total": 7.08,
+          "weekly": {
+            "4": 7.08
+          }
+        },
+        "stribling": {
+          "position": "WR",
+          "ros_total": 5.47,
+          "weekly": {
+            "4": 5.47
+          }
+        },
+        "ridley": {
+          "position": "WR",
+          "ros_total": 4.84,
+          "weekly": {
+            "4": 4.84
+          }
+        },
+        "pitts": {
+          "position": "TE",
+          "ros_total": 6.01,
+          "weekly": {
+            "4": 6.01
+          }
+        },
+        "ferguson": {
+          "position": "TE",
+          "ros_total": 5.03,
+          "weekly": {
+            "4": 5.03
+          }
+        },
+        "pineiro": {
+          "position": "K",
+          "ros_total": 8.8,
+          "weekly": {
+            "4": 8.8
+          }
+        }
+      },
+      "free_agents": {
+        "QB": [
+          {
+            "id": "willis",
+            "position": "QB",
+            "ros_total": 17.24,
+            "weekly": {
+              "4": 17.24
+            }
+          }
+        ],
+        "RB": [
+          {
+            "id": "harris",
+            "position": "RB",
+            "ros_total": 4.8,
+            "weekly": {
+              "4": 4.8
+            }
+          }
+        ],
+        "WR": [
+          {
+            "id": "reed",
+            "position": "WR",
+            "ros_total": 6.52,
+            "weekly": {
+              "4": 6.52
+            }
+          }
+        ],
+        "TE": [
+          {
+            "id": "schultz",
+            "position": "TE",
+            "ros_total": 5.01,
+            "weekly": {
+              "4": 5.01
+            }
+          }
+        ],
+        "K": [
+          {
+            "id": "santos",
+            "position": "K",
+            "ros_total": 10.02,
+            "weekly": {
+              "4": 10.02
+            }
+          }
+        ]
+      },
+      "roster": [
+        "williams",
+        "jones",
+        "walker",
+        "montgomery",
+        "stevenson",
+        "monangai",
+        "allen",
+        "stbrown",
+        "adams",
+        "johnston",
+        "stribling",
+        "ridley",
+        "pitts",
+        "ferguson",
+        "pineiro"
+      ],
+      "expected": {
+        "QB": {
+          "starting_value": 9.020000000000003,
+          "depth_value": 0.21000000000000085,
+          "total": 9.125000000000004
+        },
+        "RB": {
+          "starting_value": 11.48,
+          "depth_value": 15.86,
+          "total": 19.41
+        },
+        "WR1": {
+          "starting_value": 5.75,
+          "depth_value": 1.6900000000000013,
+          "total": 6.595000000000001
+        },
+        "WR2": {
+          "starting_value": 1.1300000000000008,
+          "depth_value": 0.5600000000000005,
+          "total": 1.410000000000001
+        },
+        "TE": {
+          "starting_value": 1.0,
+          "depth_value": 0.020000000000000462,
+          "total": 1.0100000000000002
+        },
+        "K": {
+          "starting_value": -1.2199999999999989,
+          "depth_value": 0.0,
+          "total": -1.2199999999999989
+        },
+        "FLEX1": {
+          "starting_value": 5.07,
+          "depth_value": 6.190000000000001,
+          "total": 8.165000000000001
+        },
+        "FLEX2": {
+          "starting_value": 3.7699999999999996,
+          "depth_value": 2.4200000000000017,
+          "total": 4.98
+        }
+      }
     }
   ]
 }
