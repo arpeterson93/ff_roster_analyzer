@@ -73,7 +73,6 @@ from ingest import rankings as rk
 from ingest.config import load_all_league_configs
 from ingest.base import Matchup
 from ingest.espn_client import EspnClient
-from ingest.espn_injuries import EspnInjuriesFetchError, fetch_ir_return_weeks
 from ingest.espn_scoreboard import fetch_remaining_game_fraction
 from ingest.settings_sheet import SettingsSheetError, apply_remote_settings, fetch_remote_settings, parse_seeding_config
 from ingest.weather import fetch_game_weather
@@ -658,19 +657,14 @@ def run_league(cfg: dict) -> dict:
         weather_by_team[row["home_team"]] = w
         weather_by_team[row["away_team"]] = w
 
-    # Best-effort: espn.com/nfl/injuries' own return-date estimates, used
-    # below to zero an IR player's proprietary projection for the weeks
-    # before they're expected back (see engine.valuation.project_player's
-    # ir_return_week param) rather than just the current week. A failure
-    # (retried a few times inside fetch_ir_return_weeks first) surfaces the
-    # actual cause in the warning banner, since every IR player then
-    # silently falls back to current-week-only zeroing.
-    try:
-        ir_return_weeks_by_espn_id = fetch_ir_return_weeks(season, schedules_current)
-    except EspnInjuriesFetchError as exc:
-        logger.warning("espn.com/nfl/injuries fetch failed: %s", exc, exc_info=True)
-        warnings.append(f"espn.com/nfl/injuries fetch failed ({exc}); IR players only zeroed for the current week")
-        ir_return_weeks_by_espn_id = {}
+    # espn.com/nfl/injuries' own return-date estimates would otherwise feed
+    # engine.valuation.project_player's ir_return_week param (zeroing an IR
+    # player's proprietary projection out past just the current week) - the
+    # fetch itself (ingest/espn_injuries.py) is disabled for now, since it's
+    # been reliably failing in practice, not worth a warning on every single
+    # run. Every IR player falls back to the existing current-week-only
+    # zeroing this already supported before ir_return_week existed.
+    ir_return_weeks_by_espn_id: dict[int, int] = {}
 
     # ESPN's own per-week projection for every remaining week - this IS the
     # primary number project_player uses now (see engine/valuation.py's
