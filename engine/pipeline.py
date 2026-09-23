@@ -7,8 +7,14 @@ import bisect
 import json
 import logging
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+try:
+    import resource  # POSIX only (fine on the CI's ubuntu-latest runner) - absent on Windows
+except ImportError:
+    resource = None
 
 import polars as pl
 
@@ -79,6 +85,32 @@ from ingest.weather import fetch_game_weather
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
+
+_last_checkpoint = {"t": None}
+
+
+def _log_checkpoint(label: str) -> None:
+    """Temporary diagnostic (see the conversation this was added from -
+    three consecutive CI runs died with 'the runner has received a shutdown
+    signal' partway through this same stretch of nflverse stats/curve
+    loading, no traceback, on a public repo with no minutes cap and no
+    reported GitHub incident - the leading theory is memory growth as the
+    season's stat volume accumulates week over week). Logs elapsed time
+    since the last checkpoint and current process RSS (ru_maxrss is
+    peak-so-far, not instantaneous, but that's exactly what matters for
+    spotting an OOM trend) so a future runner kill leaves a last-known
+    checkpoint + memory trajectory in the log instead of just silence.
+    Safe to delete once the cause is confirmed."""
+    now = time.perf_counter()
+    elapsed = f"{now - _last_checkpoint['t']:.1f}s" if _last_checkpoint["t"] is not None else "n/a"
+    _last_checkpoint["t"] = now
+    if resource is not None:
+        # ru_maxrss is KB on Linux, bytes on macOS - CI is ubuntu-latest, so KB.
+        rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+        logger.info("checkpoint[%s]: +%s since last, peak RSS %.0f MB", label, elapsed, rss_mb)
+    else:
+        logger.info("checkpoint[%s]: +%s since last (RSS unavailable on this platform)", label, elapsed)
+
 
 _IR_SLOTS = {"IR"}
 
@@ -311,6 +343,7 @@ def _compute_faab_estimates(
     # gets real comps at all, since none of them have their own FAAB
     # history to train on.
     model = FaabModel(POOLED_TRAINING_TABLE_PATH)
+    _log_checkpoint("faab_model_loaded")
 
     # A genuine leaguewide "FantasyPros hasn't published ANY real weekly
     # rank for this position yet this week" blackout - the live analog of
@@ -562,6 +595,7 @@ def run_league(cfg: dict) -> dict:
     warnings: list[str] = []
 
     logger.info("=== %s (%s) ===", cfg["name"], slug)
+    _log_checkpoint(f"{slug}_start")
 
     settings_sheet_id = cfg.get("settings_sheet_id")
     settings_overrides: list[str] = []
@@ -680,6 +714,7 @@ def run_league(cfg: dict) -> dict:
         logger.warning("ESPN future-week projections fetch failed: %s", exc, exc_info=True)
         warnings.append(f"ESPN future-week projections fetch failed: {exc}")
         espn_future_projections = {}
+    _log_checkpoint("future_projections_done")
 
     # --- curves ---
     curve = _build_curve_for_league(cfg, offense_positions, player_rules, weeks_played, season)
@@ -689,9 +724,11 @@ def run_league(cfg: dict) -> dict:
         curve.sd.update(dst_curve.sd)
         curve.max_rank.update(dst_curve.max_rank)
         curve.position_avg.update(dst_curve.position_avg)
+    _log_checkpoint("curves_built")
 
     # --- matchup index (offense positions + DST share one code path) ---
     current_stats = nd.player_stats(season, current_season=season)
+    _log_checkpoint("current_stats_loaded")
 
     # Usage-share raw material (Snap %/Att %/Tgt % - see docs/js's Rankings
     # Stats tab): indexed once here, up front, rather than inside
@@ -710,12 +747,14 @@ def run_league(cfg: dict) -> dict:
     offense_snaps_index = build_snap_counts_index(snaps_df)
     team_offense_snaps = team_snap_totals(snaps_df)
     gsis_to_pfr = build_gsis_to_pfr_map(nd.playerids())
+    _log_checkpoint("snap_and_id_indices_built")
 
     prior_stats = nd.player_stats(prior_season)
     prior_schedules = nd.schedules(prior_season)
     prior_is_home = nd.home_away_from_schedule(prior_schedules, prior_season)
     current_points = points_by_team_week_pos(current_stats, season, offense_positions, player_rules)
     prior_points = points_by_team_week_pos(prior_stats, prior_season, offense_positions, player_rules)
+    _log_checkpoint("prior_season_and_matchup_points_loaded")
     matchup_positions = list(offense_positions)
     if has_dst:
         current_team_stats = nd.team_stats(season, current_season=season)
@@ -777,6 +816,7 @@ def run_league(cfg: dict) -> dict:
         pa_basis=val_cfg["pa_basis"], pa_l5_weight=val_cfg["pa_l5_weight"],
         pa_prior_season_weeks=val_cfg["pa_prior_season_weeks"], index_clamp=tuple(val_cfg["index_clamp"]),
     )
+    _log_checkpoint("matchup_index_done")
 
     # --- recent results: actual (not projected) points allowed by position,
     # per team, per week - "Yahoo-style" trailing performance, current season
@@ -829,10 +869,12 @@ def run_league(cfg: dict) -> dict:
             "current": dst_points_against_detail(current_team_stats, schedules_current, is_home, season, dst_rules),
             "prior": dst_points_against_detail(prior_team_stats, prior_schedules, prior_is_home, prior_season, dst_rules),
         }
+    _log_checkpoint("recent_results_done")
 
     # --- player universe: every rostered player + every fetched free agent ---
     fa_size = {"QB": 40, "RB": 60, "WR": 60, "TE": 40, "K": 32, "DST": 32}
     free_agents_espn = {pos: client.get_free_agents(pos, fa_size.get(pos)) for pos in settings.positions}
+    _log_checkpoint("free_agents_fetched")
 
     players_out: list[dict] = []
     players_ctx: dict[str, PlayerCtx] = {}
@@ -1066,6 +1108,7 @@ def run_league(cfg: dict) -> dict:
     # optimal_lineup_for_week_with_bye_fill's streaming fill-in. Covers free
     # agents too, not just rostered players (harmless/unused there).
     bye_week_by_player: dict[str, int | None] = {pid: p["bye"] for pid, p in players_by_id.items()}
+    _log_checkpoint("player_universe_built")
 
     # --- team strength ---
 
@@ -1170,6 +1213,7 @@ def run_league(cfg: dict) -> dict:
                 "partner_summary": partner_summary,
             }
         )
+    _log_checkpoint("team_strength_done")
 
     # --- lineups (every remaining week, so Start/Sit can show future weeks) ---
     all_week_lineups: dict[tuple[int, int], tuple[float, dict[str, str]]] = {}
@@ -1304,6 +1348,7 @@ def run_league(cfg: dict) -> dict:
         }
         for pos in matchup_positions
     }
+    _log_checkpoint("lineups_and_matchups_json_done")
 
     # --- standings ---
     espn_matchups = client.get_matchups()
@@ -1329,6 +1374,7 @@ def run_league(cfg: dict) -> dict:
                 for pid in wassign.values()
             )
             team_week_sd[(t.team_id, w)] = sd_sq ** 0.5
+    _log_checkpoint("standings_prep_done")
 
     # --- live win probability (current week only) ---
     # Each starter's (mean, sd) BLENDS toward (actual points, 0) smoothly as
@@ -1362,8 +1408,11 @@ def run_league(cfg: dict) -> dict:
     # only runs on its own schedule). Every OTHER not-yet-played week (no
     # live status to blend in yet regardless) uses the plain projected
     # team_week_mean/team_week_sd instead - see _win_pcts below.
+    _log_checkpoint("before_live_status_fetch")
     live_status_by_espn_id = client.get_live_week_player_status(current_week)
+    _log_checkpoint("live_status_fetched")
     remaining_frac_by_team = fetch_remaining_game_fraction()
+    _log_checkpoint("scoreboard_fetch_done")
     team_live_mean_sd: dict[int, tuple[float, float]] = {}
     for team_id, starters in espn_started_by_team.items():
         mean_total = 0.0
@@ -1380,6 +1429,7 @@ def run_league(cfg: dict) -> dict:
             mean_total += points_so_far + frac * pregame_mean
             var_total += (pregame_sd * (frac**0.5)) ** 2
         team_live_mean_sd[team_id] = (mean_total, var_total**0.5)
+    _log_checkpoint("live_win_pct_inputs_built")
 
     def _win_pcts(m: Matchup) -> tuple[float | None, float | None]:
         # Decided games don't need a win% (the real score already says who
@@ -1527,6 +1577,7 @@ def run_league(cfg: dict) -> dict:
     # opener).
     faab_week_started = nd.week_for_kickoff(datetime.now(timezone.utc), schedules_current, season)
     faab_current_week = _faab_week_override(current_week, faab_week_started)
+    _log_checkpoint("before_faab_estimates")
     try:
         faab_estimates_out = _compute_faab_estimates(
             cfg, client, players_out, season, faab_current_week, team_rosters, fa_values_out,
@@ -1535,6 +1586,7 @@ def run_league(cfg: dict) -> dict:
     except Exception as exc:
         logger.warning("faab_model: estimate computation failed, writing empty faab_estimates.json: %s", exc)
         faab_estimates_out = {}
+    _log_checkpoint("faab_estimates_done")
 
     return {
         "meta.json": meta,
