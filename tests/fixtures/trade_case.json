@@ -176,7 +176,7 @@
       }
     }
   ],
-  "slot_value_matrix_cases": [
+  "position_value_matrix_cases": [
     {
       "name": "week4_o_league_real_worked_example",
       "slots": {
@@ -395,19 +395,14 @@
           "total": 9.125000000000004
         },
         "RB": {
-          "starting_value": 11.48,
-          "depth_value": 15.86,
-          "total": 19.41
+          "starting_value": 20.32,
+          "depth_value": 3.580000000000001,
+          "total": 22.11
         },
-        "WR1": {
-          "starting_value": 5.75,
-          "depth_value": 1.6900000000000013,
-          "total": 6.595000000000001
-        },
-        "WR2": {
-          "starting_value": 1.1300000000000008,
+        "WR": {
+          "starting_value": 6.880000000000001,
           "depth_value": 0.5600000000000005,
-          "total": 1.410000000000001
+          "total": 7.160000000000001
         },
         "TE": {
           "starting_value": 1.0,
@@ -418,16 +413,6 @@
           "starting_value": -1.2199999999999989,
           "depth_value": 0.0,
           "total": -1.2199999999999989
-        },
-        "FLEX1": {
-          "starting_value": 5.07,
-          "depth_value": 6.190000000000001,
-          "total": 8.165000000000001
-        },
-        "FLEX2": {
-          "starting_value": 3.7699999999999996,
-          "depth_value": 2.4200000000000017,
-          "total": 4.98
         }
       }
     }

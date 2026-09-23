@@ -619,6 +619,9 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 .muted { color: var(--ink-500); }
 .small { font-size: 12px; }
 
+.delta-up { color: var(--green-600); }
+.delta-down { color: var(--red-600); }
+
 .pos-tag {
   display: inline-block;
   min-width: 26px;

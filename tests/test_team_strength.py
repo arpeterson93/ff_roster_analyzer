@@ -10,9 +10,9 @@ from engine.team_strength import (
     optimal_lineup_for_week_with_bye_fill,
     pickups,
     position_strength,
+    position_value_matrix,
     rank_and_compare,
     slot_strength,
-    slot_value_matrix,
     trade_targets,
 )
 
@@ -472,12 +472,18 @@ def test_trade_targets_stays_symmetric_even_when_my_team_would_be_overpaying():
     assert matches == []
 
 
-# --- slot_value_matrix: points-above-replacement PER SLOT (not per player) -
-# see the conversation this was built from. This fixture reproduces the
-# real Week-4 "Balls Deep" (O-League) worked example hand-derived in that
-# conversation, using the league's real slot config (QB/RB/WR x2/TE/K/FLEX
-# x2) and real (rounded) projections, so these numbers are a direct check
-# against that derivation, not just internally-consistent arithmetic.
+# --- position_value_matrix: points-above-replacement PER POSITION (not per
+# slot, not per player) - see the conversation this was built from. An
+# earlier version bucketed by lineup slot instance (QB/RB/WR1/WR2/TE/K/
+# FLEX1/FLEX2) with a greedy fill order, which meant a single bench RB could
+# get "depth" credit counted separately under RB AND FLEX1 AND FLEX2 - the
+# same asset valued three times over (see the now-removed
+# test_slot_value_matrix_montgomery_style_double_counts_by_design). This
+# fixture reproduces the real Week-4 "Balls Deep" (O-League) worked example
+# from that conversation, using the league's real slot config (QB/RB/WR x2/
+# TE/K/FLEX x2) and real (rounded) projections, so these numbers are a
+# direct check against that derivation, not just internally-consistent
+# arithmetic.
 _SVM_SLOTS = {"QB": 1, "RB": 1, "WR": 2, "TE": 1, "K": 1, "RB/WR/TE": 2}
 _SVM_ELIGIBILITY = {"QB": {"QB"}, "RB": {"RB"}, "WR": {"WR"}, "TE": {"TE"}, "K": {"K"}, "RB/WR/TE": {"RB", "WR", "TE"}}
 _SVM_WEEKS = [4]
@@ -512,52 +518,32 @@ def _svm_team():
     return players, team, free_agents
 
 
-def test_slot_value_matrix_matches_the_real_worked_example():
+def test_position_value_matrix_matches_the_real_worked_example():
     players, team, free_agents = _svm_team()
-    result = slot_value_matrix(team, players, free_agents, _SVM_WEEKS, _SVM_SLOTS, _SVM_ELIGIBILITY)
+    result = position_value_matrix(team, players, free_agents, _SVM_WEEKS, _SVM_SLOTS, _SVM_ELIGIBILITY)
 
     expected = {
         "QB": (9.02, 0.21),
-        "RB": (11.48, 15.86),
-        "WR1": (5.75, 1.69),
-        "WR2": (1.13, 0.56),
+        "RB": (20.32, 3.58),
+        "WR": (6.88, 0.56),
         "TE": (1.00, 0.02),
-        "FLEX1": (5.07, 6.19),
-        "FLEX2": (3.77, 2.42),
         "K": (-1.22, 0.0),
     }
-    for label, (starting, depth) in expected.items():
-        assert result[label]["starting_value"] == pytest.approx(starting, abs=1e-2), label
-        assert result[label]["depth_value"] == pytest.approx(depth, abs=1e-2), label
-        assert result[label]["total"] == pytest.approx(starting + 0.5 * depth, abs=1e-2), label
+    for pos, (starting, depth) in expected.items():
+        assert result[pos]["starting_value"] == pytest.approx(starting, abs=1e-2), pos
+        assert result[pos]["depth_value"] == pytest.approx(depth, abs=1e-2), pos
+        assert result[pos]["total"] == pytest.approx(starting + 0.5 * depth, abs=1e-2), pos
 
 
-def test_slot_value_matrix_wr1_and_wr2_depth_reads_genuinely_differ():
-    # WR1's depth pool excludes only its own pick (nothing WR-type precedes
-    # it); WR2's depth pool ALSO excludes WR1's starter, since WR1 precedes
-    # WR2 in the fill order - the two numbers must NOT be equal.
-    players, team, free_agents = _svm_team()
-    result = slot_value_matrix(team, players, free_agents, _SVM_WEEKS, _SVM_SLOTS, _SVM_ELIGIBILITY)
-    assert result["WR1"]["depth_value"] != pytest.approx(result["WR2"]["depth_value"])
-    assert result["WR1"]["depth_value"] == pytest.approx(1.69, abs=1e-2)
-    assert result["WR2"]["depth_value"] == pytest.approx(0.56, abs=1e-2)
-
-
-def test_slot_value_matrix_flex1_and_flex2_depth_reads_genuinely_differ():
-    players, team, free_agents = _svm_team()
-    result = slot_value_matrix(team, players, free_agents, _SVM_WEEKS, _SVM_SLOTS, _SVM_ELIGIBILITY)
-    assert result["FLEX1"]["depth_value"] != pytest.approx(result["FLEX2"]["depth_value"])
-
-
-def test_slot_value_matrix_starter_can_go_negative():
+def test_position_value_matrix_starter_can_go_negative():
     # This team's only kicker projects below the best available kicker -
     # a real, informative signal, not something to hide behind a floor.
     players, team, free_agents = _svm_team()
-    result = slot_value_matrix(team, players, free_agents, _SVM_WEEKS, _SVM_SLOTS, _SVM_ELIGIBILITY)
+    result = position_value_matrix(team, players, free_agents, _SVM_WEEKS, _SVM_SLOTS, _SVM_ELIGIBILITY)
     assert result["K"]["starting_value"] < 0
 
 
-def test_slot_value_matrix_true_bye_contributes_zero_not_negative():
+def test_position_value_matrix_true_bye_contributes_zero_not_negative():
     # A single-RB team whose only RB is on bye (0.0 that week, same sentinel
     # engine/valuation.py already uses) has no real asset to devalue - 0,
     # not "0 minus a positive replacement value" (which would be negative).
@@ -566,12 +552,12 @@ def test_slot_value_matrix_true_bye_contributes_zero_not_negative():
     weeks = [1]
     players = {"only_rb": _wk("only_rb", "RB", {1: 0.0})}
     free_agents = {"RB": [_wk("fa_rb", "RB", {1: 12.0})]}
-    result = slot_value_matrix(["only_rb"], players, free_agents, weeks, slots, eligibility)
+    result = position_value_matrix(["only_rb"], players, free_agents, weeks, slots, eligibility)
     assert result["RB"]["starting_value"] == 0.0
     assert result["RB"]["depth_value"] == 0.0
 
 
-def test_slot_value_matrix_below_replacement_starter_is_negative_not_zeroed():
+def test_position_value_matrix_below_replacement_starter_is_negative_not_zeroed():
     # Contrast with the bye case above - a REAL rostered player who's worse
     # than the best free agent is a genuine negative-value asset.
     slots = {"RB": 1}
@@ -579,21 +565,35 @@ def test_slot_value_matrix_below_replacement_starter_is_negative_not_zeroed():
     weeks = [1]
     players = {"weak_rb": _wk("weak_rb", "RB", {1: 3.0})}
     free_agents = {"RB": [_wk("fa_rb", "RB", {1: 12.0})]}
-    result = slot_value_matrix(["weak_rb"], players, free_agents, weeks, slots, eligibility)
+    result = position_value_matrix(["weak_rb"], players, free_agents, weeks, slots, eligibility)
     assert result["RB"]["starting_value"] == pytest.approx(-9.0)
 
 
-def test_slot_value_matrix_montgomery_style_double_counts_by_design():
-    # A player not claimed as a base-position starter contributes to BOTH
-    # his own position's depth chain AND a FLEX slot's starting value -
-    # intentional (two independent "what if this exact role needed him"
-    # lenses, not one real simultaneous lineup) - see the conversation this
-    # was built from.
+def test_position_value_matrix_montgomery_counted_exactly_once():
+    # Montgomery (11.59) is the best-projected RB left after Walker claims
+    # the dedicated RB slot, so the real optimizer starts him at FLEX1 - his
+    # value belongs to RB's starting_value (his own position), not RB's
+    # depth chain and not a separate FLEX bucket. The old slot-instance
+    # version counted him three times over (RB depth + FLEX1 starting +
+    # FLEX2 depth, see test_slot_value_matrix_montgomery_style_double_counts
+    # _by_design in this file's prior revision) - RB's depth_value here
+    # (3.58) is far smaller than that version's (15.86) because Montgomery
+    # moved out of the depth chain entirely once he's the one actually
+    # starting.
     players, team, free_agents = _svm_team()
-    result = slot_value_matrix(team, players, free_agents, _SVM_WEEKS, _SVM_SLOTS, _SVM_ELIGIBILITY)
-    # Montgomery (11.59) is the top of RB's OWN depth chain (RB depth's
-    # first/largest contributor) AND separately FLEX1's starting pick -
-    # confirmed indirectly via the exact depth/starting totals above, which
-    # only reconcile to the hand-derived numbers if both readings happened.
-    assert result["RB"]["depth_value"] == pytest.approx(15.86, abs=1e-2)
-    assert result["FLEX1"]["starting_value"] == pytest.approx(5.07, abs=1e-2)
+    result = position_value_matrix(team, players, free_agents, _SVM_WEEKS, _SVM_SLOTS, _SVM_ELIGIBILITY)
+    assert result["RB"]["depth_value"] == pytest.approx(3.58, abs=1e-2)
+    assert result["RB"]["starting_value"] == pytest.approx(20.32, abs=1e-2)
+
+
+def test_position_value_matrix_team_total_is_lower_than_old_slot_instance_scheme():
+    # Regression guard for the fix itself: summing every position's total
+    # must come out lower than the old per-slot-instance scheme's sum for
+    # this same worked example (49.475, from the now-removed slot_value_
+    # matrix version) precisely because multi-slot-eligible bench players
+    # no longer get valued more than once.
+    players, team, free_agents = _svm_team()
+    result = position_value_matrix(team, players, free_agents, _SVM_WEEKS, _SVM_SLOTS, _SVM_ELIGIBILITY)
+    team_total = sum(v["total"] for v in result.values())
+    assert team_total == pytest.approx(38.19, abs=1e-2)
+    assert team_total < 49.475

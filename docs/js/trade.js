@@ -388,9 +388,9 @@ function heuristicGain(give, get, players) {
 
 // expandSlots' own instance order, stably resorted so every single-
 // position slot (QB/RB/WR/TE/K) fills before any multi-position slot
-// (FLEX) - slotValueMatrix's fill order depends on FLEX only ever seeing
-// leftovers (every other position's real starter already claimed), and a
-// league's raw slots dict has no guaranteed key order to rely on for
+// (FLEX) - positionValueMatrix's claim order depends on FLEX only ever
+// seeing leftovers (every other position's real starter already claimed),
+// and a league's raw slots dict has no guaranteed key order to rely on for
 // that. Array.sort is stable (guaranteed since ES2019), so WR1 still
 // precedes WR2 and FLEX1 still precedes FLEX2 exactly as expandSlots
 // already ordered them - twin of engine/team_strength.py's
@@ -403,19 +403,49 @@ function robustSlotOrder(slots, eligibility) {
   });
 }
 
-// {instance: {startingValue, depthValue, total}} - twin of
-// engine/team_strength.py's slot_value_matrix, see that function's own
-// docstring for the full derivation (points-above-replacement PER SLOT,
-// not per player - starting value can go negative, depth is floored at 0
-// per player and only reduced by what PRECEDES a slot in the fill order).
-function slotValueMatrix(opts) {
+// {position: {startingValue, depthValue, total}} - twin of
+// engine/team_strength.py's position_value_matrix, see that function's own
+// docstring for the full derivation. Grouped by the player's own real
+// POSITION (QB/RB/WR/TE/K), not by lineup slot: an earlier version
+// bucketed by slot instance (QB/RB/WR1/WR2/TE/K/FLEX1/FLEX2), and a player
+// left unclaimed after a slot's claim pass got "depth" credit again at
+// every OTHER eligible slot he then passed through unclaimed - a bench RB
+// behind a full RB corps could be valued once under RB's own depth chain,
+// again under FLEX1's, and again under FLEX2's. This version still uses
+// the same cheap greedy claim (see robustSlotOrder - single-position slots
+// claim before any FLEX slot, deliberately NOT the exact bitmask-DP
+// optimizer optimalLineupAssignment uses, since this function is also the
+// hot path behind tradeSuggestions' large per-search verify budget and the
+// exact solver is too expensive to run there thousands of times), but only
+// credits depth ONCE per player, after every slot has had its turn to
+// claim him - so a player is either that week's starter (in exactly one
+// slot) or that week's bench (in exactly one position bucket), never both
+// and never more than once. A claimed starter's startingValue is scored
+// against the best AVAILABLE (unrostered) player for the SLOT he fills -
+// so a bench RB who ends up claimed by FLEX is compared to the FLEX-wide
+// replacement level, not the single-position one - but credited to his own
+// position's bucket, not FLEX's. Starting value CAN go negative: a real
+// rostered starter who's actually worse than a free agent is a real,
+// informative signal, not something to hide. An unclaimed player's
+// depthValue is instead scored against the best available free agent at
+// THEIR OWN position (never a FLEX-widened bar - a bench RB's depth value
+// is what he's worth as a straight RB2, not as a hypothetical FLEX play)
+// and floored at 0. A player who projects 0 that week (a true bye) is
+// excluded entirely, from both the claim pass and the depth pass.
+function positionValueMatrix(opts) {
   var teamPlayerIds = opts.teamPlayerIds, players = opts.players, freeAgentsByPos = opts.freeAgentsByPos;
   var weeks = opts.weeks, slots = opts.slots, eligibility = opts.eligibility;
   var depthWeight = opts.depthWeight !== undefined ? opts.depthWeight : 0.5;
 
   var instances = robustSlotOrder(slots, eligibility);
-  var bestAvailableCache = {};
+  var positions = [];
+  Object.keys(eligibility).forEach(function (base) {
+    (eligibility[base] || []).forEach(function (pos) {
+      if (positions.indexOf(pos) === -1) positions.push(pos);
+    });
+  });
 
+  var bestAvailableCache = {};
   function bestAvailable(basePositions, w) {
     var key = basePositions.slice().sort().join(",") + "|" + w;
     if (bestAvailableCache[key] !== undefined) return bestAvailableCache[key];
@@ -430,50 +460,54 @@ function slotValueMatrix(opts) {
     return best;
   }
 
-  var startingByInstance = {}, depthByInstance = {};
-  instances.forEach(function (inst) {
-    startingByInstance[inst.instance] = 0;
-    depthByInstance[inst.instance] = 0;
-  });
+  var starting = {}, depth = {};
+  positions.forEach(function (pos) { starting[pos] = 0; depth[pos] = 0; });
 
   weeks.forEach(function (w) {
+    var candidates = {};
+    teamPlayerIds.forEach(function (pid) {
+      var p = players[pid];
+      if (!p) return;
+      var v = (p.weekly && p.weekly[w] !== undefined) ? p.weekly[w] : 0;
+      if (v > 0) candidates[pid] = { pos: p.position, pts: v };
+    });
     var claimed = {};
     instances.forEach(function (inst) {
       var elig = eligibility[inst.base] || [];
-      var pool = teamPlayerIds.filter(function (pid) {
-        var p = players[pid];
-        if (!p || elig.indexOf(p.position) === -1 || claimed[pid]) return false;
-        var v = (p.weekly && p.weekly[w] !== undefined) ? p.weekly[w] : 0;
-        return v > 0;
+      var pool = Object.keys(candidates).filter(function (pid) {
+        return elig.indexOf(candidates[pid].pos) !== -1 && !claimed[pid];
       });
       if (pool.length === 0) return; // true bye/no candidate - no asset here, contributes nothing
-      pool.sort(function (a, b) { return players[b].weekly[w] - players[a].weekly[w]; });
-      var replacement = bestAvailable(elig, w);
+      pool.sort(function (a, b) { return candidates[b].pts - candidates[a].pts; });
       var starter = pool[0];
-      startingByInstance[inst.instance] += players[starter].weekly[w] - replacement;
+      var replacement = bestAvailable(elig, w);
+      starting[candidates[starter].pos] += candidates[starter].pts - replacement;
       claimed[starter] = true;
-      for (var i = 1; i < pool.length; i++) {
-        depthByInstance[inst.instance] += Math.max(0, players[pool[i]].weekly[w] - replacement);
-      }
+    });
+    Object.keys(candidates).forEach(function (pid) {
+      if (claimed[pid]) return;
+      var c = candidates[pid];
+      var replacement = bestAvailable([c.pos], w);
+      depth[c.pos] += Math.max(0, c.pts - replacement);
     });
   });
 
   var result = {};
-  instances.forEach(function (inst) {
-    var starting = startingByInstance[inst.instance], depth = depthByInstance[inst.instance];
-    result[inst.instance] = { startingValue: starting, depthValue: depth, total: starting + depthWeight * depth };
+  positions.forEach(function (pos) {
+    var s = starting[pos], d = depth[pos];
+    result[pos] = { startingValue: s, depthValue: d, total: s + depthWeight * d };
   });
   return result;
 }
 
-// Sum of every slot's `total` (starting + depthWeight*depth) - one team's
-// whole roster reduced to a single number, for before/after trade
+// Sum of every position's `total` (starting + depthWeight*depth) - one
+// team's whole roster reduced to a single number, for before/after trade
 // comparison. Cheap (no exponential DP, just small per-slot sorts), unlike
 // the bitmask-DP lineup evaluator (see optimalLineupTotal) - see
 // tradeSuggestions' own comment for why that cost difference is what makes
 // this the primary trade-suggestion signal now, not just a ranking hint.
-function slotValueTeamTotal(teamPlayerIds, players, freeAgentsByPos, weeks, slots, eligibility) {
-  var matrix = slotValueMatrix({
+function positionValueTeamTotal(teamPlayerIds, players, freeAgentsByPos, weeks, slots, eligibility) {
+  var matrix = positionValueMatrix({
     teamPlayerIds: teamPlayerIds, players: players, freeAgentsByPos: freeAgentsByPos,
     weeks: weeks, slots: slots, eligibility: eligibility,
   });
@@ -505,20 +539,21 @@ function passesFairness(gainA, gainB, fairnessRatio, mySide) {
 // idea, extended to "locked" players (see lockedA/lockedB) and larger
 // combos than the server bothers precomputing for every team pair.
 //
-// gainA/gainB are now slotValueTeamTotal deltas (points-above-replacement
-// PER SLOT, summed across the whole roster), not the bitmask-DP lineup-
-// delta evaluateTradeWithStreaming uses - see the conversation this was
-// built from for the full derivation and why it's the more holistic read.
-// That also changes the performance shape: slotValueTeamTotal has no
-// exponential DP (just small per-slot sorts), so it's cheap enough to be
-// the REAL signal for a much bigger verify budget than the old bitmask-DP
-// version could afford, not just a coarse ranking hint. Still two-phase,
-// since an unlocked, fully-unbounded-pool search can generate well over a
-// million raw combos and even a cheap per-candidate cost adds up at that
-// scale: phase 1 ranks every raw combo with heuristicGain (O(1) per
-// candidate, no slot-matrix math at all); only the top `verifyBudget` get
-// the real slotValueTeamTotal evaluation, and only THOSE real numbers ever
-// get shown or filtered on. The heuristic ranks by TOTAL surplus (both
+// gainA/gainB are now positionValueTeamTotal deltas (points-above-
+// replacement PER POSITION, summed across the whole roster), not the
+// bitmask-DP lineup-delta evaluateTradeWithStreaming uses - see the
+// conversation this was built from for the full derivation and why it's
+// the more holistic read. That also changes the performance shape:
+// positionValueTeamTotal has no exponential DP (just small per-slot
+// sorts), so it's cheap enough to be the REAL signal for a much bigger
+// verify budget than the old bitmask-DP version could afford, not just a
+// coarse ranking hint. Still two-phase, since an unlocked, fully-unbounded-
+// pool search can generate well over a million raw combos and even a
+// cheap per-candidate cost adds up at that scale: phase 1 ranks every raw
+// combo with heuristicGain (O(1) per candidate, no slot-matrix math at
+// all); only the top `verifyBudget` get the real positionValueTeamTotal
+// evaluation, and only THOSE real numbers ever get shown or filtered on.
+// The heuristic ranks by TOTAL surplus (both
 // sides summed) when mySide is known, not by how balanced a combo looks -
 // a min()-based rank would systematically bury exactly the deliberately-
 // lopsided-in-my-disfavor combos passesFairness now allows through, before
@@ -550,7 +585,7 @@ function tradeSuggestions(opts) {
   // trivially fast) list, not the slow part run more times.
   var poolSize = opts.poolSize || Infinity;
   var maxPerSide = opts.maxPerSide || 3;
-  // ~40x the old bitmask-DP-era budget (50) - slotValueTeamTotal has no
+  // ~40x the old bitmask-DP-era budget (50) - positionValueTeamTotal has no
   // exponential DP, so verifying this many is still a sub-few-second search
   // even fully unlocked, and far fewer real candidates get missed.
   var verifyBudget = opts.verifyBudget || 2000;
@@ -580,14 +615,14 @@ function tradeSuggestions(opts) {
     if (lockedOnly) candidates = candidates.concat([lockedOnly]);
   }
 
-  var beforeA = slotValueTeamTotal(rosterA, players, freeAgentsByPos, weeks, slots, eligibility);
-  var beforeB = slotValueTeamTotal(rosterB, players, freeAgentsByPos, weeks, slots, eligibility);
+  var beforeA = positionValueTeamTotal(rosterA, players, freeAgentsByPos, weeks, slots, eligibility);
+  var beforeB = positionValueTeamTotal(rosterB, players, freeAgentsByPos, weeks, slots, eligibility);
 
   var results = [];
   candidates.forEach(function (c) {
     var rosters = afterRosters(c.giveA, c.giveB, rosterA, rosterB);
-    var gainA = slotValueTeamTotal(rosters.afterRosterA, players, freeAgentsByPos, weeks, slots, eligibility) - beforeA;
-    var gainB = slotValueTeamTotal(rosters.afterRosterB, players, freeAgentsByPos, weeks, slots, eligibility) - beforeB;
+    var gainA = positionValueTeamTotal(rosters.afterRosterA, players, freeAgentsByPos, weeks, slots, eligibility) - beforeA;
+    var gainB = positionValueTeamTotal(rosters.afterRosterB, players, freeAgentsByPos, weeks, slots, eligibility) - beforeB;
     if (gainA <= 0 || gainB <= 0) return;
     if (!passesFairness(gainA, gainB, fairnessRatio, mySide)) return;
     results.push({ giveA: c.giveA, giveB: c.giveB, gainA: gainA, gainB: gainB });
@@ -605,7 +640,7 @@ if (typeof module !== "undefined" && module.exports) {
     lineupAssignmentForWeek: lineupAssignmentForWeek,
     lineupAssignmentForWeekWithStreaming: lineupAssignmentForWeekWithStreaming,
     tradeSuggestions: tradeSuggestions,
-    slotValueMatrix: slotValueMatrix,
+    positionValueMatrix: positionValueMatrix,
     afterRosters: afterRosters,
   };
 
@@ -664,9 +699,9 @@ if (typeof module !== "undefined" && module.exports) {
       return { name: c.name, gain_a: result.sideA.gain, gain_b: result.sideB.gain, favors: result.favors };
     });
 
-    // slot_value_matrix_cases are also fully self-contained, same reasoning
-    // as streaming_cases above.
-    var slotValueMatrixResults = (fixture.slot_value_matrix_cases || []).map(function (c) {
+    // position_value_matrix_cases are also fully self-contained, same
+    // reasoning as streaming_cases above.
+    var positionValueMatrixResults = (fixture.position_value_matrix_cases || []).map(function (c) {
       var casePlayers = {};
       Object.keys(c.players).forEach(function (id) {
         var p = c.players[id];
@@ -682,14 +717,14 @@ if (typeof module !== "undefined" && module.exports) {
           return { id: fa.id, position: fa.position, weekly: weekly, ros_total: fa.ros_total };
         });
       });
-      var result = slotValueMatrix({
+      var result = positionValueMatrix({
         teamPlayerIds: c.roster, players: casePlayers, freeAgentsByPos: freeAgentsByPos,
         weeks: c.weeks, slots: c.slots, eligibility: c.eligibility,
       });
       return { name: c.name, matrix: result };
     });
 
-    console.log(JSON.stringify({ cases: results, streaming_cases: streamingResults, slot_value_matrix_cases: slotValueMatrixResults }));
+    console.log(JSON.stringify({ cases: results, streaming_cases: streamingResults, position_value_matrix_cases: positionValueMatrixResults }));
   }
 } else if (typeof window !== "undefined") {
   window.FFTrade = {
@@ -700,7 +735,7 @@ if (typeof module !== "undefined" && module.exports) {
     lineupAssignmentForWeek: lineupAssignmentForWeek,
     lineupAssignmentForWeekWithStreaming: lineupAssignmentForWeekWithStreaming,
     tradeSuggestions: tradeSuggestions,
-    slotValueMatrix: slotValueMatrix,
+    positionValueMatrix: positionValueMatrix,
     afterRosters: afterRosters,
   };
 }

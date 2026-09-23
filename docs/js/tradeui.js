@@ -104,30 +104,50 @@ function suggestionsTableHtml(suggestions, playersById) {
   return `<table><thead><tr><th>Team A gives</th><th>Team B gives</th><th>A gain</th><th>B gain</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
-// Slot | Starting | Depth | Total, one row per slot instance in
-// window.FFTrade.slotValueMatrix's own order (QB, RB, WR1, WR2, TE, K,
-// FLEX1, FLEX2 for a standard league) - see that function's docstring in
-// docs/js/trade.js for the full derivation. Reflects whatever roster is
-// passed in - the CURRENT roster when nothing's checked, or the post-trade
-// roster once givesA/givesB are set, so checking boxes updates this table
-// live the same way it updates the picker and the single-trade detail
-// below it.
-function slotMatrixTableHtml(matrix) {
+// Small "(+1.2)"/"(-1.2)" span next to a value, green/red by sign - dropped
+// entirely for a near-zero change (nothing checked yet, or a slot the trade
+// doesn't touch) so the common case stays as quiet as the old table.
+function deltaHtml(delta) {
+  if (delta === null || delta === undefined || Math.abs(delta) < 0.05) return "";
+  const cls = delta > 0 ? "delta-up" : "delta-down";
+  return ` <span class="small ${cls}">(${delta > 0 ? "+" : ""}${fmt(delta, 1)})</span>`;
+}
+
+// Position | Starting | Depth | Total, one row per real position in
+// window.FFTrade.positionValueMatrix's own order (QB, RB, WR, TE, K for a
+// standard league) - see that function's docstring in docs/js/trade.js for
+// the full derivation. `matrix` reflects whatever roster is passed in -
+// the CURRENT roster when nothing's checked, or the post-trade roster once
+// givesA/givesB are set, so checking boxes updates this table live the
+// same way it updates the picker and the single-trade detail below it.
+// `baseline` (optional) is the same team's UNMODIFIED roster matrix, used
+// only to print the small green/red delta next to each value - baseline
+// itself is never displayed as its own table.
+function positionMatrixTableHtml(matrix, baseline) {
   const labels = Object.keys(matrix);
-  const teamTotal = labels.reduce((acc, label) => acc + matrix[label].total, 0);
+  const sum = (m, key) => labels.reduce((acc, label) => acc + (m[label] ? m[label][key] : 0), 0);
+  const teamStarting = sum(matrix, "startingValue");
+  const teamDepth = sum(matrix, "depthValue");
+  const teamTotal = sum(matrix, "total");
   const rows = labels
     .map((label) => {
       const m = matrix[label];
+      const b = baseline ? baseline[label] : null;
       return `<tr>
         <td>${escapeHtml(label)}</td>
-        <td>${m.startingValue >= 0 ? "+" : ""}${fmt(m.startingValue, 1)}</td>
-        <td>${fmt(m.depthValue, 1)}</td>
-        <td><strong>${m.total >= 0 ? "+" : ""}${fmt(m.total, 1)}</strong></td>
+        <td>${m.startingValue >= 0 ? "+" : ""}${fmt(m.startingValue, 1)}${b ? deltaHtml(m.startingValue - b.startingValue) : ""}</td>
+        <td>${fmt(m.depthValue, 1)}${b ? deltaHtml(m.depthValue - b.depthValue) : ""}</td>
+        <td><strong>${m.total >= 0 ? "+" : ""}${fmt(m.total, 1)}</strong>${b ? deltaHtml(m.total - b.total) : ""}</td>
       </tr>`;
     })
     .join("");
-  return `<table><thead><tr><th>Slot</th><th>Starting</th><th>Depth</th><th>Total</th></tr></thead><tbody>${rows}</tbody>
-    <tfoot><tr><td colspan="3">Team total</td><td><strong>${teamTotal >= 0 ? "+" : ""}${fmt(teamTotal, 1)}</strong></td></tr></tfoot></table>`;
+  return `<table><thead><tr><th>Position</th><th>Starting</th><th>Depth</th><th>Total</th></tr></thead><tbody>${rows}</tbody>
+    <tfoot><tr>
+      <td>Team total</td>
+      <td><strong>${teamStarting >= 0 ? "+" : ""}${fmt(teamStarting, 1)}</strong>${baseline ? deltaHtml(teamStarting - sum(baseline, "startingValue")) : ""}</td>
+      <td><strong>${fmt(teamDepth, 1)}</strong>${baseline ? deltaHtml(teamDepth - sum(baseline, "depthValue")) : ""}</td>
+      <td><strong>${teamTotal >= 0 ? "+" : ""}${fmt(teamTotal, 1)}</strong>${baseline ? deltaHtml(teamTotal - sum(baseline, "total")) : ""}</td>
+    </tr></tfoot></table>`;
 }
 
 // Runs the (potentially multi-second, fully unlocked) search - see
@@ -313,8 +333,8 @@ export function renderTrade(container, data) {
           </div>
         </div>
         <div class="card">
-          <h3 style="margin:0 0 8px">Team value (starting + depth, per slot)</h3>
-          <p class="muted small">Points above replacement, per starting slot - reflects the trade as currently checked above, or each team's unmodified roster if nothing's checked yet. See the conversation this was built from for the full derivation.</p>
+          <h3 style="margin:0 0 8px">Team value (starting + depth, per position)</h3>
+          <p class="muted small">Points above replacement, per position - reflects the trade as currently checked above, or each team's unmodified roster if nothing's checked yet. Green/red deltas show the change from each team's unmodified roster. See the conversation this was built from for the full derivation.</p>
           <div class="trade-result">
             <div class="trade-side">
               <h3>${escapeHtml(teamLabel(teamA))}</h3>
@@ -401,15 +421,23 @@ export function renderTrade(container, data) {
       for (let w = data.meta.current_week; w <= data.meta.final_week; w++) weeks.push(w);
       const slots = data.meta.slots;
       const eligibility = data.meta.slot_eligibility;
-      const rosters = window.FFTrade.afterRosters([...state.givesA], [...state.givesB], rostA.map((p) => p.id), rostB.map((p) => p.id));
-      const matrixA = window.FFTrade.slotValueMatrix({
+      const origA = rostA.map((p) => p.id);
+      const origB = rostB.map((p) => p.id);
+      const rosters = window.FFTrade.afterRosters([...state.givesA], [...state.givesB], origA, origB);
+      const baseMatrixA = window.FFTrade.positionValueMatrix({
+        teamPlayerIds: origA, players, freeAgentsByPos, weeks, slots, eligibility,
+      });
+      const baseMatrixB = window.FFTrade.positionValueMatrix({
+        teamPlayerIds: origB, players, freeAgentsByPos, weeks, slots, eligibility,
+      });
+      const matrixA = window.FFTrade.positionValueMatrix({
         teamPlayerIds: rosters.afterRosterA, players, freeAgentsByPos, weeks, slots, eligibility,
       });
-      const matrixB = window.FFTrade.slotValueMatrix({
+      const matrixB = window.FFTrade.positionValueMatrix({
         teamPlayerIds: rosters.afterRosterB, players, freeAgentsByPos, weeks, slots, eligibility,
       });
-      container.querySelector("#trade-matrix-a").innerHTML = slotMatrixTableHtml(matrixA);
-      container.querySelector("#trade-matrix-b").innerHTML = slotMatrixTableHtml(matrixB);
+      container.querySelector("#trade-matrix-a").innerHTML = positionMatrixTableHtml(matrixA, baseMatrixA);
+      container.querySelector("#trade-matrix-b").innerHTML = positionMatrixTableHtml(matrixB, baseMatrixB);
     }
 
     function evaluate() {

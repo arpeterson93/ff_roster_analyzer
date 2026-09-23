@@ -20,7 +20,7 @@ def test_trade_js_matches_python_engine():
     output = json.loads(result.stdout)
     js_results = {r["name"]: r for r in output["cases"]}
     js_streaming_results = {r["name"]: r for r in output["streaming_cases"]}
-    js_slot_value_matrix_results = {r["name"]: r for r in output["slot_value_matrix_cases"]}
+    js_position_value_matrix_results = {r["name"]: r for r in output["position_value_matrix_cases"]}
 
     with open(FIXTURE_PATH, encoding="utf-8") as f:
         fixture = json.load(f)
@@ -39,8 +39,8 @@ def test_trade_js_matches_python_engine():
         assert js["gain_b"] == pytest.approx(expected["gain_b"]), case["name"]
         assert js["favors"] == expected["favors"], case["name"]
 
-    for case in fixture.get("slot_value_matrix_cases", []):
-        js_matrix = js_slot_value_matrix_results[case["name"]]["matrix"]
+    for case in fixture.get("position_value_matrix_cases", []):
+        js_matrix = js_position_value_matrix_results[case["name"]]["matrix"]
         expected = case["expected"]
         assert set(js_matrix.keys()) == set(expected.keys()), case["name"]
         for label, exp_vals in expected.items():
