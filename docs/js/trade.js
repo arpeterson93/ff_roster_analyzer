@@ -340,6 +340,129 @@ function evaluateTradeWithStreaming(opts) {
   return { sideA: sideA, sideB: sideB, favors: favors };
 }
 
+// All k-element subsets of arr, order-independent (arr itself is already a
+// fixed candidate pool, so subset identity - not selection order - is what
+// matters to the caller).
+function combinations(arr, k) {
+  if (k === 0) return [[]];
+  if (arr.length < k) return [];
+  var first = arr[0], rest = arr.slice(1);
+  var withFirst = combinations(rest, k - 1).map(function (c) { return [first].concat(c); });
+  var withoutFirst = combinations(rest, k);
+  return withFirst.concat(withoutFirst);
+}
+
+function topNByRosTotal(ids, players, n) {
+  return ids.slice()
+    .sort(function (a, b) { return (players[b] ? players[b].ros_total : 0) - (players[a] ? players[a].ros_total : 0); })
+    .slice(0, n);
+}
+
+// Every "give" list this side could offer: `locked` players always included
+// (as many as are locked, uncapped), plus 0..(maxPerSide - locked.length)
+// more from `pool` - unless nothing's locked, in which case a side must
+// contribute AT LEAST 1 player (a real trade never has an empty side).
+function sideOptions(locked, pool, maxPerSide) {
+  var freeSlots = Math.max(0, maxPerSide - locked.length);
+  var minK = locked.length > 0 ? 0 : 1;
+  var options = [];
+  for (var k = minK; k <= freeSlots; k++) {
+    combinations(pool, k).forEach(function (extra) { options.push(locked.concat(extra)); });
+  }
+  return options;
+}
+
+// Cheap, no-DP proxy for a side's real lineup-delta gain: each player's own
+// NMD value_delta (already roster-context-aware - a bench afterthought
+// scores near 0, a real starter scores high) as a stand-in for what he's
+// worth to a lineup, on either end of the trade. Deliberately NOT symmetric
+// like a raw ros_total swap would be (see the conversation this was built
+// from - a raw points swing is a zero-sum wash by construction and can never
+// surface a genuine "both sides gain" candidate), so this can actually rank
+// combos the same direction the real evaluation will.
+function heuristicGain(give, get, players) {
+  var cost = give.reduce(function (acc, id) { return acc + ((players[id] && players[id].value_delta) || 0); }, 0);
+  var value = get.reduce(function (acc, id) { return acc + ((players[id] && players[id].value_delta) || 0); }, 0);
+  return value - cost;
+}
+
+// Real gain for one side, reusing lineupTotalWithStreamingByWeek directly
+// (skipping evaluateTradeWithStreaming's per-week detail objects/rawGiven
+// bookkeeping - the suggestion search only needs the two scalar totals).
+function realGain(beforeTotal, afterRoster, players, freeAgentsByPos, weeks, slots, eligibility) {
+  var afterWk = lineupTotalWithStreamingByWeek(afterRoster, players, freeAgentsByPos, weeks, slots, eligibility);
+  var after = 0;
+  for (var w in afterWk) after += afterWk[w];
+  return after - beforeTotal;
+}
+
+// Generates candidate multi-player trades between two rosters and scores
+// them with the SAME rules the server-side recommender uses (both sides'
+// real lineup-delta gain > 0, AND within fairnessRatio of each other - see
+// engine/team_strength.py's trade_targets) - not a duplicate implementation,
+// a client-side twin of the same idea, extended to "locked" players (see
+// lockedA/lockedB) and larger combos than the server bothers precomputing
+// for every team pair.
+//
+// Two-phase for speed: the exact lineup-delta evaluation is an exponential
+// bitmask DP over roster size (see optimalLineupTotal), run once per side
+// per remaining week - fine for evaluating ONE trade interactively, much too
+// slow to run against every raw combination (pool=6/cap=3 alone generates
+// >1500 combos). Phase 1 cheaply ranks every raw combo with heuristicGain
+// (no DP at all); only the top `verifyBudget` of those get the real,
+// expensive evaluation, and only THOSE real numbers ever get shown or
+// filtered on - the heuristic is purely for choosing what's worth verifying,
+// never a substitute for the real rule.
+function tradeSuggestions(opts) {
+  var rosterA = opts.rosterA, rosterB = opts.rosterB;
+  var lockedA = opts.lockedA || [], lockedB = opts.lockedB || [];
+  var players = opts.players, freeAgentsByPos = opts.freeAgentsByPos;
+  var weeks = opts.weeks, slots = opts.slots, eligibility = opts.eligibility;
+  var fairnessRatio = opts.fairnessRatio || 0;
+  var poolSize = opts.poolSize || 6;
+  var maxPerSide = opts.maxPerSide || 3;
+  var verifyBudget = opts.verifyBudget || 30;
+  var maxResults = opts.maxResults || 15;
+
+  var lockedASet = {}; lockedA.forEach(function (id) { lockedASet[id] = true; });
+  var lockedBSet = {}; lockedB.forEach(function (id) { lockedBSet[id] = true; });
+  var poolA = topNByRosTotal(rosterA.filter(function (id) { return !lockedASet[id]; }), players, poolSize);
+  var poolB = topNByRosTotal(rosterB.filter(function (id) { return !lockedBSet[id]; }), players, poolSize);
+
+  var giveAOptions = sideOptions(lockedA, poolA, maxPerSide);
+  var giveBOptions = sideOptions(lockedB, poolB, maxPerSide);
+
+  var raw = [];
+  giveAOptions.forEach(function (giveA) {
+    giveBOptions.forEach(function (giveB) {
+      raw.push({
+        giveA: giveA, giveB: giveB,
+        heuristic: Math.min(heuristicGain(giveA, giveB, players), heuristicGain(giveB, giveA, players)),
+      });
+    });
+  });
+  raw.sort(function (x, y) { return y.heuristic - x.heuristic; });
+  var candidates = raw.slice(0, verifyBudget);
+
+  var beforeAWk = lineupTotalWithStreamingByWeek(rosterA, players, freeAgentsByPos, weeks, slots, eligibility);
+  var beforeBWk = lineupTotalWithStreamingByWeek(rosterB, players, freeAgentsByPos, weeks, slots, eligibility);
+  var beforeA = 0, beforeB = 0;
+  for (var wa in beforeAWk) beforeA += beforeAWk[wa];
+  for (var wb in beforeBWk) beforeB += beforeBWk[wb];
+
+  var results = [];
+  candidates.forEach(function (c) {
+    var rosters = afterRosters(c.giveA, c.giveB, rosterA, rosterB);
+    var gainA = realGain(beforeA, rosters.afterRosterA, players, freeAgentsByPos, weeks, slots, eligibility);
+    var gainB = realGain(beforeB, rosters.afterRosterB, players, freeAgentsByPos, weeks, slots, eligibility);
+    if (gainA <= 0 || gainB <= 0) return;
+    if (Math.min(gainA, gainB) / Math.max(gainA, gainB) < fairnessRatio) return;
+    results.push({ giveA: c.giveA, giveB: c.giveB, gainA: gainA, gainB: gainB });
+  });
+  results.sort(function (x, y) { return y.gainA - x.gainA; });
+  return results.slice(0, maxResults);
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     evaluateTrade: evaluateTrade, evaluateTradeWithStreaming: evaluateTradeWithStreaming,
@@ -348,6 +471,7 @@ if (typeof module !== "undefined" && module.exports) {
     optimalLineupTotal: optimalLineupTotal, optimalLineupAssignment: optimalLineupAssignment,
     lineupAssignmentForWeek: lineupAssignmentForWeek,
     lineupAssignmentForWeekWithStreaming: lineupAssignmentForWeekWithStreaming,
+    tradeSuggestions: tradeSuggestions,
   };
 
   if (require.main === module) {
@@ -415,5 +539,6 @@ if (typeof module !== "undefined" && module.exports) {
     optimalLineupTotal: optimalLineupTotal, optimalLineupAssignment: optimalLineupAssignment,
     lineupAssignmentForWeek: lineupAssignmentForWeek,
     lineupAssignmentForWeekWithStreaming: lineupAssignmentForWeekWithStreaming,
+    tradeSuggestions: tradeSuggestions,
   };
 }

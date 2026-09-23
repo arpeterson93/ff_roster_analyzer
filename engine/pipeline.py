@@ -1498,6 +1498,10 @@ def run_league(cfg: dict) -> dict:
         "positions": settings.positions,
         "slots": settings.slots, "slot_eligibility": {k: sorted(v) for k, v in settings.slot_eligibility.items()},
         "playoff_team_count": settings.playoff_team_count,
+        # Read by the Trade Calculator's client-side suggestion generator
+        # (docs/js/trade.js's tradeSuggestions) so it applies the exact same
+        # bar server-side trade_targets does, not a hardcoded duplicate.
+        "trade_fairness_ratio": strength_cfg["trade_fairness_ratio"],
         "division_count": division_count,
         "teams": [
             {"team_id": t.team_id, "name": t.team_name, "manager": t.manager, "abbrev": t.abbrev, "division": settings.divisions.get(t.division_id, str(t.division_id))}

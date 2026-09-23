@@ -10,7 +10,10 @@ function buildPlayersMap(data) {
     (p.weekly || []).forEach((w) => {
       weekly[w.week] = w.projected;
     });
-    map[p.id] = { position: p.position, weekly, ros_total: p.ros_total };
+    // value_delta rides along for docs/js/trade.js's tradeSuggestions - its
+    // cheap pre-filter heuristic reads it (see that function's own comment
+    // for why a raw ros_total swing can't substitute here).
+    map[p.id] = { position: p.position, weekly, ros_total: p.ros_total, value_delta: p.value_delta };
   });
   return map;
 }
@@ -76,6 +79,71 @@ function rosterTable(side, playersList, selected, sortMode) {
     })
     .join("");
   return `<table><thead><tr><th></th><th>Player</th><th>Rank</th><th>ROS</th><th>NMD value</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+// One row per generated suggestion - names only (positions/colors would be
+// nice but add noise at this density; the picker rows above already show
+// that detail once a suggestion is selected). Clicking a row is wired
+// separately (see wireSuggestionRows) since it needs the live `suggestions`
+// array, not just this HTML.
+function suggestionsTableHtml(suggestions, playersById) {
+  if (!suggestions.length) {
+    return `<p class="muted small">No trades found that clear the fairness bar for this pair - try locking a player (check a box above) to search around them, or pick a different partner.</p>`;
+  }
+  const names = (ids) => ids.map((id) => escapeHtml(playersById.get(id)?.name ?? id)).join(", ");
+  const rows = suggestions
+    .map(
+      (s, i) => `<tr class="clickable-row" data-suggestion-index="${i}">
+        <td>${names(s.giveA)}</td>
+        <td>${names(s.giveB)}</td>
+        <td>${s.gainA >= 0 ? "+" : ""}${fmt(s.gainA, 1)}</td>
+        <td>${s.gainB >= 0 ? "+" : ""}${fmt(s.gainB, 1)}</td>
+      </tr>`
+    )
+    .join("");
+  return `<table><thead><tr><th>Team A gives</th><th>Team B gives</th><th>A gain</th><th>B gain</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+// Runs the (potentially multi-second, fully unlocked) search - see
+// docs/js/trade.js's tradeSuggestions for why this can be slow with nothing
+// locked, and fast once players are. The setTimeout lets the "Generating..."
+// message actually paint before the synchronous search blocks the main
+// thread - without it the browser would freeze straight from the click with
+// no feedback at all until the search finishes.
+function generateSuggestions(suggestionsEl, data, state, rostA, rostB, freeAgentsByPos, playersById, draw) {
+  suggestionsEl.innerHTML = `<p class="muted small">Generating suggestions...</p>`;
+  setTimeout(() => {
+    const players = buildPlayersMap(data);
+    const weeks = [];
+    for (let w = data.meta.current_week; w <= data.meta.final_week; w++) weeks.push(w);
+    const suggestions = window.FFTrade.tradeSuggestions({
+      rosterA: rostA.map((p) => p.id), rosterB: rostB.map((p) => p.id),
+      lockedA: [...state.givesA], lockedB: [...state.givesB],
+      players, freeAgentsByPos, weeks,
+      slots: data.meta.slots, eligibility: data.meta.slot_eligibility,
+      fairnessRatio: data.meta.trade_fairness_ratio || 0,
+    });
+    state.suggestions = suggestions;
+    suggestionsEl.innerHTML = suggestionsTableHtml(suggestions, playersById);
+    wireSuggestionRows(suggestionsEl, suggestions, state, draw);
+  }, 0);
+}
+
+// Picking a suggestion sets the SAME givesA/givesB the manual checkboxes
+// drive - draw() re-renders the pickers with those boxes checked and the
+// single-trade evaluation below updates to match, exactly the "check the
+// boxes so you can quickly assess" flow this was built for. It also means
+// the next "Refresh" locks in this whole trade, not just the original pick -
+// an incremental build-it-up workflow, not a one-shot list.
+function wireSuggestionRows(suggestionsEl, suggestions, state, draw) {
+  suggestionsEl.querySelectorAll("tr[data-suggestion-index]").forEach((row) => {
+    row.addEventListener("click", () => {
+      const s = suggestions[Number(row.dataset.suggestionIndex)];
+      state.givesA = new Set(s.giveA);
+      state.givesB = new Set(s.giveB);
+      draw();
+    });
+  });
 }
 
 function weeklyImpactTable(weeklyA, weeklyB, teamAName, teamBName, expandedWeek) {
@@ -178,9 +246,11 @@ export function renderTrade(container, data) {
   const state = {
     teamA: defaultTeamA, teamB: defaultTeamB,
     givesA: new Set(), givesB: new Set(), sortMode: "position", expandedWeek: null,
+    suggestions: [],
   };
 
-  function draw() {
+  function draw(opts) {
+    const regenerateSuggestions = !!(opts && opts.regenerateSuggestions);
     const teamA = data.teamsById.get(state.teamA);
     const teamB = data.teamsById.get(state.teamB);
     const rostA = rosterIds(data, state.teamA).map((id) => playersById.get(id)).filter(Boolean);
@@ -209,6 +279,14 @@ export function renderTrade(container, data) {
             <div class="table-wrap" id="trade-picker-b">${rosterTable("b", rostB, state.givesB, state.sortMode)}</div>
           </div>
         </div>
+        <div class="card">
+          <div class="select-row">
+            <h3 style="margin:0">Suggested trades</h3>
+            <button id="trade-suggest-refresh" type="button">Refresh suggestions</button>
+          </div>
+          <p class="muted small">Check a box above first to lock that player into every suggestion below - the rest of each trade is built up around your locks.</p>
+          <div class="table-wrap" id="trade-suggestions">${suggestionsTableHtml(state.suggestions, playersById)}</div>
+        </div>
         <div id="trade-result"></div>
       </div>
     `;
@@ -216,17 +294,27 @@ export function renderTrade(container, data) {
     container.querySelector("#trade-team-a").addEventListener("change", (e) => {
       state.teamA = Number(e.target.value);
       state.givesA.clear();
-      draw();
+      state.suggestions = [];
+      draw({ regenerateSuggestions: true });
     });
     container.querySelector("#trade-team-b").addEventListener("change", (e) => {
       state.teamB = Number(e.target.value);
       state.givesB.clear();
-      draw();
+      state.suggestions = [];
+      draw({ regenerateSuggestions: true });
     });
     container.querySelector("#trade-sort-mode").addEventListener("change", (e) => {
       state.sortMode = e.target.value;
       draw();
     });
+    container.querySelector("#trade-suggest-refresh").addEventListener("click", () => {
+      generateSuggestions(container.querySelector("#trade-suggestions"), data, state, rostA, rostB, freeAgentsByPos, playersById, draw);
+    });
+    if (regenerateSuggestions) {
+      generateSuggestions(container.querySelector("#trade-suggestions"), data, state, rostA, rostB, freeAgentsByPos, playersById, draw);
+    } else {
+      wireSuggestionRows(container.querySelector("#trade-suggestions"), state.suggestions, state, draw);
+    }
 
     wireCompareCheckboxes(container, data);
 
@@ -276,5 +364,5 @@ export function renderTrade(container, data) {
     }
   }
 
-  draw();
+  draw({ regenerateSuggestions: true });
 }
