@@ -53,10 +53,10 @@ DEST_DIR = Path(__file__).parent
 # a new version by hand (normally you don't - publish_release_data.py does
 # both in one step).
 FILES = {
-    "combined-training-table.json": "b61128e30bc935c9807c3358cc2674505ee645d630082a50e6cf5ca4411c5e18",
-    "other-leagues-bids-raw.json": "8cb16f66b625fa3ef684e608aeb8241ad90f4512e8e1f86f6e3cb3241e23a1e2",
-    "other-leagues-bids.json": "a0d07aa6f0c5663bd7a5ca8c79150b841ee48c7b89156067b8b6cd20e90343d3",
-    "other-leagues-rostered-by-week.json": "4827d9d39ca1403b6afc6a1fdacc9412a343ba8e479a47e5b4b6f6ba50b713e7",
+    "combined-training-table.json": "2b1c37045d9e73f9b2bc9f12d6945cb83fcc6b2da4a41ea4ee883ef7696581ab",
+    "other-leagues-bids-raw.json": "2ec2b8ffa150b31754dd7d4d4c6fa395d055b3f0b6c8b3b944ad806d6e3e3bee",
+    "other-leagues-bids.json": "c35bc7d550b83b28942d538dfccb96ab372b802e5e479b11a7557952ffc0d6de",
+    "other-leagues-rostered-by-week.json": "241c2caad0785115dcaa1e6fa4d399f62da6d3a59e5755e631b93b4026c5ff81",
 }
 
 # The one file engine/pipeline.py actually loads at run time (see
