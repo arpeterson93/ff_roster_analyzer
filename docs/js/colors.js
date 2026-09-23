@@ -242,6 +242,23 @@ export function rosCellHtml(weekEntry, position) {
   </td>`;
 }
 
+// Same cell shape/color as rosCellHtml (opponent on top, colored by that
+// same matchup-rank scale - a good matchup and a good projection usually
+// agree, and reusing it means Projections reads as a visual sibling of
+// Schedule rather than an unrelated color scheme) - just with the actual
+// projected point value as the headline number instead of the bare rank.
+export function projectedCellHtml(weekEntry, position) {
+  if (!weekEntry || !weekEntry.opponent) return `<td class="heat-cell ros-cell muted">BYE</td>`;
+  const label = (weekEntry.home === false ? "@" : "") + weekEntry.opponent;
+  const hasRank = weekEntry.rank !== null && weekEntry.rank !== undefined;
+  const color = colorForRatio(ratioForRank(weekEntry.rank));
+  const rankTitle = hasRank ? `title="Matchup rank ${weekEntry.rank} of 32 (1 = best)"` : "";
+  return `<td class="heat-cell ros-cell" style="background:${color}" ${rankTitle} data-opp-cell data-team="${escapeHtml(weekEntry.opponent)}" data-pos="${position}">
+    <div class="ros-opp">${label}</div>
+    <div class="ros-rank">${fmt(weekEntry.projected, 1)}</div>
+  </td>`;
+}
+
 // Vegas-implied team total for the CURRENT week only (see engine/pipeline.py -
 // a future week's line usually isn't posted yet, so weekEntry.implied_total
 // is only ever non-null there). For a DST, the number that actually matters

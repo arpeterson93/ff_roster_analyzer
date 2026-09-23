@@ -1,7 +1,7 @@
 import { fmt, escapeHtml, getYourTeam } from "./state.js";
 import {
   POSITION_COLOR, INJURY_BADGE, impliedTotalCellHtml, opponentCellHtml, sortByPositionOrder, teamLabel,
-  pointsWeeksAgo, seasonAvgPoints, seasonTotalPoints, weatherCellHtml, rosCellHtml,
+  pointsWeeksAgo, seasonAvgPoints, seasonTotalPoints, weatherCellHtml, rosCellHtml, projectedCellHtml,
   snapPct, attPct, tgtPct,
 } from "./colors.js";
 import { openPlayerModal } from "./playermodal.js";
@@ -19,6 +19,7 @@ const FLEX_POSITIONS = ["RB", "WR", "TE"];
 const TABS = [
   { key: "overview", label: "Overview" },
   { key: "schedule", label: "Schedule" },
+  { key: "projections", label: "Projections" },
   { key: "stats", label: "Stats" },
 ];
 
@@ -194,6 +195,27 @@ function scheduleColumns(data) {
   ];
 }
 
+// ---------- Projections ----------
+
+// Same weekly-grid shape as scheduleColumns (one column per remaining week),
+// but each cell headlines the actual projected point value (projectedCellHtml)
+// instead of the bare matchup rank - "every player's ROS weekly projections
+// at a glance" (see the conversation this was built from). ROS total leads
+// the grid as a quick summary column, same convention other tabs use.
+function projectionsColumns(data) {
+  const cw = data.meta.current_week;
+  const fw = data.meta.final_week;
+  const weeks = [];
+  for (let w = cw; w <= fw; w++) weeks.push(w);
+  return [
+    { key: "ros_total", label: "ROS", fmt: (v) => fmt(v, 0) },
+    ...weeks.map((w) => ({
+      key: `_wk${w}_proj`, label: `Wk ${w}`, rawTd: true,
+      fmt: (_v, p) => projectedCellHtml(weekEntryFor(p, w), p.position),
+    })),
+  ];
+}
+
 // ---------- Stats ----------
 
 function statsForWeek(p, statsWeek, currentWeek) {
@@ -279,6 +301,11 @@ function sortValue(p, key, data, filters) {
   // bye/no-data week sorts as Infinity, the worst possible rank, not 0).
   const schedMatch = /^_wk(\d+)_sched$/.exec(key);
   if (schedMatch) return weekEntryFor(p, Number(schedMatch[1])).rank ?? Infinity;
+  // Projections' per-week heat cells ("_wk12_proj", etc.) - a point total,
+  // not a rank, so higher is better and a bye/no-data week sorts as
+  // -Infinity (the worst possible week), same convention _score/_wk3 etc. use.
+  const projMatch = /^_wk(\d+)_proj$/.exec(key);
+  if (projMatch) return weekEntryFor(p, Number(projMatch[1])).projected ?? -Infinity;
   // Stats tab's individual grouped-block columns (passing_yards, carries,
   // def_sacks, fg_made_20_29, etc.) - not given their own `if` branches
   // since the key set is large and position-dependent; statsForWeek's own
@@ -465,6 +492,8 @@ function render(container, data, filters, watched) {
     renderFlatTable(wrap, data, filters, watched, [...commonColumns(data, watched), ...overviewColumns(data)]);
   } else if (filters.tab === "schedule") {
     renderFlatTable(wrap, data, filters, watched, [...commonColumns(data, watched), ...scheduleColumns(data)]);
+  } else if (filters.tab === "projections") {
+    renderFlatTable(wrap, data, filters, watched, [...commonColumns(data, watched), ...projectionsColumns(data)]);
   } else {
     renderStatsTable(wrap, container, data, filters, watched);
   }
