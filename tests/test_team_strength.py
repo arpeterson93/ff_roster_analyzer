@@ -417,6 +417,30 @@ def test_trade_targets_fairness_ratio_zero_reduces_to_the_old_both_positive_chec
     assert len(matches) == 1
 
 
+def test_trade_targets_does_not_crash_on_a_zero_gain_candidate():
+    # Regression test for a real live pipeline crash (ZeroDivisionError in
+    # the fairness check's min/max ratio) - a candidate whose gain is
+    # exactly 0 for one or both sides must be excluded, never evaluated
+    # through the ratio at all. Identical-value 1-for-1 swap: both sides'
+    # lineup total is unchanged by the trade, so gain_self == gain_partner
+    # == 0 exactly for this candidate.
+    slots = {"RB": 1}
+    eligibility = {"RB": {"RB"}}
+    weeks = [1, 2]
+    players = {
+        "a1": _wk("a1", "RB", {1: 10.0, 2: 10.0}),
+        "b1": _wk("b1", "RB", {1: 10.0, 2: 10.0}),
+    }
+    team_a = ["a1"]
+    team_b = ["b1"]
+    results = trade_targets(
+        team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=players,
+        free_agents_by_pos={}, weeks=weeks, slots=slots,
+        eligibility=eligibility, max_trade_targets=20, fairness_ratio=0.5,
+    )
+    assert results == []
+
+
 def test_trade_targets_stays_symmetric_even_when_my_team_would_be_overpaying():
     # Unlike the Trade Calculator's client-side twin (docs/js/trade.js's
     # tradeSuggestions), these passive/browse-only suggestions stay
