@@ -2116,8 +2116,16 @@ class FaabModel:
         # multiple OTHER leagues' rows for the same real player-week just
         # become multiple entries under one key, not extra k-NN neighbors.
         self.same_week_by_gsis: dict[tuple[str, int], list[dict]] = defaultdict(list)
+        # Weeks the puller actually ran for, off EVERY row (not just the
+        # gsis_id-mapped ones same_week_by_gsis indexes) - lets a caller tell
+        # "we pulled this week and found zero real activity on this specific
+        # player" (a real observed negative) apart from "the puller hasn't
+        # run for this week at all yet" (no signal either way). See
+        # rankings.js's Rankings-table override, the reason this exists.
+        self.same_week_weeks_with_data: set[int] = set()
         if CURRENT_WEEK_BIDS_PATH.exists():
             for r in json.loads(CURRENT_WEEK_BIDS_PATH.read_text()):
+                self.same_week_weeks_with_data.add(r["week"])
                 if r.get("gsis_id"):
                     self.same_week_by_gsis[(r["gsis_id"], r["week"])].append(r)
 

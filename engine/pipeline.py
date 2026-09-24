@@ -559,6 +559,14 @@ def _compute_faab_estimates(
         # into the k-NN comp/regression numbers, just shown alongside them.
         estimates[pid] = model.estimate(query) | {"team_interest": team_interest, "same_week": same_week}
 
+    # Reserved key, never a real player id (ESPN ids are numeric strings) -
+    # tells rankings.js whether pull_current_week_bids.py actually ran for
+    # THIS week, so a player with no same_week entry above can be read as a
+    # real observed zero (puller ran, found no cross-league activity on
+    # them) rather than silently falling back to the historical model only
+    # because no one happened to notice. See docs/js/rankings.js's Rankings
+    # table override for how this gets used.
+    estimates["_meta"] = {"same_week_data_available": current_week in model.same_week_weeks_with_data}
     return estimates
 
 

@@ -625,6 +625,12 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 .muted { color: var(--ink-500); }
 .small { font-size: 12px; }
 
+/* Rankings FAAB Est./INT cells backed by a real observed cross-league bid
+   this week (see rankings.js's sameWeekAvailable override), not the
+   historical model - bold + accent so it doesn't read as just another
+   modeled number. */
+.faab-live { color: var(--accent); font-weight: 600; }
+
 .delta-up { color: var(--green-600); }
 .delta-down { color: var(--red-600); }
 

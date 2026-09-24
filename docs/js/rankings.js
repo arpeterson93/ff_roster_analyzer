@@ -104,6 +104,13 @@ function commonColumns(data, watched) {
 function overviewColumns(data) {
   const yourTeamId = getYourTeam(data.meta.slug);
   const cw = data.meta.current_week;
+  // Set by engine/pipeline.py's _compute_faab_estimates whenever
+  // pull_current_week_bids.py actually ran for this week (reserved "_meta"
+  // key, never a real player id) - once true, a player with no same_week
+  // entry is a real observed zero (checked ~500 other pooled leagues, none
+  // bid on them), not "we don't know" - see the _faab_est/_faab_interest
+  // columns below for how that distinction gets used.
+  const sameWeekAvailable = !!(data.faabEstimates || {})._meta?.same_week_data_available;
   return [
     {
       key: "_opp", label: "Opp", sortable: false,
@@ -143,6 +150,25 @@ function overviewColumns(data) {
       fmt: (_v, p) => {
         const est = (data.faabEstimates || {})[p.id];
         if (!est) return "–";
+        // Real cross-league activity this week beats the historical model
+        // outright - it's an observed fact, not an extrapolation - and (per
+        // pipeline.py's is_relevant comment) it isn't gated by
+        // below_relevance_threshold either: a player too quiet for the k-NN
+        // search can still be a real bid target elsewhere.
+        if (sameWeekAvailable) {
+          const sw = est.same_week;
+          if (sw?.conditional_price) {
+            return `<span class="faab-live" title="Actual cross-league bid this week">${fmt(sw.conditional_price.median * 100, 1)}%</span>`;
+          }
+          // Puller ran and found literally nothing on this player - a real
+          // zero, not "unknown" - EXCEPT when there's real activity still
+          // pending a winner (conditional_price null but sw truthy); that
+          // case falls through to the historical estimate below since
+          // there's no real price to show yet.
+          if (!sw) {
+            return `<span class="faab-live" title="No real cross-league bids on this player this week">0%</span>`;
+          }
+        }
         // below_relevance_threshold means the model never actually ran a
         // search for this player (see engine/pipeline.py's is_relevant) -
         // its 0.0 is a hard gate, not a computed estimate.
@@ -159,6 +185,13 @@ function overviewColumns(data) {
       fmt: (_v, p) => {
         const est = (data.faabEstimates || {})[p.id];
         if (!est) return "–";
+        // Only the confirmed-zero case overrides INT - real activity with
+        // no known "eligible leagues" denominator can't produce a real
+        // rate (see same_week_signal's own docstring), so INT stays on the
+        // historical model whenever there WAS activity this week.
+        if (sameWeekAvailable && !est.same_week) {
+          return `<span class="faab-live" title="No real cross-league bids on this player this week">0%</span>`;
+        }
         if (est.below_relevance_threshold) return `<span class="muted" title="Not enough recent usage to model - see FAAB Lab tab">–</span>`;
         const pct = (est.bid_probability || {}).comp_based_median;
         return `${fmt(pct * 100, 0)}%`;
@@ -278,6 +311,13 @@ function sortValue(p, key, data, filters) {
   if (key === "_wk1") return pointsWeeksAgo(p, 1, cw) ?? -Infinity;
   if (key === "_faab_est" || key === "_faab_interest") {
     const est = (data.faabEstimates || {})[p.id];
+    // Mirror the fmt() override in overviewColumns exactly, so sort order
+    // always matches what the column actually displays.
+    const sameWeekAvailable = !!(data.faabEstimates || {})._meta?.same_week_data_available;
+    if (sameWeekAvailable && est) {
+      if (key === "_faab_est" && est.same_week?.conditional_price) return est.same_week.conditional_price.median;
+      if (!est.same_week) return 0;
+    }
     const field = key === "_faab_est" ? "conditional_price" : "bid_probability";
     const pct = est ? (est[field] || {}).comp_based_median : undefined;
     // "-" (no estimate at all, or below the relevance threshold) sorts as
