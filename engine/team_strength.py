@@ -420,6 +420,7 @@ def trade_targets(
     candidate_pool_size: int = 10,
     two_for_one_pool_size: int = 6,
     fairness_ratio: float = 0.5,
+    roster_size: int | None = None,
 ) -> list[dict]:
     """1-for-1 swaps with every other team (top `candidate_pool_size` by
     ros_total each side) plus 2-for-1 swaps (top `two_for_one_pool_size` each
@@ -452,13 +453,21 @@ def trade_targets(
     only suggestions with no specific trade already in mind, so there's no
     real "my call to make" the way there is once you're actively building a
     specific offer around a player you want (see the conversation this was
-    built from)."""
+    built from).
+
+    roster_size (optional, real total roster spots - starting + BE + IR)
+    resolves every before/after roster through _apply_roster_constraints
+    first (see that function's own docstring) - closes the same "trade away
+    your only bad player at a position for a free win" exploit and missing
+    roster-cap check the Trade Calculator's own engine had before its
+    matching fix (see the conversation this was built from). None (the
+    default) skips this - unconstrained scoring, the old behavior."""
 
     def top_n(pids: list[str], n: int) -> list[str]:
         return sorted((p for p in pids if p in players), key=lambda p: players[p].ros_total, reverse=True)[:n]
 
     def team_total(roster: list[str]) -> float:
-        return position_value_team_total(roster, players, free_agents_by_pos, weeks, slots, eligibility)
+        return position_value_team_total(roster, players, free_agents_by_pos, weeks, slots, eligibility, roster_size=roster_size)
 
     my_before = team_total(team_player_ids)
 
@@ -587,6 +596,81 @@ def position_value_matrix(
     }
 
 
+def _apply_roster_constraints(
+    roster: list[str],
+    players: dict[str, PlayerCtx],
+    free_agents_by_pos: dict[str, list[PlayerCtx]],
+    weeks: list[int],
+    slots: dict[str, int],
+    eligibility: dict[str, set[str]],
+    roster_size: int,
+    depth_weight: float = 0.5,
+) -> list[str]:
+    """Python twin of docs/js/trade.js's applyRosterConstraints - see that
+    function's own docstring for the full derivation. Resolves a
+    hypothetical roster against real ESPN roster rules so a candidate trade
+    can never score better than it actually would in practice:
+      1. Backfill: any real position with ZERO currently-rostered players
+         hypothetically signs the best available free agent there (highest
+         ros_total) - without this, trading away your only (negative-value)
+         player at a position looks like a free win instead of the real
+         roster gap it creates.
+      2. Cap enforcement: if the roster is now over `roster_size` (real
+         total roster spots - starting + BE + IR), cut the single lowest-
+         value_delta player - ANY current roster member is eligible, not
+         just players actually in the trade.
+    Looped (bounded) since either step can trigger the other. A cut must
+    never take a position down to zero - otherwise the very next iteration's
+    backfill just re-signs someone there, and if THAT replacement-level
+    signing is itself the roster's lowest-value_delta player (routine - a
+    backfill exists BECAUSE nothing better was available), the cut step
+    removes him again next iteration, forever (confirmed live against the
+    JS twin, not just theoretical - see the conversation this was built
+    from). Only the resolved roster is returned (no transaction log) -
+    unlike the Trade Calculator's interactive Team Value panel, Team
+    Strength's Trade Targets is a passive suggestion list with nowhere to
+    show hypothetical moves."""
+    roster = list(roster)
+    players = dict(players)  # local copy - a backfilled FA gets added here, never leaking into the caller's own dict
+    positions: list[str] = []
+    for base_positions in eligibility.values():
+        for pos in base_positions:
+            if pos not in positions:
+                positions.append(pos)
+
+    for _ in range(20):
+        changed = False
+
+        rostered_positions = {players[pid].position for pid in roster if pid in players}
+        for pos in positions:
+            if pos in rostered_positions:
+                continue
+            pool = [fa for fa in free_agents_by_pos.get(pos, []) if fa.id not in roster]
+            if not pool:
+                continue  # nobody available at this position at all
+            best = max(pool, key=lambda fa: fa.ros_total)
+            roster.append(best.id)
+            players.setdefault(best.id, best)
+            changed = True
+
+        if len(roster) > roster_size:
+            by_player = position_value_by_player(roster, players, free_agents_by_pos, weeks, slots, eligibility, depth_weight)
+            position_counts: dict[str, int] = {}
+            for pid in roster:
+                if pid in players:
+                    position_counts[players[pid].position] = position_counts.get(players[pid].position, 0) + 1
+            cuttable = [pid for pid in roster if pid in players and position_counts[players[pid].position] > 1]
+            pool = cuttable or roster  # every position down to exactly 1 - no cut can avoid a gap, so cut the worst overall
+            worst = min(pool, key=lambda pid: by_player.get(pid, {}).get("value_delta", 0.0))
+            roster = [pid for pid in roster if pid != worst]
+            changed = True
+
+        if not changed:
+            break
+
+    return roster
+
+
 def position_value_team_total(
     team_player_ids: list[str],
     players: dict[str, PlayerCtx],
@@ -595,6 +679,7 @@ def position_value_team_total(
     slots: dict[str, int],
     eligibility: dict[str, set[str]],
     depth_weight: float = 0.5,
+    roster_size: int | None = None,
 ) -> float:
     """Sum of every player's own value_delta (see position_value_by_player) -
     one roster reduced to a single points-above-replacement number, for
@@ -603,6 +688,16 @@ def position_value_team_total(
     exponential DP), which is what makes this cheap enough to call twice per
     candidate trade (before/after) across trade_targets' whole search
     without the old per-candidate full-lineup-reoptimization cost
-    evaluate_with_streaming needed."""
-    by_player = position_value_by_player(team_player_ids, players, free_agents_by_pos, weeks, slots, eligibility, depth_weight)
+    evaluate_with_streaming needed.
+
+    roster_size is optional (backward compatible) - when given, the roster
+    is resolved through _apply_roster_constraints first, so a candidate that
+    would leave a position empty or bust the real roster cap can't score
+    better than it actually would."""
+    resolved_ids = team_player_ids
+    if roster_size is not None:
+        resolved_ids = _apply_roster_constraints(
+            team_player_ids, players, free_agents_by_pos, weeks, slots, eligibility, roster_size, depth_weight
+        )
+    by_player = position_value_by_player(resolved_ids, players, free_agents_by_pos, weeks, slots, eligibility, depth_weight)
     return sum(v["value_delta"] for v in by_player.values())

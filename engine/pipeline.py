@@ -1218,6 +1218,7 @@ def run_league(cfg: dict) -> dict:
             t.team_id, roster_ids, other_rosters, players_ctx, free_agents_ctx, weeks,
             settings.slots, settings.slot_eligibility, strength_cfg["max_trade_targets"],
             fairness_ratio=strength_cfg["trade_fairness_ratio"],
+            roster_size=settings.roster_size,
         )
         partner_summary = []
         for ot in espn_teams:

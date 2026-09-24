@@ -2,6 +2,7 @@ import pytest
 
 from engine.team_strength import (
     PlayerCtx,
+    _apply_roster_constraints,
     fa_pool_value,
     lineup_total,
     lineup_total_with_streaming,
@@ -10,6 +11,7 @@ from engine.team_strength import (
     position_strength,
     position_value_by_player,
     position_value_matrix,
+    position_value_team_total,
     rank_and_compare,
     slot_strength,
     trade_targets,
@@ -573,3 +575,125 @@ def test_position_value_matrix_team_total_is_lower_than_old_slot_instance_scheme
     team_total = sum(v["total"] for v in result.values())
     assert team_total == pytest.approx(38.19, abs=1e-2)
     assert team_total < 49.475
+
+
+# --- _apply_roster_constraints / position_value_team_total's roster_size -
+# Python twin of docs/js/trade.js's applyRosterConstraints; see that
+# function's own docstring and the conversation this was built from for the
+# full derivation and the live ping-pong bug its "never cut the last player
+# at a position" rule fixes.
+
+
+def test_apply_roster_constraints_backfills_a_missing_position():
+    slots = {"RB": 1, "TE": 1}
+    eligibility = {"RB": {"RB"}, "TE": {"TE"}}
+    weeks = [1, 2]
+    players = {"rb1": _player("rb1", "RB", 20.0)}
+    free_agents = {
+        "TE": [
+            _player("te_best", "TE", 8.0),
+            _player("te_worse", "TE", 3.0),
+        ]
+    }
+    result = _apply_roster_constraints(["rb1"], players, free_agents, weeks, slots, eligibility, roster_size=5)
+    assert "te_best" in result
+    assert "te_worse" not in result
+
+
+def test_apply_roster_constraints_cuts_the_worst_value_player_when_over_cap():
+    slots = {"RB": 1}
+    eligibility = {"RB": {"RB"}}
+    weeks = [1, 2]
+    players = {
+        "rb1": _player("rb1", "RB", 20.0),
+        "rb2": _player("rb2", "RB", 15.0),  # decent bench
+        "rb3": _player("rb3", "RB", 1.0),  # worthless bench
+    }
+    free_agents = {"RB": [_player("fa_rb", "RB", 5.0)]}
+    result = _apply_roster_constraints(
+        ["rb1", "rb2", "rb3"], players, free_agents, weeks, slots, eligibility, roster_size=2
+    )
+    assert len(result) == 2
+    assert "rb3" not in result
+    assert "rb1" in result and "rb2" in result
+
+
+def test_apply_roster_constraints_never_ping_pongs_when_the_backfill_is_the_worst_player():
+    # Regression: a freshly-backfilled replacement-level player is often the
+    # roster's own lowest-value_delta player, so a naive cut-the-worst step
+    # would immediately re-cut him, re-creating the gap the backfill just
+    # filled - forever. Roster starts with NO kicker and already at the cap.
+    slots = {"RB": 1, "K": 1}
+    eligibility = {"RB": {"RB"}, "K": {"K"}}
+    weeks = [1, 2]
+    players = {
+        "rb1": _player("rb1", "RB", 20.0),
+        "rb2": _player("rb2", "RB", 15.0),
+        "rb3": _player("rb3", "RB", 12.0),
+    }
+    free_agents = {
+        "RB": [_player("fa_rb", "RB", 5.0)],
+        "K": [_player("fa_k", "K", 1.0)],  # the only K - inevitably "worst value" once added
+    }
+    result = _apply_roster_constraints(
+        ["rb1", "rb2", "rb3"], players, free_agents, weeks, slots, eligibility, roster_size=3
+    )
+    assert len(result) == 3
+    assert "fa_k" in result  # the backfilled kicker survives - never the last player at his position
+
+
+def test_position_value_team_total_roster_size_none_skips_constraints():
+    # Backward compatible - the default (unconstrained) behavior existing
+    # callers (and existing tests) already rely on must be unchanged.
+    slots = {"RB": 1, "TE": 1}
+    eligibility = {"RB": {"RB"}, "TE": {"TE"}}
+    weeks = [1, 2]
+    players = {"rb1": _player("rb1", "RB", 20.0)}
+    free_agents = {"TE": [_player("te_best", "TE", 8.0)]}
+    total = position_value_team_total(["rb1"], players, free_agents, weeks, slots, eligibility)
+    # No TE backfill applied - only rb1's own starting_value counts.
+    assert total == pytest.approx(20.0 * len(weeks))
+
+
+def test_trade_targets_roster_size_changes_which_candidates_clear_the_bar():
+    # Direct wiring check (see _apply_roster_constraints' own tests for the
+    # underlying mechanism): giving away a_k2 leaves team A with only ONE
+    # kicker (a_k1) - no gap yet, so this isn't the "position dump" case by
+    # itself, but the roster is already AT the cap, so a_k2 leaving and
+    # b_rb3 arriving keeps count unchanged... until b_rb3 (RB depth, since
+    # a_rb1 already starts) and the still-thin bench interact with the cap
+    # differently than the unconstrained model assumes. Empirically: this
+    # exact candidate doesn't clear even a 0.0 fairness bar unconstrained,
+    # but does once roster_size is applied - confirming roster_size actually
+    # changes trade_targets' real output, not just a cosmetic pass-through.
+    slots = {"RB": 1, "K": 1}
+    eligibility = {"RB": {"RB"}, "K": {"K"}}
+    weeks = [1, 2]
+    free_agents = {
+        "RB": [PlayerCtx(id="fa_rb", position="RB", ros_total=10.0, weekly={1: 5.0, 2: 5.0})],
+        "K": [PlayerCtx(id="fa_k", position="K", ros_total=2.0, weekly={1: 1.0, 2: 1.0})],
+    }
+    players = {
+        "a_rb1": _wk("a_rb1", "RB", {1: 20.0, 2: 20.0}),
+        "a_k1": _wk("a_k1", "K", {1: 10.0, 2: 10.0}),
+        "a_k2": _wk("a_k2", "K", {1: 3.0, 2: 3.0}),
+        "b_rb1": _wk("b_rb1", "RB", {1: 15.0, 2: 15.0}),
+        "b_rb2": _wk("b_rb2", "RB", {1: 12.0, 2: 12.0}),
+        "b_rb3": _wk("b_rb3", "RB", {1: 9.0, 2: 9.0}),
+    }
+    team_a = ["a_rb1", "a_k1", "a_k2"]
+    team_b = ["b_rb1", "b_rb2", "b_rb3"]
+
+    unconstrained = trade_targets(
+        team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=dict(players),
+        free_agents_by_pos=free_agents, weeks=weeks, slots=slots, eligibility=eligibility,
+        max_trade_targets=20, fairness_ratio=0.0, two_for_one_pool_size=3,
+    )
+    constrained = trade_targets(
+        team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=dict(players),
+        free_agents_by_pos=free_agents, weeks=weeks, slots=slots, eligibility=eligibility,
+        max_trade_targets=20, fairness_ratio=0.0, roster_size=3, two_for_one_pool_size=3,
+    )
+    match = lambda results: [r for r in results if r["give"] == ["a_k2"] and r["get"] == ["b_rb3"]]
+    assert match(unconstrained) == [], "sanity check: this candidate does NOT clear the bar unconstrained"
+    assert match(constrained) == [{"partner_team_id": 2, "give": ["a_k2"], "get": ["b_rb3"], "gain_self": 2.0, "gain_partner": 4.0}]
