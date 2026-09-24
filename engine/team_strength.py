@@ -422,6 +422,22 @@ def pickups(
     candidates = []
     for fas in free_agents_by_pos.values():
         for fa in fas:
+            # A free agent projected for exactly 0 points every remaining
+            # week (off an NFL roster, practice squad, retired, etc. - ESPN's
+            # free-agent pool still lists plenty of these, more of them now
+            # that the pool isn't capped to the top 40-60/position) is never
+            # a real pickup, whatever the before/after math below says. He
+            # contributes literally NOTHING most weeks (never a candidate in
+            # position_value_by_player's own claim loop, since that requires
+            # weekly points > 0), which nets out to a plain 0 rather than a
+            # penalty - and 0 can still beat a real rostered player whose
+            # cumulative value has gone negative at a thin-replacement
+            # position (the same "best-available-FA re-picked fresh every
+            # week" dynamic behind the original Herbert/QB bug this before/
+            # after rewrite fixed). Confirmed live: dead kickers with no NFL
+            # team were getting suggested over a real, if mediocre, starter.
+            if fa.ros_total <= 0:
+                continue
             same_pos_droppable = [pid for pid in droppable if players[pid].position == fa.position]
             drop_pool = same_pos_droppable or droppable
             drop_pid = min(drop_pool, key=lambda pid: team_values[pid]["value_delta"])

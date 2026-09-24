@@ -344,6 +344,29 @@ def test_pickups_does_not_recommend_dropping_a_negative_value_starter_for_a_wors
     assert result == []
 
 
+def test_pickups_excludes_free_agents_with_zero_ros_total():
+    # A free agent projected for exactly 0 points every remaining week (off
+    # an NFL roster, practice squad, retired, etc. - the free-agent pool
+    # isn't capped to a handful of relevant names anymore, so plenty of
+    # these turn up) must never be suggested, whatever the before/after math
+    # says - see pickups()'s own comment for the exact live bug this guards:
+    # a real kicker's cumulative value going negative (same thin-replacement
+    # dynamic as the QB test above) let a completely dead kicker "win" by
+    # doing nothing, since doing nothing nets out to 0 rather than a penalty.
+    slots = {"K": 1}
+    eligibility = {"K": {"K"}}
+    weeks = [1, 2, 3]
+    k1 = PlayerCtx(id="k1", position="K", ros_total=24.0, weekly={1: 8.0, 2: 8.0, 3: 8.0})
+    hot_fa = PlayerCtx(id="hot_fa", position="K", ros_total=27.0, weekly={1: 9.0, 2: 9.0, 3: 9.0})
+    dead_fa = PlayerCtx(id="dead_fa", position="K", ros_total=0.0, weekly={1: 0.0, 2: 0.0, 3: 0.0})
+    players = {"k1": k1}
+    free_agents = {"K": [hot_fa, dead_fa]}
+    team_values = position_value_by_player(["k1"], players, free_agents, weeks, slots, eligibility)
+    assert team_values["k1"]["value_delta"] < 0  # the exact bug scenario this test guards against
+    result = pickups(["k1"], players, team_values, free_agents, weeks, slots, eligibility, max_pickups=5)
+    assert all(c["add"] != "dead_fa" for c in result)
+
+
 # --- trade_targets fairness ratio: both sides > 0 alone lets through wildly
 # lopsided "trades" - see the conversation this was built from. Now scored
 # by position_value_team_total (points above replacement), not a lineup-
