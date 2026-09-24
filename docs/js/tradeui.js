@@ -1,4 +1,4 @@
-import { fmt, escapeHtml, getYourTeam } from "./state.js";
+import { fmt, escapeHtml, getYourTeam, consumePendingTrade } from "./state.js";
 import { POSITION_COLOR, sortByPositionOrder, teamLabel } from "./colors.js";
 import { openPlayerModal } from "./playermodal.js";
 import { compareCheckboxHtml, wireCompareCheckboxes } from "./compare.js";
@@ -150,6 +150,26 @@ function positionMatrixTableHtml(matrix, baseline) {
     </tr></tfoot></table>`;
 }
 
+// Renders window.FFTrade.applyRosterConstraints' own transactions list -
+// hypothetical moves the calc had to make to keep the post-trade roster
+// legal (a forced cut once over the real ESPN roster cap, or a same-
+// position free-agent pickup once a position was left with nobody
+// rostered at all - see that function's own docstring). Styled distinctly
+// (same accent language as rankings.js's live-FAAB override) so these
+// never read as an actual player in the trade itself.
+function rosterTransactionsHtml(transactions, playersById) {
+  if (!transactions.length) return "";
+  const rows = transactions.map((t) => {
+    const p = playersById.get(t.playerId);
+    const name = p ? escapeHtml(p.name) : escapeHtml(t.playerId);
+    const pos = p ? ` <span class="muted small">(${escapeHtml(p.position)})</span>` : "";
+    return t.type === "add"
+      ? `<li class="faab-live" title="Hypothetical: no one was rostered at this position, so the calc added the best available free agent">+ Add (FA): ${name}${pos}</li>`
+      : `<li class="delta-down" title="Hypothetical: the roster was over the real ESPN roster cap, so the lowest-value player was cut">&minus; Cut: ${name}${pos}</li>`;
+  });
+  return `<ul class="small roster-transactions">${rows.join("")}</ul>`;
+}
+
 // Runs the (potentially multi-second, fully unlocked) search - see
 // docs/js/trade.js's tradeSuggestions for why this can be slow with nothing
 // locked, and fast once players are. The setTimeout lets the "Generating..."
@@ -168,6 +188,7 @@ function generateSuggestions(suggestionsEl, data, state, rostA, rostB, freeAgent
       players, freeAgentsByPos, weeks,
       slots: data.meta.slots, eligibility: data.meta.slot_eligibility,
       fairnessRatio: data.meta.trade_fairness_ratio || 0,
+      rosterSize: data.meta.roster_size,
       mySide,
     });
     state.suggestions = suggestions;
@@ -290,9 +311,14 @@ export function renderTrade(container, data) {
   const yourTeamId = getYourTeam(data.meta.slug);
   const defaultTeamA = teams.find((t) => t.team_id === yourTeamId)?.team_id ?? teams[0].team_id;
   const defaultTeamB = teams.find((t) => t.team_id !== defaultTeamA)?.team_id ?? defaultTeamA;
+  // Team Strength's "Suggested trades" rows queue this (see state.js's
+  // setPendingTrade) right before switching to this tab - one-shot, so a
+  // later manual visit to this tab doesn't keep re-seeding the same pick.
+  const pending = consumePendingTrade();
   const state = {
-    teamA: defaultTeamA, teamB: defaultTeamB,
-    givesA: new Set(), givesB: new Set(), sortMode: "position", expandedWeek: null,
+    teamA: pending?.teamA ?? defaultTeamA, teamB: pending?.teamB ?? defaultTeamB,
+    givesA: new Set(pending?.givesA || []), givesB: new Set(pending?.givesB || []),
+    sortMode: "position", expandedWeek: null,
     suggestions: [],
   };
 
@@ -421,23 +447,42 @@ export function renderTrade(container, data) {
       for (let w = data.meta.current_week; w <= data.meta.final_week; w++) weeks.push(w);
       const slots = data.meta.slots;
       const eligibility = data.meta.slot_eligibility;
+      const rosterSize = data.meta.roster_size;
       const origA = rostA.map((p) => p.id);
       const origB = rostB.map((p) => p.id);
       const rosters = window.FFTrade.afterRosters([...state.givesA], [...state.givesB], origA, origB);
+
+      // Same constraint resolution on BOTH sides of the before/after
+      // comparison (see window.FFTrade.applyRosterConstraints) - a real
+      // roster gap (zero players at a startable position) or an over-cap
+      // roster is filled/trimmed the same way whether it already existed or
+      // this trade just created it, so the delta stays apples-to-apples
+      // instead of comparing a "fixed" after against an "as-is" before.
+      const baseA = window.FFTrade.applyRosterConstraints({ roster: origA, players, freeAgentsByPos, weeks, slots, eligibility, rosterSize });
+      const baseB = window.FFTrade.applyRosterConstraints({ roster: origB, players, freeAgentsByPos, weeks, slots, eligibility, rosterSize });
+      const afterA = window.FFTrade.applyRosterConstraints({ roster: rosters.afterRosterA, players, freeAgentsByPos, weeks, slots, eligibility, rosterSize });
+      const afterB = window.FFTrade.applyRosterConstraints({ roster: rosters.afterRosterB, players, freeAgentsByPos, weeks, slots, eligibility, rosterSize });
+
       const baseMatrixA = window.FFTrade.positionValueMatrix({
-        teamPlayerIds: origA, players, freeAgentsByPos, weeks, slots, eligibility,
+        teamPlayerIds: baseA.roster, players, freeAgentsByPos, weeks, slots, eligibility,
       });
       const baseMatrixB = window.FFTrade.positionValueMatrix({
-        teamPlayerIds: origB, players, freeAgentsByPos, weeks, slots, eligibility,
+        teamPlayerIds: baseB.roster, players, freeAgentsByPos, weeks, slots, eligibility,
       });
       const matrixA = window.FFTrade.positionValueMatrix({
-        teamPlayerIds: rosters.afterRosterA, players, freeAgentsByPos, weeks, slots, eligibility,
+        teamPlayerIds: afterA.roster, players, freeAgentsByPos, weeks, slots, eligibility,
       });
       const matrixB = window.FFTrade.positionValueMatrix({
-        teamPlayerIds: rosters.afterRosterB, players, freeAgentsByPos, weeks, slots, eligibility,
+        teamPlayerIds: afterB.roster, players, freeAgentsByPos, weeks, slots, eligibility,
       });
-      container.querySelector("#trade-matrix-a").innerHTML = positionMatrixTableHtml(matrixA, baseMatrixA);
-      container.querySelector("#trade-matrix-b").innerHTML = positionMatrixTableHtml(matrixB, baseMatrixB);
+      // Only the POST-TRADE side's hypothetical moves are shown - what THIS
+      // trade requires, not whatever the unmodified roster already lived
+      // with (baseline transactions are near-always empty for a real,
+      // already-legal roster anyway).
+      container.querySelector("#trade-matrix-a").innerHTML =
+        positionMatrixTableHtml(matrixA, baseMatrixA) + rosterTransactionsHtml(afterA.transactions, data.playersById);
+      container.querySelector("#trade-matrix-b").innerHTML =
+        positionMatrixTableHtml(matrixB, baseMatrixB) + rosterTransactionsHtml(afterB.transactions, data.playersById);
     }
 
     function evaluate() {

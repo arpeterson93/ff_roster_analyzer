@@ -91,6 +91,11 @@ class EspnClient:
             slot_eligibility[label] = _SLOT_ELIGIBILITY[label]
         positions = sort_positions({pos for elig in slot_eligibility.values() for pos in elig})
 
+        # Unlike `slots` above, the raw dict includes BE/IR - the real total
+        # roster cap (Trade Calculator needs this to know when a trade
+        # forces a cut - see docs/js/trade.js's applyRosterConstraints).
+        roster_size = sum(s.position_slot_counts.values())
+
         scoring_items = [
             {"id": item["id"], "abbr": item["abbr"], "points": item["points"]} for item in s.scoring_format
         ]
@@ -107,6 +112,7 @@ class EspnClient:
             divisions=dict(s.division_map),
             slots=slots,
             slot_eligibility=slot_eligibility,
+            roster_size=roster_size,
             scoring_items=scoring_items,
             positions=positions,
         )

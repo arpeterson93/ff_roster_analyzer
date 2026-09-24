@@ -26,6 +26,7 @@ class LeagueSettings:
     divisions: dict[int, str]
     slots: dict[str, int]  # non-zero starting slots only, excludes BE/IR
     slot_eligibility: dict[str, set[str]]  # slot label -> eligible canonical positions
+    roster_size: int  # total roster spots: starting slots + BE + IR
     scoring_items: list[dict]  # [{id, abbr, points}]
     positions: list[str]  # canonical positions that can fill any starting slot
 

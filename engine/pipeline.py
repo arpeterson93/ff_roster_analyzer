@@ -1597,6 +1597,10 @@ def run_league(cfg: dict) -> dict:
         # (docs/js/trade.js's tradeSuggestions) so it applies the exact same
         # bar server-side trade_targets does, not a hardcoded duplicate.
         "trade_fairness_ratio": strength_cfg["trade_fairness_ratio"],
+        # Real total roster cap (starting slots + BE + IR) - read by the
+        # Trade Calculator (docs/js/trade.js's applyRosterConstraints) to
+        # know when a trade forces a cut.
+        "roster_size": settings.roster_size,
         "division_count": division_count,
         "teams": [
             {"team_id": t.team_id, "name": t.team_name, "manager": t.manager, "abbrev": t.abbrev, "division": settings.divisions.get(t.division_id, str(t.division_id))}

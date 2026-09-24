@@ -403,65 +403,66 @@ function robustSlotOrder(slots, eligibility) {
   });
 }
 
-// {position: {startingValue, depthValue, total}} - twin of
-// engine/team_strength.py's position_value_matrix, see that function's own
-// docstring for the full derivation. Grouped by the player's own real
-// POSITION (QB/RB/WR/TE/K), not by lineup slot: an earlier version
-// bucketed by slot instance (QB/RB/WR1/WR2/TE/K/FLEX1/FLEX2), and a player
-// left unclaimed after a slot's claim pass got "depth" credit again at
-// every OTHER eligible slot he then passed through unclaimed - a bench RB
-// behind a full RB corps could be valued once under RB's own depth chain,
-// again under FLEX1's, and again under FLEX2's. This version still uses
-// the same cheap greedy claim (see robustSlotOrder - single-position slots
-// claim before any FLEX slot, deliberately NOT the exact bitmask-DP
-// optimizer optimalLineupAssignment uses, since this function is also the
-// hot path behind tradeSuggestions' large per-search verify budget and the
-// exact solver is too expensive to run there thousands of times), but only
-// credits depth ONCE per player, after every slot has had its turn to
-// claim him - so a player is either that week's starter (in exactly one
-// slot) or that week's bench (in exactly one position bucket), never both
-// and never more than once. A claimed starter's startingValue is scored
-// against the best AVAILABLE (unrostered) player for the SLOT he fills -
-// so a bench RB who ends up claimed by FLEX is compared to the FLEX-wide
-// replacement level, not the single-position one - but credited to his own
-// position's bucket, not FLEX's. Starting value CAN go negative: a real
-// rostered starter who's actually worse than a free agent is a real,
-// informative signal, not something to hide. An unclaimed player's
-// depthValue is instead scored against the best available free agent at
-// THEIR OWN position (never a FLEX-widened bar - a bench RB's depth value
-// is what he's worth as a straight RB2, not as a hypothetical FLEX play)
-// and floored at 0. A player who projects 0 that week (a true bye) is
-// excluded entirely, from both the claim pass and the depth pass.
-function positionValueMatrix(opts) {
+// {playerId: {startingValue, depthValue, valueDelta, weekly}} - twin of
+// engine/team_strength.py's position_value_by_player, see that function's
+// own docstring for the full derivation. positionValueMatrix (below) is a
+// thin wrapper that sums this by each player's own real position.
+//
+// Grouped by the player's own real POSITION (QB/RB/WR/TE/K), not by lineup
+// slot: an earlier version bucketed by slot instance (QB/RB/WR1/WR2/TE/K/
+// FLEX1/FLEX2), and a player left unclaimed after a slot's claim pass got
+// "depth" credit again at every OTHER eligible slot he then passed through
+// unclaimed - a bench RB behind a full RB corps could be valued once under
+// RB's own depth chain, again under FLEX1's, and again under FLEX2's. This
+// version still uses the same cheap greedy claim (see robustSlotOrder -
+// single-position slots claim before any FLEX slot, deliberately NOT the
+// exact bitmask-DP optimizer optimalLineupAssignment uses, since this
+// function is also the hot path behind tradeSuggestions' large per-search
+// verify budget and the exact solver is too expensive to run there
+// thousands of times), but only credits depth ONCE per player, after every
+// slot has had its turn to claim him - so a player is either that week's
+// starter (in exactly one slot) or that week's bench (in exactly one
+// position bucket), never both and never more than once. A claimed
+// starter's startingValue is scored against the best AVAILABLE (unrostered)
+// player for the SLOT he fills - so a bench RB who ends up claimed by FLEX
+// is compared to the FLEX-wide replacement level, not the single-position
+// one - but credited to his own position's bucket, not FLEX's. Starting
+// value CAN go negative: a real rostered starter who's actually worse than
+// a free agent is a real, informative signal, not something to hide. An
+// unclaimed player's depthValue is instead scored against the best
+// available free agent at THEIR OWN position (never a FLEX-widened bar - a
+// bench RB's depth value is what he's worth as a straight RB2, not as a
+// hypothetical FLEX play) and floored at 0. A player who projects 0 that
+// week (a true bye) is excluded entirely, from both the claim pass and the
+// depth pass. Unlike the old lineup-delta engine this replaced, a
+// player's replacement is ALWAYS the best available free agent, never a
+// bench teammate - replacementId here only ever names a free agent (or
+// null when none exists at that slot that week).
+function positionValueByPlayer(opts) {
   var teamPlayerIds = opts.teamPlayerIds, players = opts.players, freeAgentsByPos = opts.freeAgentsByPos;
   var weeks = opts.weeks, slots = opts.slots, eligibility = opts.eligibility;
   var depthWeight = opts.depthWeight !== undefined ? opts.depthWeight : 0.5;
 
   var instances = robustSlotOrder(slots, eligibility);
-  var positions = [];
-  Object.keys(eligibility).forEach(function (base) {
-    (eligibility[base] || []).forEach(function (pos) {
-      if (positions.indexOf(pos) === -1) positions.push(pos);
-    });
-  });
 
   var bestAvailableCache = {};
   function bestAvailable(basePositions, w) {
     var key = basePositions.slice().sort().join(",") + "|" + w;
     if (bestAvailableCache[key] !== undefined) return bestAvailableCache[key];
-    var best = 0;
+    var best = 0, bestId = null;
     basePositions.forEach(function (pos) {
       (freeAgentsByPos[pos] || []).forEach(function (fa) {
         var v = (fa.weekly && fa.weekly[w] !== undefined) ? fa.weekly[w] : 0;
-        if (v > best) best = v;
+        if (v > best) { best = v; bestId = fa.id; }
       });
     });
-    bestAvailableCache[key] = best;
-    return best;
+    var result = { value: best, id: bestId };
+    bestAvailableCache[key] = result;
+    return result;
   }
 
-  var starting = {}, depth = {};
-  positions.forEach(function (pos) { starting[pos] = 0; depth[pos] = 0; });
+  var startingValue = {}, depthValue = {}, weekly = {};
+  teamPlayerIds.forEach(function (pid) { startingValue[pid] = 0; depthValue[pid] = 0; weekly[pid] = {}; });
 
   weeks.forEach(function (w) {
     var candidates = {};
@@ -481,15 +482,61 @@ function positionValueMatrix(opts) {
       pool.sort(function (a, b) { return candidates[b].pts - candidates[a].pts; });
       var starter = pool[0];
       var replacement = bestAvailable(elig, w);
-      starting[candidates[starter].pos] += candidates[starter].pts - replacement;
+      var v = candidates[starter].pts - replacement.value;
+      startingValue[starter] += v;
+      weekly[starter][w] = { startingValue: v, depthValue: 0, replacementId: replacement.id };
       claimed[starter] = true;
     });
     Object.keys(candidates).forEach(function (pid) {
       if (claimed[pid]) return;
       var c = candidates[pid];
       var replacement = bestAvailable([c.pos], w);
-      depth[c.pos] += Math.max(0, c.pts - replacement);
+      var v = Math.max(0, c.pts - replacement.value);
+      depthValue[pid] += v;
+      weekly[pid][w] = { startingValue: 0, depthValue: v, replacementId: replacement.id };
     });
+  });
+
+  var result = {};
+  teamPlayerIds.forEach(function (pid) {
+    if (!players[pid]) return;
+    var weeklyList = weeks.map(function (w) {
+      return Object.assign({ week: w }, weekly[pid][w] || { startingValue: 0, depthValue: 0, replacementId: null });
+    });
+    result[pid] = {
+      startingValue: startingValue[pid],
+      depthValue: depthValue[pid],
+      valueDelta: startingValue[pid] + depthWeight * depthValue[pid],
+      weekly: weeklyList,
+    };
+  });
+  return result;
+}
+
+// {position: {startingValue, depthValue, total}} - twin of
+// engine/team_strength.py's position_value_matrix. A thin wrapper now -
+// see positionValueByPlayer, which runs this exact claim loop and does all
+// the real work, just keyed by player instead of by position; this sums
+// that by each player's own real position.
+function positionValueMatrix(opts) {
+  var teamPlayerIds = opts.teamPlayerIds, players = opts.players, eligibility = opts.eligibility;
+  var depthWeight = opts.depthWeight !== undefined ? opts.depthWeight : 0.5;
+
+  var byPlayer = positionValueByPlayer(opts);
+  var positions = [];
+  Object.keys(eligibility).forEach(function (base) {
+    (eligibility[base] || []).forEach(function (pos) {
+      if (positions.indexOf(pos) === -1) positions.push(pos);
+    });
+  });
+
+  var starting = {}, depth = {};
+  positions.forEach(function (pos) { starting[pos] = 0; depth[pos] = 0; });
+  teamPlayerIds.forEach(function (pid) {
+    var p = players[pid], v = byPlayer[pid];
+    if (!p || !v || starting[p.position] === undefined) return;
+    starting[p.position] += v.startingValue;
+    depth[p.position] += v.depthValue;
   });
 
   var result = {};
@@ -500,15 +547,123 @@ function positionValueMatrix(opts) {
   return result;
 }
 
+// {roster, transactions} - resolves a hypothetical post-trade roster
+// against real ESPN roster rules, so positionValueTeamTotal never scores
+// an illegal or exploitative roster shape:
+//   1. Backfill: any real position with ZERO currently-rostered players
+//      hypothetically signs the best available free agent there (highest
+//      ros_total, same ranking convention topNByRosTotal already uses) -
+//      without this, trading away your only (negative-value) player at a
+//      position looks like a free win (0 contribution) instead of the real
+//      roster gap it creates.
+//   2. Cap enforcement: if the roster is now over `rosterSize` (real ESPN
+//      total roster spots - starting + BE + IR), cut the single lowest-
+//      valueDelta player - ANY current roster member is eligible, not just
+//      players actually in the trade, matching "whichever player has the
+//      least value post-trade" rather than a fixed rule like "cut what you
+//      just received."
+// Looped (bounded) since either step can trigger the other: a cut can
+// empty out a position, and a backfill can push the roster back over the
+// cap.
+function applyRosterConstraints(opts) {
+  var roster = opts.roster.slice();
+  var players = opts.players, freeAgentsByPos = opts.freeAgentsByPos;
+  var weeks = opts.weeks, slots = opts.slots, eligibility = opts.eligibility;
+  var rosterSize = opts.rosterSize, depthWeight = opts.depthWeight;
+  var transactions = [];
+
+  var positions = [];
+  Object.keys(eligibility).forEach(function (base) {
+    (eligibility[base] || []).forEach(function (pos) {
+      if (positions.indexOf(pos) === -1) positions.push(pos);
+    });
+  });
+
+  var MAX_ITERATIONS = 20;
+  for (var iter = 0; iter < MAX_ITERATIONS; iter++) {
+    var changed = false;
+
+    var rosteredPositions = {};
+    roster.forEach(function (pid) {
+      var p = players[pid];
+      if (p) rosteredPositions[p.position] = true;
+    });
+    positions.forEach(function (pos) {
+      if (rosteredPositions[pos]) return;
+      var pool = (freeAgentsByPos[pos] || []).filter(function (fa) { return roster.indexOf(fa.id) === -1; });
+      if (!pool.length) return; // nobody available at this position at all
+      var best = pool.slice().sort(function (a, b) { return b.ros_total - a.ros_total; })[0];
+      roster.push(best.id);
+      if (!players[best.id]) players[best.id] = best; // ensure downstream lookups (scoring, UI) see him
+      transactions.push({ type: "add", playerId: best.id });
+      changed = true;
+    });
+
+    if (roster.length > rosterSize) {
+      var byPlayer = positionValueByPlayer({
+        teamPlayerIds: roster, players: players, freeAgentsByPos: freeAgentsByPos,
+        weeks: weeks, slots: slots, eligibility: eligibility, depthWeight: depthWeight,
+      });
+      // A cut must never take a position down to zero - otherwise the very
+      // next iteration's backfill just re-signs someone there, and if THAT
+      // replacement-level signing is itself the roster's lowest-valueDelta
+      // player (routine - a backfill exists BECAUSE nothing better was
+      // available), the cut step removes him again next iteration, forever
+      // (confirmed live, not just theoretical - see the conversation this
+      // was built from). Counting current roster occupancy per position and
+      // excluding anyone who's their position's last one closes that loop.
+      var positionCounts = {};
+      roster.forEach(function (pid) {
+        var p = players[pid];
+        if (p) positionCounts[p.position] = (positionCounts[p.position] || 0) + 1;
+      });
+      var cuttable = roster.filter(function (pid) {
+        var p = players[pid];
+        return p && positionCounts[p.position] > 1;
+      });
+      // Every position down to exactly one rostered player (extreme, only
+      // possible on a roster far smaller than any real ESPN league allows) -
+      // no cut can avoid creating SOME gap, so fall back to cutting the
+      // worst overall rather than refusing to shrink the roster at all.
+      var pool = cuttable.length ? cuttable : roster;
+      var worst = null;
+      pool.forEach(function (pid) {
+        var v = byPlayer[pid] ? byPlayer[pid].valueDelta : 0;
+        if (worst === null || v < byPlayer[worst].valueDelta) worst = pid;
+      });
+      roster = roster.filter(function (pid) { return pid !== worst; });
+      transactions.push({ type: "cut", playerId: worst });
+      changed = true;
+    }
+
+    if (!changed) break;
+  }
+
+  return { roster: roster, transactions: transactions };
+}
+
 // Sum of every position's `total` (starting + depthWeight*depth) - one
 // team's whole roster reduced to a single number, for before/after trade
 // comparison. Cheap (no exponential DP, just small per-slot sorts), unlike
 // the bitmask-DP lineup evaluator (see optimalLineupTotal) - see
 // tradeSuggestions' own comment for why that cost difference is what makes
 // this the primary trade-suggestion signal now, not just a ranking hint.
-function positionValueTeamTotal(teamPlayerIds, players, freeAgentsByPos, weeks, slots, eligibility) {
+// rosterSize is optional (backward compatible) - when given, the roster is
+// resolved through applyRosterConstraints first (transactions discarded;
+// callers that need to SHOW the cut/backfill, like tradeui.js's Team Value
+// panel, call applyRosterConstraints themselves instead), so a candidate
+// that would leave a position empty or bust the real roster cap can't
+// score better than it actually would in practice.
+function positionValueTeamTotal(teamPlayerIds, players, freeAgentsByPos, weeks, slots, eligibility, rosterSize) {
+  var resolvedIds = teamPlayerIds;
+  if (rosterSize !== undefined && rosterSize !== null) {
+    resolvedIds = applyRosterConstraints({
+      roster: teamPlayerIds, players: players, freeAgentsByPos: freeAgentsByPos,
+      weeks: weeks, slots: slots, eligibility: eligibility, rosterSize: rosterSize,
+    }).roster;
+  }
   var matrix = positionValueMatrix({
-    teamPlayerIds: teamPlayerIds, players: players, freeAgentsByPos: freeAgentsByPos,
+    teamPlayerIds: resolvedIds, players: players, freeAgentsByPos: freeAgentsByPos,
     weeks: weeks, slots: slots, eligibility: eligibility,
   });
   var total = 0;
@@ -575,6 +730,7 @@ function tradeSuggestions(opts) {
   var weeks = opts.weeks, slots = opts.slots, eligibility = opts.eligibility;
   var fairnessRatio = opts.fairnessRatio || 0;
   var mySide = opts.mySide || null;
+  var rosterSize = opts.rosterSize;
   // Unbounded by default (the whole roster, minus locked players, is fair
   // game) - a smaller pool used to mean a player outside the top 6 by
   // ros_total could never appear in an auto-generated suggestion at all,
@@ -615,14 +771,14 @@ function tradeSuggestions(opts) {
     if (lockedOnly) candidates = candidates.concat([lockedOnly]);
   }
 
-  var beforeA = positionValueTeamTotal(rosterA, players, freeAgentsByPos, weeks, slots, eligibility);
-  var beforeB = positionValueTeamTotal(rosterB, players, freeAgentsByPos, weeks, slots, eligibility);
+  var beforeA = positionValueTeamTotal(rosterA, players, freeAgentsByPos, weeks, slots, eligibility, rosterSize);
+  var beforeB = positionValueTeamTotal(rosterB, players, freeAgentsByPos, weeks, slots, eligibility, rosterSize);
 
   var results = [];
   candidates.forEach(function (c) {
     var rosters = afterRosters(c.giveA, c.giveB, rosterA, rosterB);
-    var gainA = positionValueTeamTotal(rosters.afterRosterA, players, freeAgentsByPos, weeks, slots, eligibility) - beforeA;
-    var gainB = positionValueTeamTotal(rosters.afterRosterB, players, freeAgentsByPos, weeks, slots, eligibility) - beforeB;
+    var gainA = positionValueTeamTotal(rosters.afterRosterA, players, freeAgentsByPos, weeks, slots, eligibility, rosterSize) - beforeA;
+    var gainB = positionValueTeamTotal(rosters.afterRosterB, players, freeAgentsByPos, weeks, slots, eligibility, rosterSize) - beforeB;
     if (gainA <= 0 || gainB <= 0) return;
     if (!passesFairness(gainA, gainB, fairnessRatio, mySide)) return;
     results.push({ giveA: c.giveA, giveB: c.giveB, gainA: gainA, gainB: gainB });
@@ -641,6 +797,9 @@ if (typeof module !== "undefined" && module.exports) {
     lineupAssignmentForWeekWithStreaming: lineupAssignmentForWeekWithStreaming,
     tradeSuggestions: tradeSuggestions,
     positionValueMatrix: positionValueMatrix,
+    positionValueByPlayer: positionValueByPlayer,
+    positionValueTeamTotal: positionValueTeamTotal,
+    applyRosterConstraints: applyRosterConstraints,
     afterRosters: afterRosters,
   };
 
@@ -736,6 +895,9 @@ if (typeof module !== "undefined" && module.exports) {
     lineupAssignmentForWeekWithStreaming: lineupAssignmentForWeekWithStreaming,
     tradeSuggestions: tradeSuggestions,
     positionValueMatrix: positionValueMatrix,
+    positionValueByPlayer: positionValueByPlayer,
+    positionValueTeamTotal: positionValueTeamTotal,
+    applyRosterConstraints: applyRosterConstraints,
     afterRosters: afterRosters,
   };
 }

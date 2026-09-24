@@ -636,6 +636,13 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
    modeled number. */
 .faab-live { color: var(--accent); font-weight: 600; }
 
+/* Trade Calculator's hypothetical roster moves (a forced cut, a same-
+   position FA pickup - see docs/js/trade.js's applyRosterConstraints),
+   shown under the Team Value panel so they're never confused with an
+   actual chosen trade player. */
+.roster-transactions { list-style: none; padding: 0; margin: 6px 0 0; }
+.roster-transactions li { padding: 2px 0; }
+
 .delta-up { color: var(--green-600); }
 .delta-down { color: var(--red-600); }
 

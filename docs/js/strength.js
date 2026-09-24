@@ -1,4 +1,4 @@
-import { fmt, escapeHtml, getYourTeam, setYourTeam } from "./state.js";
+import { fmt, escapeHtml, getYourTeam, setYourTeam, setPendingTrade } from "./state.js";
 import { colorForRatio, teamLabel } from "./colors.js";
 import { openPlayerModal } from "./playermodal.js";
 import { buildPlayersMap, buildFreeAgentsByPos } from "./tradeui.js";
@@ -113,6 +113,10 @@ function pickupsTable(pickups, playersById) {
     .join("")}</tbody></table>`;
 }
 
+// Rows are clickable (see wireTradeTargetClicks) - jumps to the Trade
+// Calculator with both teams and both sides' players already checked, via
+// state.js's setPendingTrade (a one-shot in-memory hint tradeui.js's
+// renderTrade reads on its next render).
 function tradeTargetsTable(targets, playersById, teamsById) {
   if (!targets.length) return `<p class="muted small">No favorable trade targets found.</p>`;
   return `<table><thead><tr><th>Partner</th><th>Give</th><th>Get</th><th>Your gain</th><th>Their gain</th></tr></thead><tbody>${targets
@@ -120,7 +124,7 @@ function tradeTargetsTable(targets, playersById, teamsById) {
       const partner = teamsById.get(t.partner_team_id);
       const give = t.give.map((id) => (playersById.get(id) || {}).name || id).join(", ");
       const get = t.get.map((id) => (playersById.get(id) || {}).name || id).join(", ");
-      return `<tr><td>${escapeHtml(partner ? teamLabel(partner) : t.partner_team_id)}</td><td>${escapeHtml(give)}</td><td>${escapeHtml(get)}</td><td>+${fmt(t.gain_self, 1)}</td><td>+${fmt(t.gain_partner, 1)}</td></tr>`;
+      return `<tr class="clickable-row" data-trade-target data-partner-team-id="${t.partner_team_id}" data-give="${t.give.join(",")}" data-get="${t.get.join(",")}"><td>${escapeHtml(partner ? teamLabel(partner) : t.partner_team_id)}</td><td>${escapeHtml(give)}</td><td>${escapeHtml(get)}</td><td>+${fmt(t.gain_self, 1)}</td><td>+${fmt(t.gain_partner, 1)}</td></tr>`;
     })
     .join("")}</tbody></table>`;
 }
@@ -261,6 +265,24 @@ function wirePlayerClicks(container, data) {
   });
 }
 
+// Queues the seed for tradeui.js's renderTrade to pick up, then switches
+// tabs the same way a real click on the nav button would (no direct
+// import from app.js - it already imports renderStrength from this file,
+// so importing back would be circular).
+function wireTradeTargetClicks(container, teamId) {
+  container.querySelectorAll("tr[data-trade-target]").forEach((row) => {
+    row.addEventListener("click", () => {
+      setPendingTrade({
+        teamA: teamId,
+        teamB: Number(row.dataset.partnerTeamId),
+        givesA: row.dataset.give ? row.dataset.give.split(",") : [],
+        givesB: row.dataset.get ? row.dataset.get.split(",") : [],
+      });
+      document.querySelector('nav.tabs button[data-tab="trade"]')?.click();
+    });
+  });
+}
+
 export function renderStrength(container, data, slug) {
   const yourTeamId = getYourTeam(slug) || data.teams[0].team_id;
   const team = data.teamsById.get(Number(yourTeamId)) || data.teams[0];
@@ -293,4 +315,5 @@ export function renderStrength(container, data, slug) {
     renderStrength(container, data, slug);
   });
   wirePlayerClicks(container, data);
+  wireTradeTargetClicks(container, Number(team.team_id));
 }

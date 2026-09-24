@@ -87,3 +87,21 @@ export function setLastLeague(slug) {
   stored.lastLeague = slug;
   saveStored(stored);
 }
+
+// One-shot navigation hint from Team Strength's "Suggested trades" rows to
+// the Trade Calculator (see strength.js's click handler and tradeui.js's
+// renderTrade) - in-memory only (not localStorage), since it's only ever
+// meant to survive the single same-page tab switch that follows setting it,
+// never a reload. consumePendingTrade clears it so re-opening the Trade
+// Calculator tab later doesn't keep re-seeding the same stale selection.
+let pendingTrade = null;
+
+export function setPendingTrade(seed) {
+  pendingTrade = seed;
+}
+
+export function consumePendingTrade() {
+  const seed = pendingTrade;
+  pendingTrade = null;
+  return seed;
+}
