@@ -1,29 +1,30 @@
 """Pulls the FAAB training-data files from this repo's "faab-data" GitHub
 release rather than expecting them in git - see the conversation this was
-built from: combined-training-table.json alone is well past GitHub's 100MB
-per-file git push limit (and, uncompressed, past even the 2GB per-asset
-Release limit - see the gzip note below), and the three raw pulled-data
-files (real bid/roster history scraped from ~30 *other* people's public
-ESPN leagues) can never be regenerated if lost, so they need a durable home
-even though none of them belong in the git history itself.
+built from: combined-training-table.parquet alone is well past GitHub's
+100MB per-file git push limit, and the three raw pulled-data files (real
+bid/roster history scraped from ~30 *other* people's public ESPN leagues)
+can never be regenerated if lost, so they need a durable home even though
+none of them belong in the git history itself.
 
 Release assets on a public repo are plain, unauthenticated HTTPS downloads -
 no `gh` CLI, no token, no rate-limit concerns worth worrying about here -
 so this only needs `requests`, already a project dependency.
 
 Every asset on the release is gzip-compressed (`<filename>.gz`, not the raw
-filename) - see publish_release_data.py. JSON this repetitive (thousands of
-rows sharing the same field names) compresses to roughly 5-7% of its raw
-size, which is what actually keeps combined-training-table.json under
-GitHub's 2GB-per-asset Release limit as the pooled dataset keeps growing
-(2.7GB raw, ~180MB compressed, confirmed live 2026-09-18 - the raw upload
-itself was flatly rejected with a 422 before this existed). Downloaded here
-as the `.gz`, verified against the pinned hash of THAT compressed asset, then
-decompressed to the plain filename every other script in this repo expects.
+filename) - see publish_release_data.py. combined-training-table.parquet's
+own columnar compression already keeps it well under GitHub's 2GB-per-asset
+Release limit on its own (115MB raw for ~5.6M rows, vs. 2.7GB when this was
+still JSON, before it OOM-killed a CI runner loading it - see
+build_training_table.py's COMBINED_OUT_PATH comment and engine/
+faab_estimate.py's load_pools) - gzip on top is just this script's uniform
+handling for every file it fetches, not load-bearing for this one anymore.
+Downloaded here as the `.gz`, verified against the pinned hash of THAT
+compressed asset, then decompressed to the plain filename every other
+script in this repo expects.
 
 Usage:
     python -m tools.faab_history.fetch_release_data                 # just
-        combined-training-table.json - all engine/pipeline.py needs
+        combined-training-table.parquet - all engine/pipeline.py needs
     python -m tools.faab_history.fetch_release_data --all            # every
         file, including the raw pulled data (only needed to rebuild the
         training table from scratch via build_training_table.py)
@@ -53,7 +54,10 @@ DEST_DIR = Path(__file__).parent
 # a new version by hand (normally you don't - publish_release_data.py does
 # both in one step).
 FILES = {
-    "combined-training-table.json": "2b1c37045d9e73f9b2bc9f12d6945cb83fcc6b2da4a41ea4ee883ef7696581ab",
+    # .parquet, not .json - see build_training_table.py's COMBINED_OUT_PATH
+    # comment (the pooled table's row count makes a plain json.loads OOM a
+    # CI runner outright; polars loads/reduces a Parquet file columnar).
+    "combined-training-table.parquet": "26ad257f621e8a9012526262f7aecaee94789b28a332fadb9bd735da1b2c08ed",
     "other-leagues-bids-raw.json": "2ec2b8ffa150b31754dd7d4d4c6fa395d055b3f0b6c8b3b944ad806d6e3e3bee",
     "other-leagues-bids.json": "c35bc7d550b83b28942d538dfccb96ab372b802e5e479b11a7557952ffc0d6de",
     "other-leagues-rostered-by-week.json": "241c2caad0785115dcaa1e6fa4d399f62da6d3a59e5755e631b93b4026c5ff81",
@@ -63,7 +67,7 @@ FILES = {
 # engine.faab_estimate.POOLED_TRAINING_TABLE_PATH) - the other three are
 # raw inputs to build_training_table.py, only needed to rebuild it from
 # scratch, not for a normal pipeline run.
-DEFAULT_FILES = ["combined-training-table.json"]
+DEFAULT_FILES = ["combined-training-table.parquet"]
 
 
 def sha256_of_file(path: Path) -> str:

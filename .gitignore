@@ -16,15 +16,15 @@ service_account.json
 docs/data/
 .cache/
 
-# Pulled/derived FAAB-pool data - large (combined-training-table.json alone
-# is ~436MB, over GitHub's 100MB per-file push limit outright) and the three
-# raw pulled-data files can't be regenerated if lost (real bid/roster history
-# scraped from other people's public ESPN leagues at a point in time). Not
-# in git; instead they're release assets on the "faab-data" GitHub release -
-# `python -m tools.faab_history.fetch_release_data` pulls what a normal
-# pipeline run needs, `--all` also gets the raw inputs to rebuild the
-# training table from scratch via build_training_table.py.
-tools/faab_history/combined-training-table.json
+# Pulled/derived FAAB-pool data - large (combined-training-table.parquet
+# alone is well over GitHub's 100MB per-file push limit outright) and the
+# three raw pulled-data files can't be regenerated if lost (real bid/roster
+# history scraped from other people's public ESPN leagues at a point in
+# time). Not in git; instead they're release assets on the "faab-data"
+# GitHub release - `python -m tools.faab_history.fetch_release_data` pulls
+# what a normal pipeline run needs, `--all` also gets the raw inputs to
+# rebuild the training table from scratch via build_training_table.py.
+tools/faab_history/combined-training-table.parquet
 tools/faab_history/other-leagues-bids-raw.json
 tools/faab_history/other-leagues-bids.json
 tools/faab_history/other-leagues-rostered-by-week.json

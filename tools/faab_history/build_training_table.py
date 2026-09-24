@@ -4,32 +4,50 @@ other-leagues-bids.json) against nflverse data and each source league's OWN
 scoring rules.
 
 Two output files:
-  - o-league-training-table.json    The O League only - same shape/contract
-                                     as before (engine/faab_estimate.py's
-                                     live pipeline reads this path), plus
-                                     the new source_league_*/budget-
-                                     remaining fields added additively.
-  - combined-training-table.json    The O League PLUS every other public
-                                     league pulled by pull_public_league_bids.py.
-                                     Not read by the live pipeline yet - see
-                                     the conversation this was built from:
-                                     the plan is to validate via
-                                     evaluate_model.py's leave-one-league-out
-                                     backtest before switching the live
-                                     estimator over to it.
+  - o-league-training-table.json     The O League only - same shape/contract
+                                      as before (evaluate_model.py's own
+                                      default --table reads this path), plus
+                                      the new source_league_*/budget-
+                                      remaining fields added additively.
+  - combined-training-table.parquet  The O League PLUS every other public
+                                      league pulled by pull_public_league_bids.py -
+                                      what engine/faab_estimate.py's live
+                                      pipeline actually reads (confirmed via
+                                      backtest that pooling helps - see the
+                                      conversation this was built from).
+                                      .parquet, not .json - see this
+                                      constant's own comment (COMBINED_OUT_PATH,
+                                      below) for why.
 
-WHY EACH LEAGUE'S OWN SCORING RULES, NOT OURS: a bid reflects what THAT
-league's bidders saw under THEIR scoring format when they decided how much
-to spend - recomputing a PPR league's points under our Standard rules would
-erase the exact signal (raw receptions) that drove those bids. So every
-league's points-based features (prior_week_actual_points,
-trailing_2_3_avg_points, season_avg_points) are computed by loading that
-league's own scoring_format from ESPN and running it through
-engine.scoring.ScoringRules.points_for_row, same as the O-League-only
-version always did for its own one league. This also makes cross-league
-pooling correct even though vet_candidates.py never required an exact PPR
-match: once points are denominated in each bidder's own terms, the
-feature -> bid% relationship is scoring-format-agnostic.
+WHY EVERY ROW'S POINTS-BASED FEATURES USE ONE SHARED BASELINE SCORING, NOT
+EACH ROW'S OWN SOURCE LEAGUE'S: an earlier version of this file computed
+prior_week_actual_points/trailing_2_3_avg_points/season_avg_points under
+each row's OWN source league's real scoring rules, on the theory that a bid
+reflects what THAT league's bidders saw when they decided how much to spend.
+That's true of the BID - it stays denominated in that league's own real
+dollars (target_pct never touches scoring at all, see engine/faab_estimate.py)
+- but it's the wrong call for the FEATURES. A 28-point PPR game and a
+20-point Standard game can be the exact same real box score; computing
+"points" two different ways for the same underlying performance trains the
+k-NN comp search and the regression on a feature whose meaning silently
+shifts by source league, which a LIVE query (computed under whichever site
+league is actually asking, see engine/pipeline.py's player_rules) has no way
+to match. See the conversation this was built from (2026-09-21). Every
+pooled row's points-based features are now computed under ONE shared
+baseline_scoring (tools/faab_history/league_profile.load_baseline_scoring_
+items - user-edited via a "Baseline Scoring" artifact, deliberately NOT
+pinned to any one real league's own settings since a real league's rules
+reflect that league's own idiosyncrasies, e.g. The O League doesn't score
+defenses at all), regardless of which league actually placed the bid. This
+also makes cross-league pooling correct even though vet_candidates.py never
+required an exact PPR match: once every row's points are denominated in the
+SAME terms, the feature -> bid% relationship no longer depends on comparing
+like-for-like scoring formats across leagues.
+
+scoring_by_league (below) is now used ONLY as a data-integrity check - each
+candidate league's own live settings still have to actually parse into a
+ScoringRules object (see the excluded_leagues handling in main()) - not for
+computing any row's own features anymore.
 
 WHY THE INTEREST STAGE ONLY POOLS LEAGUES WITH ROSTER DATA:
 engine/faab_estimate.py's two-stage model needs real no_bid (true negative)
@@ -89,12 +107,13 @@ For each bid, adds:
                                   from and its settings, for eval grouping
                                   and the player-modal comp breakdown
 
-Also appends synthetic "no-bid" rows for every league that has a weekly-
-roster pull available (The O League always; any other league once
+Also appends synthetic "no-bid" rows for every league-SEASON that has both a
+weekly-roster pull available (The O League always; any other league once
 pull_public_league_rosters.py has run for it - see WHY THE INTEREST STAGE
-above) - one per (season, week, player) where the player was a genuine free
-agent that week, nobody bid on him, and his prior-week usage/production
-cleared a relevance bar.
+above) AND at least one real transaction that season (see build_no_bid_rows'
+own docstring, "TIER 1 LEAGUE-SEASON VALIDITY GATE") - one per (season, week,
+player) where the player was a genuine free agent that week, nobody bid on
+him, and his prior-week usage/production cleared a relevance bar.
 """
 from __future__ import annotations
 
@@ -127,14 +146,23 @@ from engine.scoring import ScoringRules
 from ingest import nfl_data as nd
 from ingest.ids import build_id_map
 from tools.faab_history.atomic_json import write_json
-from tools.faab_history.league_profile import fetch_settings, profile_settings, scoring_format_items
+from tools.faab_history.league_profile import (
+    fetch_settings, load_baseline_scoring_items, profile_settings, scoring_format_items,
+)
 
 O_LEAGUE_ID = 355398
 BIDS_PATH = Path(__file__).parent / "o-league-bids.json"
 OTHER_BIDS_PATH = Path(__file__).parent / "other-leagues-bids.json"
 VETTED_PATH = Path(__file__).parent / "vetted_candidates.json"
 OUT_PATH = Path(__file__).parent / "o-league-training-table.json"
-COMBINED_OUT_PATH = Path(__file__).parent / "combined-training-table.json"
+# .parquet, not .json - see engine/faab_estimate.py's load_pools/
+# POOLED_TRAINING_TABLE_PATH. The pooled table's row count (5.6M+ as of
+# 2026-09 and growing as more leagues get pulled in) makes
+# json.loads(path.read_text()) OOM a GitHub-hosted CI runner outright;
+# polars can load and reduce a Parquet file columnar the whole way down.
+# The O-League-only table above stays JSON - it's tiny (one league) and
+# was never the problem.
+COMBINED_OUT_PATH = Path(__file__).parent / "combined-training-table.parquet"
 UNRESOLVED_PLAYERS_PATH = Path(__file__).parent / "unresolved_players.json"
 
 ROSTERED_BY_WEEK_PATH = Path(__file__).parent / "o-league-rostered-by-week.json"
@@ -478,7 +506,8 @@ def enrich_player_week(
 ) -> dict:
     """Every nflverse-derived field shared by both a real bid row and a
     synthetic no-bid row - factored out so the two code paths can't drift.
-    `scoring` is THIS ROW'S OWN SOURCE LEAGUE's rules - see module docstring.
+    `scoring` is the shared baseline_scoring (main()'s single ScoringRules
+    instance) - see module docstring.
     season_index is build_season_index's own output - see that function and
     SeasonIndex's own docstring for why every lookup here goes through a
     pre-built dict instead of a fresh polars .filter() per call."""
@@ -614,14 +643,34 @@ def build_no_bid_rows(
     Generalized to any league with a weekly-roster snapshot file, not just
     The O League - see module docstring's WHY POOLING NOW EXTENDS TO THE
     INTEREST STAGE. Caller is responsible for only calling this when
-    rostered_by_week data actually exists for league_id (main() checks)."""
+    rostered_by_week data actually exists for league_id (main() checks).
+
+    TIER 1 LEAGUE-SEASON VALIDITY GATE: a season with a roster pull but ZERO
+    real transactions anywhere in `bids` never generates no_bid rows at all
+    (see seasons_with_activity below) - see the conversation this was built
+    from (2026-09-21). Without this, a league that folded mid-season, or
+    whose commissioner just never processed FAAB that year, would still
+    contribute a full season of synthetic "nobody bid on this" rows to the
+    interest stage - every single one backed by real roster data but ZERO
+    real "someone bid" evidence to weigh against them, which teaches the
+    model "this exact usage profile never gets bid on" from what's actually
+    an inactive market, not a real demonstrated lack of interest. Deliberately
+    permissive for now (ANY real transaction that season - won, outbid,
+    other_failure, or even an uncontested FREEAGENT pickup - counts as
+    "active"), not a bid-rate or participation threshold - see the
+    conversation this was built from: easy to tighten later once a real
+    stricter bar is worth the complexity, hard to walk back if an overly
+    strict one silently drops real seasons nobody actually reviewed missing."""
     existing_keys = {(r["season"], r["week"], r["add_player_id"]) for r in bids}
+    seasons_with_activity = {r["season"] for r in bids}
 
     out = []
     for season_str, weeks in rostered_by_week.items():
         season = int(season_str)
         if season not in season_index_by_season:
             continue
+        if season not in seasons_with_activity:
+            continue  # Tier 1 gate - see this function's own docstring
         season_index = season_index_by_season[season]
 
         for week_str, rostered_ids in weeks.items():
@@ -1006,6 +1055,13 @@ def main():
     bidder_counts = compute_bidder_counts(all_bids)
     team_season_spend, league_season_spend = compute_spend_denominators(all_bids)
 
+    # ONE scoring standard, shared by every row regardless of source league -
+    # see the module docstring's WHY EVERY ROW'S POINTS-BASED FEATURES USE ONE
+    # SHARED BASELINE SCORING. scoring_by_league above stays a per-league
+    # data-integrity check only; this is what actually computes every row's
+    # prior_week_actual_points/trailing_2_3_avg_points/season_avg_points.
+    baseline_scoring = ScoringRules.from_espn(load_baseline_scoring_items())
+
     # Load each season's nflverse data ONCE, not per-row - shared across
     # every league, since these describe real NFL players, not any one
     # fantasy league. Immediately indexed (see build_season_index/
@@ -1032,7 +1088,7 @@ def main():
     for lid, bids_group in [(lid, [r for r in all_bids if r["source_league_id"] == lid]) for lid in {r["source_league_id"] for r in all_bids}]:
         rows, unresolved = build_rows_for_source(
             bids=bids_group, provenance=provenance[lid], idmap=idmap, gsis_to_pfr=gsis_to_pfr,
-            scoring=scoring_by_league[lid], season_index_by_season=season_index_by_season,
+            scoring=baseline_scoring, season_index_by_season=season_index_by_season,
             bidder_counts=bidder_counts, team_season_spend=team_season_spend, league_season_spend=league_season_spend,
             rank_index=rank_index,
         )
@@ -1056,7 +1112,7 @@ def main():
         if lid not in provenance:
             continue  # shouldn't happen (pull_public_league_rosters.py only pulls vetted-compatible leagues), but don't crash the run over it
         if lid in excluded_leagues:
-            continue  # unmappable scoring - no scoring_by_league[lid] entry to enrich with, see above
+            continue  # failed the scoring_by_league data-integrity check above - see main()'s comment there
         league_bids = [r for r in other_bids if r["source_league_id"] == lid]
         no_bid_sources.append((lid, league_bids, rostered_by_week))
 
@@ -1064,7 +1120,7 @@ def main():
     for lid, league_bids, rostered_by_week in no_bid_sources:
         rows = build_no_bid_rows(
             league_id=lid, bids=league_bids, rostered_by_week=rostered_by_week,
-            idmap=idmap, gsis_to_pfr=gsis_to_pfr, scoring=scoring_by_league[lid],
+            idmap=idmap, gsis_to_pfr=gsis_to_pfr, scoring=baseline_scoring,
             season_index_by_season=season_index_by_season,
             rank_index=rank_index,
         )
@@ -1088,7 +1144,13 @@ def main():
     annotate_budget_remaining(all_out_rows, league_season_budgets)
 
     write_json(OUT_PATH, [r for r in all_out_rows if r["source_league_id"] == O_LEAGUE_ID], indent=2)
-    write_json(COMBINED_OUT_PATH, all_out_rows, indent=2)
+    # write_parquet, not write_json - see COMBINED_OUT_PATH's own comment.
+    # Written atomically the same way write_json is (temp file + rename),
+    # so a run that dies partway through never leaves a truncated file that
+    # a concurrent fetch_release_data.py could pick up mid-write.
+    combined_tmp = COMBINED_OUT_PATH.with_suffix(COMBINED_OUT_PATH.suffix + ".part")
+    pl.DataFrame(all_out_rows).write_parquet(combined_tmp)
+    combined_tmp.replace(COMBINED_OUT_PATH)
 
     print(f"\nwrote {sum(1 for r in all_out_rows if r['source_league_id'] == O_LEAGUE_ID)} rows to {OUT_PATH}")
     print(f"wrote {len(all_out_rows)} rows ({len({r['source_league_id'] for r in all_out_rows})} leagues) to {COMBINED_OUT_PATH}")

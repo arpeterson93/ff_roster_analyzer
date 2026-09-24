@@ -289,9 +289,12 @@ this to stay a deliberate action you run by hand, not a cron job.
    game and a 20-point Standard game for the same real box score train as
    the same situation; only the bid *dollars* stay denominated in each
    league's own budget), writing both `o-league-training-table.json` (O
-   League only - what `evaluate_model.py` backtests against) and
-   `combined-training-table.json` (pooled - what the live model at
-   `engine.faab_estimate.POOLED_TRAINING_TABLE_PATH` actually trains on). A
+   League only - what `evaluate_model.py` backtests against by default) and
+   `combined-training-table.parquet` (pooled - what the live model at
+   `engine.faab_estimate.POOLED_TRAINING_TABLE_PATH` actually trains on;
+   `.parquet`, not `.json` - the pooled table's row count made a plain
+   `json.loads` OOM a CI runner outright, see `engine/faab_estimate.py`'s
+   `load_pools`). A
    league-season with zero real transactions never contributes synthetic
    no-bid rows (see `build_no_bid_rows`'s own docstring) even if it has a
    roster pull. No command-line qualifiers.
@@ -302,17 +305,17 @@ this to stay a deliberate action you run by hand, not a cron job.
    this check). Qualifiers:
    - `--table <path>` (default `o-league-training-table.json`) - which
      training table to evaluate against; point at
-     `combined-training-table.json` to include the other pooled leagues.
+     `combined-training-table.parquet` to include the other pooled leagues.
    - `--holdout-league-id <id>` (default none) - restricts the *test*
      holdout to just this one league's events; every other league's events
      fold into training unconditionally regardless of the normal train/test
-     split. Use `--table combined-training-table.json --holdout-league-id
+     split. Use `--table combined-training-table.parquet --holdout-league-id
      355398` (The O League) to see whether pooling other public leagues'
      bids actually improves prediction of The O League's own held-out bids,
      rather than assuming it does.
    - `--out <path>` (default `eval_results.json`) - where results are
      written.
-8. `python -m tools.faab_history.publish_release_data combined-training-table.json`
+8. `python -m tools.faab_history.publish_release_data combined-training-table.parquet`
    (and any of the three raw files that changed) - uploads to the
    `faab-data` release and updates the pinned checksum in
    `fetch_release_data.py` in the same step. Commit that updated file. Takes
@@ -335,23 +338,25 @@ running one from a fresh terminal that never had the venv activated):
 .venv\Scripts\python.exe -m tools.faab_history.validate_league_seasons
 .venv\Scripts\python.exe -m tools.faab_history.build_training_table
 .venv\Scripts\python.exe -m tools.faab_history.evaluate_model
-.venv\Scripts\python.exe -m tools.faab_history.publish_release_data combined-training-table.json other-leagues-bids-raw.json other-leagues-bids.json other-leagues-rostered-by-week.json
+.venv\Scripts\python.exe -m tools.faab_history.publish_release_data combined-training-table.parquet other-leagues-bids-raw.json other-leagues-bids.json other-leagues-rostered-by-week.json
 
-**FAAB training data storage:** `combined-training-table.json` (2.7GB and
-growing as more leagues get pooled in - well over GitHub's 100MB per-file
-push limit) and the three raw pulled-data files it's built from aren't
-committed to git - they're assets on this repo's `faab-data` GitHub Release
-instead (a release's file attachments live outside git's own object store
-entirely, so they're exempt from both the 100MB limit and git's repo-size
-concerns; unlike Git LFS, a public repo's release-asset bandwidth isn't
-metered the way LFS's stingy free tier is, which matters given the daily
-cron re-downloads it). `publish_release_data.py` gzip-compresses each file
-before uploading it (~5-7% of raw size for JSON this repetitive - 2.7GB
-becomes ~130MB) since GitHub Releases separately caps a single asset at
-2GB, which the raw file alone already exceeds; `fetch_release_data.py`
-downloads the compressed asset and decompresses it locally, transparently
-to every other script that just expects the plain `.json` file to be
-there. `.github/workflows/build.yml` runs
+**FAAB training data storage:** `combined-training-table.parquet` (115MB
+and growing as more leagues get pooled in - well over GitHub's 100MB
+per-file push limit; this used to be JSON, 2.7GB raw and climbing, until it
+grew enough to OOM-kill a CI runner loading it - see `engine/
+faab_estimate.py`'s `load_pools`) and the three raw pulled-data files it's
+built from aren't committed to git - they're assets on this repo's
+`faab-data` GitHub Release instead (a release's file attachments live
+outside git's own object store entirely, so they're exempt from both the
+100MB limit and git's repo-size concerns; unlike Git LFS, a public repo's
+release-asset bandwidth isn't metered the way LFS's stingy free tier is,
+which matters given the daily cron re-downloads it). `publish_release_data.py`
+gzip-compresses each file before uploading it regardless of format (a
+uniform step, not load-bearing for the Parquet file specifically - its own
+columnar compression already keeps it well under GitHub's 2GB single-asset
+cap on its own); `fetch_release_data.py` downloads the compressed asset and
+decompresses it locally, transparently to every other script that just
+expects the plain file to be there. `.github/workflows/build.yml` runs
 `python -m tools.faab_history.fetch_release_data` before the pipeline to
 pull the one file it needs; `--all` also fetches the three raw inputs, only
 needed to rebuild the training table from scratch per the steps above.

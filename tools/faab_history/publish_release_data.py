@@ -7,20 +7,24 @@ every future fetch of this file starts failing instead of just being stale).
 
 Gzip-compresses the file before uploading (as `<filename>.gz`, not the raw
 filename) rather than uploading it as-is - GitHub Releases hard-caps a
-single asset at 2GB, and combined-training-table.json alone crossed that
-raw (2.7GB, confirmed live 2026-09-18 - a flat 422 rejection, not a slow
-failure) as the pooled multi-league dataset kept growing. This JSON is
-repetitive enough (thousands of rows sharing the same field names) that it
-compresses to roughly 5-7% of its raw size, so gzip alone buys enormous
-headroom rather than needing to split the file into parts - and shrinks
-every daily pipeline run's download too, since fetch_release_data.py
-decompresses on its end.
+single asset at 2GB, and combined-training-table.json (this file's format
+before it moved to Parquet - see build_training_table.py's COMBINED_OUT_PATH
+comment) alone crossed that raw (2.7GB, confirmed live 2026-09-18 - a flat
+422 rejection, not a slow failure) as the pooled multi-league dataset kept
+growing. Repetitive JSON like that (thousands of rows sharing the same field
+names) compresses to roughly 5-7% of its raw size via gzip alone - enormous
+headroom, no need to split into parts. combined-training-table.parquet's own
+columnar compression already keeps it small on its own (115MB raw for the
+same ~5.6M rows that were 2.7GB as JSON), but this script stays generic
+(gzip-wraps whatever file it's given) rather than special-casing one
+filename, and it still shrinks every daily pipeline run's download further,
+since fetch_release_data.py decompresses on its end regardless of format.
 
 Requires the `gh` CLI installed and authenticated locally - this is a
 publish step you run yourself when a file changes, never from CI.
 
 Usage:
-    python -m tools.faab_history.publish_release_data combined-training-table.json
+    python -m tools.faab_history.publish_release_data combined-training-table.parquet
     python -m tools.faab_history.publish_release_data other-leagues-bids.json other-leagues-rostered-by-week.json
 """
 from __future__ import annotations

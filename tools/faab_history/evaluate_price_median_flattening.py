@@ -36,7 +36,7 @@ module docstring's own P(bid) numbers), not the full holdout set.
 
 Run from the repo root:
     python -m tools.faab_history.evaluate_price_median_flattening
-    python -m tools.faab_history.evaluate_price_median_flattening --table tools/faab_history/combined-training-table.json
+    python -m tools.faab_history.evaluate_price_median_flattening --table tools/faab_history/combined-training-table.parquet
 """
 from __future__ import annotations
 
@@ -82,7 +82,15 @@ def main():
     )
     args = parser.parse_args()
 
-    all_rows = json.loads(args.table.read_text())
+    # .parquet (the pooled table) vs .json (the small O-League-only table) -
+    # see engine/faab_estimate.py's load_pools docstring for why a plain
+    # json.loads no longer works on the pooled one at all.
+    if args.table.suffix == ".parquet":
+        import polars as pl
+
+        all_rows = pl.read_parquet(args.table).to_dicts()
+    else:
+        all_rows = json.loads(args.table.read_text())
     trainable = add_synthetic_price_wins(load_trainable_rows(all_rows))
     train, test = stratified_split(trainable, SEED, TEST_FRACTION, args.holdout_league_id)
 

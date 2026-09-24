@@ -123,13 +123,18 @@ TRAINING_TABLE_PATH = Path(__file__).resolve().parent.parent / "tools" / "faab_h
 # The O-League-only table stays FaabModel's own default and evaluate_model.py's
 # default --table (deliberately NOT changed here) - that's the established
 # "plain run" baseline the pooling-comparison backtests (--table
-# combined-training-table.json --holdout-league-id 355398) are measured
+# combined-training-table.parquet --holdout-league-id 355398) are measured
 # against; silently flipping what "the default" means would quietly break
 # that comparison's meaning. engine/pipeline.py (the live site) passes this
 # path explicitly instead, now that pooling is confirmed to help (see the
 # conversation this was built from) and other leagues on the site have no
 # FAAB history of their own to train on regardless.
-POOLED_TRAINING_TABLE_PATH = Path(__file__).resolve().parent.parent / "tools" / "faab_history" / "combined-training-table.json"
+POOLED_TRAINING_TABLE_PATH = Path(__file__).resolve().parent.parent / "tools" / "faab_history" / "combined-training-table.parquet"
+# .parquet, not .json, unlike TRAINING_TABLE_PATH above - see load_pools and
+# FaabModel.__init__'s branch on this path's suffix. The pooled table's raw
+# row count (5.6M+ as of 2026-09 and growing) makes json.loads(path.read_
+# text()) OOM a GitHub-hosted CI runner outright; Parquet lets polars load
+# and reduce it columnar the whole way down instead.
 O_LEAGUE_ID = 355398  # duplicated from tools/faab_history/build_training_table.py's own constant - engine/ doesn't import from tools/, wrong dependency direction
 TRAINABLE_SIGNALS = {"won", "outbid", "no_bid", "other_failure"}  # "other_failure" (roster-limit/contingency logistics, e.g. a manager's OTHER simultaneous claim consumed the roster slot - see pull_o_league_bids.py's classify()) is real "someone placed a bid" evidence for the INTEREST stage even though, like outbid, it never carries price signal - see dedupe_events_for_interest and module docstring
 POSITIONS = ["QB", "RB", "WR", "TE", "K"]  # QB is the OLS reference category (no dummy)
@@ -545,6 +550,15 @@ def build_event_won_rows_index(trainable_rows: list[dict]) -> dict[tuple, list[d
     return dict(index)
 
 
+# Real bids confirmed to be data-entry errors, not real spend - duplicated
+# from tools/faab_history/build_training_table.py's own constant of the
+# same name (engine/ doesn't import from tools/, wrong dependency
+# direction, see O_LEAGUE_ID above). Module-level (not just a local inside
+# load_trainable_rows) so load_pools' vectorized filter can share the exact
+# same set rather than hardcoding its own copy.
+KNOWN_BAD_BID_TRANSACTION_IDS = {"d598e6ff-563e-4e03-b512-91216518fa59"}
+
+
 def load_trainable_rows(rows: list[dict]) -> list[dict]:
     """Takes an already-parsed row list rather than a path, so a caller that
     also needs the unfiltered all_rows (both current callers do) can parse
@@ -577,7 +591,6 @@ def load_trainable_rows(rows: list[dict]) -> list[dict]:
     2500% - a single row that would badly distort both the price
     regression fit and any k-NN search that happened to draw it as a
     neighbor."""
-    KNOWN_BAD_BID_TRANSACTION_IDS = {"d598e6ff-563e-4e03-b512-91216518fa59"}
     return [
         r for r in rows
         if r["signal"] in TRAINABLE_SIGNALS and r["position"] in POSITIONS and r["type"] != "FREEAGENT"
@@ -639,8 +652,14 @@ def consolidate_cross_league_events(rows: list[dict], *, is_price: bool) -> list
     injury_flag / snap_pct_prior_week all come from nflverse/injury data -
     literally identical across leagues for the same real player-week, so
     whichever row is picked as the base carries the right values already.
-    The three points-based features differ by each league's own scoring
-    rules and are averaged across every league involved.
+    The three points-based features are now ALSO identical across leagues for
+    the same real event (every pooled row computes them under one shared
+    baseline scoring standard, not its own source league's - see
+    tools/faab_history/build_training_table.py's module docstring), so this
+    averaging step is a no-op in practice; kept rather than special-cased so
+    a row built by an older table generation (still carrying its own source
+    league's scoring) degrades gracefully instead of silently picking one
+    arbitrary league's value.
 
     is_price=False (interest pool): the representative row's own signal is
     still a deliberately simple "did the broader market show interest at
@@ -790,6 +809,187 @@ def build_price_rows(trainable_rows: list[dict]) -> list[dict]:
     trainable_rows by the time this is called - this is just the filter,
     not the promotion)."""
     return [r for r in trainable_rows if r["signal"] == "won"]
+
+
+# ---------------------------------------------------------------------------
+# Bulk ingest: load_trainable_rows -> add_synthetic_price_wins ->
+# dedupe_events_for_interest/consolidate_cross_league_events, but staying
+# columnar (polars) end to end instead of ever materializing the full raw
+# pool as Python dicts - see the conversation this was built from. The
+# combined training table pools every FAAB-history-vetted public league's
+# entire real bid history (5.6M+ raw bidder-rows as of 2026-09, and growing
+# as more leagues get pulled in): json.loads(path.read_text()) on that -
+# what this replaced - reads the whole file into one giant Python string,
+# then parses it into millions of individual Python dict/float/str objects,
+# which for JSON this shape peaks at several times the raw file size -
+# comfortably enough to OOM-kill a GitHub-hosted CI runner outright (no
+# traceback either - a kernel OOM-kill is a SIGKILL, uncatchable).
+#
+# The fix isn't "make the whole pipeline columnar" - measured directly
+# (streaming scan, no full load): those 5.6M+ raw rows collapse to under
+# 45,000 distinct (season, week, add_player_id) events once
+# dedupe_events_for_interest (one auction's N bidder-rows -> 1) and
+# consolidate_cross_league_events (the same real event pooled across
+# leagues -> 1) run. Those two functions' OUTPUT - interest_rows/price_rows,
+# the only things FaabModel actually keeps and repeatedly queries - are
+# tens of thousands of rows, not millions, and every downstream consumer
+# (_knn, the comp-dict builders, regression fitting, ...) already operates
+# on THAT small pool and was never the problem.
+#
+# So this reuses load_trainable_rows/add_synthetic_price_wins/
+# dedupe_events_for_interest/consolidate_cross_league_events/
+# build_event_won_rows_index COMPLETELY UNCHANGED (same tested business
+# logic, see tests/test_faab_estimate.py) - it just runs each of them on
+# small, pre-grouped SLICES of the pool at a time (via polars'
+# group_by(...).map_groups(...), which partitions a DataFrame and hands
+# each group to a Python callback one at a time, only ever materializing
+# ONE group's rows as Python dicts) instead of the whole multi-million-row
+# pool at once. The pool itself stays a pl.DataFrame (compact, columnar)
+# the entire time; .to_dicts() only ever gets called on a single small
+# group, or on an already-fully-reduced final pool.
+_DEDUPE_KEYS = ["source_league_id", "season", "week", "add_player_id"]
+_CONSOLIDATE_KEYS = ["season", "week", "add_player_id"]
+_ORIG_IDX = "_orig_idx"
+_IS_SYNTHETIC = "_is_synthetic"
+
+
+def _promote_synthetic_wins(df: "pl.DataFrame") -> "pl.DataFrame":
+    """Vectorized (whole-frame, no Python callback) twin of
+    add_synthetic_price_wins - see that function's own docstring for the
+    real logic this reproduces. A first version of this ran the existing
+    dict-based add_synthetic_price_wins per-(league, event) group via
+    polars' group_by().map_groups() - correct (verified against
+    tests/test_faab_ingest_parity.py), but at the pooled table's real scale
+    (5.6M+ rows, hundreds of thousands of (league, event) groups once
+    source_league_id is part of the key) the Python-callback-per-group
+    overhead alone made this pass take 15+ minutes, not the couple of
+    minutes the equivalent JSON->Parquet conversion takes for the whole
+    file. This does the identical selection (per group: if no won/outbid
+    row exists, promote the highest-bid other_failure row to a synthetic
+    won one) as native polars expressions instead, which run at Rust speed
+    across the whole frame at once rather than once per group.
+
+    rank(method="ordinal", descending=True) breaks a bid_amount_dollars tie
+    by row order (first row in the frame wins) - matches Python's own
+    max(..., key=...)'s "first tied element wins" behavior exactly, so
+    stage1's caller can keep sorting by [_IS_SYNTHETIC, _ORIG_IDX] the same
+    way whether a given row came from here or a small hand-built fixture."""
+    other_failure = df.filter(pl.col("signal") == "other_failure")
+    if other_failure.height == 0:
+        return df.with_columns(pl.lit(False).alias(_IS_SYNTHETIC))
+    best_other_failure = (
+        other_failure.with_columns(
+            pl.col("bid_amount_dollars").rank(method="ordinal", descending=True).over(_DEDUPE_KEYS).alias("_rank")
+        )
+        .filter(pl.col("_rank") == 1)
+        .drop("_rank")
+    )
+    groups_with_real_win = df.filter(pl.col("signal").is_in(["won", "outbid"])).select(_DEDUPE_KEYS).unique()
+    synthetic = best_other_failure.join(groups_with_real_win, on=_DEDUPE_KEYS, how="anti").with_columns(
+        pl.lit("won").alias("signal"),
+        pl.col("bid_amount_dollars").cast(pl.Float64).alias("effective_cost_dollars"),
+        pl.lit(True).alias(_IS_SYNTHETIC),
+    )
+    return pl.concat([df.with_columns(pl.lit(False).alias(_IS_SYNTHETIC)), synthetic], how="vertical")
+
+
+def _dedupe_for_interest_vectorized(df: "pl.DataFrame") -> "pl.DataFrame":
+    """Vectorized twin of dedupe_events_for_interest, same reasoning as
+    _promote_synthetic_wins above (this stage still sees every non-week-1
+    row in the pool, so it's just as group-count-heavy). signal_priority
+    lower = more interesting ("won" beats "no_bid"); rank(method="ordinal")
+    breaks ties by row order, same first-tied-row-wins semantics as the old
+    dict-based version's min(group, key=priority)."""
+    priority = pl.col("signal").replace_strict({"won": 0, "outbid": 1, "other_failure": 2, "no_bid": 3}, default=99)
+    ranked = df.with_columns(priority.rank(method="ordinal").over(_DEDUPE_KEYS).alias("_rank"))
+    return ranked.filter(pl.col("_rank") == 1).drop("_rank")
+
+
+def _consolidate_groups(df: "pl.DataFrame", *, is_price: bool) -> list[dict]:
+    """Same idea as _stage1_group/_interest_group (existing, unchanged
+    consolidate_cross_league_events run on one small group at a time, never
+    the whole pool), but via plain group_by ITERATION rather than
+    map_groups - consolidate_cross_league_events deliberately returns
+    differently-SHAPED dicts depending on group size (a single-league event
+    skips consolidated_from_leagues/o_league_detail/leagues_with_bid/
+    consolidated_target_pct entirely, a multi-league one adds them - see its
+    own docstring), which map_groups can't reassemble (it needs every
+    group's returned DataFrame to share one schema). Padding the missing
+    keys with None to force a uniform schema was considered and rejected -
+    target_pct() checks `"consolidated_target_pct" in r`, not `r.get(...)`,
+    specifically to distinguish a real consolidated value from none at all,
+    so a padded None would silently change its behavior. Iterating and
+    collecting into a plain Python list sidesteps the whole problem - the
+    final pool is only ~tens of thousands of rows regardless (see load_pools'
+    docstring), so holding it as a plain list[dict] here is exactly as cheap
+    as it already was for every other consumer of interest_rows/price_rows."""
+    out: list[dict] = []
+    for _, group_df in df.group_by(_CONSOLIDATE_KEYS, maintain_order=True):
+        group_rows = [{k: v for k, v in r.items() if k not in (_ORIG_IDX, _IS_SYNTHETIC)} for r in group_df.to_dicts()]
+        out.extend(consolidate_cross_league_events(group_rows, is_price=is_price))
+    return out
+
+
+def load_pools(table_path: Path) -> tuple[list[dict], list[dict], dict[tuple, list[dict]]]:
+    """(interest_rows, price_rows, event_won_rows_index) - the polars-backed
+    replacement for FaabModel.__init__'s old
+    `all_rows = json.loads(table_path.read_text())` chain. table_path is a
+    Parquet file (see tools/faab_history/build_training_table.py).
+
+    The filter, synthetic-win promotion, and interest dedupe steps run as
+    native polars expressions across the WHOLE pool at once (see
+    _promote_synthetic_wins/_dedupe_for_interest_vectorized) rather than
+    the existing dict-based load_trainable_rows/add_synthetic_price_wins/
+    dedupe_events_for_interest run per group - those stay correct at any
+    scale (see tests/test_faab_ingest_parity.py) but a Python callback per
+    group is too slow once there are hundreds of thousands of groups (this
+    table's real (league, event) count). Only consolidate_cross_league_
+    events (the final step, on the already-shrunk-to-~44K/~26K-row pool -
+    see below) still runs the actual unchanged function, since a Python
+    callback per group is fine at that scale and its logic (differently-
+    shaped output dicts depending on group size) doesn't vectorize cleanly.
+
+    Regrouping by a DIFFERENT key at each stage (first per-(league, event)
+    for dedupe/synthetic-win promotion, then per-event across leagues for
+    consolidation) naturally scrambles row order relative to the original
+    file - two rows adjacent in the raw table can end up in different
+    groups processed in different orders. That matters here specifically
+    because consolidate_cross_league_events' representative-row pick breaks
+    ties (e.g. a price-pool group where every row is already signal=="won",
+    so every row ties on signal_priority) by taking the FIRST tied row in
+    whatever order it's given - not a meaningful preference, but one the
+    original dict-based pipeline made deterministic simply by preserving
+    the source file's row order throughout. _ORIG_IDX + a re-sort after
+    every regroup reproduces that same determinism here, so a tie resolves
+    identically to how the old json.loads-based FaabModel.__init__ would
+    have resolved it - not just "close enough" (every NUMBER that actually
+    feeds the model - consolidated_target_pct, leagues_with_bid/eligible -
+    is already order-independent and matched before this fix; this closes
+    the gap on which specific tied row's other, cosmetic fields, like which
+    league's exact bid_amount_dollars, get shown as the representative's)."""
+    raw = pl.read_parquet(table_path).with_row_index(_ORIG_IDX)
+    filtered = raw.filter(
+        pl.col("signal").is_in(list(TRAINABLE_SIGNALS))
+        & pl.col("position").is_in(POSITIONS)
+        & (pl.col("type") != "FREEAGENT")
+        & ~pl.col("transaction_id").is_in(list(KNOWN_BAD_BID_TRANSACTION_IDS))
+    )
+    trainable_df = _promote_synthetic_wins(filtered).sort([_IS_SYNTHETIC, _ORIG_IDX])
+
+    event_won_rows_index = build_event_won_rows_index(
+        [
+            {k: v for k, v in r.items() if k not in (_ORIG_IDX, _IS_SYNTHETIC)}
+            for r in trainable_df.filter(pl.col("signal") == "won").to_dicts()
+        ]
+    )
+
+    interest_deduped = _dedupe_for_interest_vectorized(trainable_df.filter(pl.col("week") != 1)).sort(
+        [_IS_SYNTHETIC, _ORIG_IDX]
+    )
+    interest_rows = _consolidate_groups(interest_deduped, is_price=False)
+    price_rows = _consolidate_groups(trainable_df.filter(pl.col("signal") == "won"), is_price=True)
+
+    return interest_rows, price_rows, event_won_rows_index
 
 
 def feature_vector(r: dict) -> dict[str, float]:
@@ -998,7 +1198,7 @@ def _position_distance_cutoffs(
     backing count inflating its credibility - see _credibility - despite
     sitting meaningfully farther away than the other 9 comps). Backtested
     by rebuilding this exact calculation against tools/faab_history/
-    combined-training-table.json specifically - the pooled table this
+    combined-training-table.parquet specifically - the pooled table this
     actually runs against in production (see POOLED_TRAINING_TABLE_PATH) -
     since the single-league table can't even reproduce the effect: every
     one of its rows shares leagues_eligible == 1, so credibility never
@@ -1741,42 +1941,50 @@ class FaabModel:
     """Fit once per pipeline run, reused for every candidate player."""
 
     def __init__(self, training_table_path: Path = TRAINING_TABLE_PATH):
-        all_rows = json.loads(training_table_path.read_text())
-        # add_synthetic_price_wins runs BEFORE any other trainable_rows
-        # consumer sees this data - every league's own synthetic won-
-        # equivalent (the highest other_failure bid for an event with no
-        # real won/outbid row in that league - see that function's
-        # docstring on why this is still a real price signal, just one
-        # that didn't execute) is baked in here once, so interest_rows,
-        # price_rows, and event_won_rows_index below all see it
-        # consistently instead of needing their own separate plumbing.
-        trainable = add_synthetic_price_wins(load_trainable_rows(all_rows))
-        # Every league's own WON (real or synthetic) row per real event -
-        # see build_event_won_rows_index/price_confidence_samples. A league
-        # whose own claim never executed (contingency, roster limit, etc.)
-        # but WAS the highest real attempt still has a real bid price worth
-        # keeping in this event's expansion, not silently dropped just
-        # because some OTHER pooled league happened to have a genuine win
-        # for the same real-world event.
-        self.event_won_rows_index = build_event_won_rows_index(trainable)
-        # consolidate_cross_league_events collapses the SAME real event
-        # (season, week, add_player_id) won/seen across MULTIPLE pooled
-        # leagues into one row - without it, a popular real-world trigger
-        # visible in N leagues would occupy up to N k-NN neighbor slots and
-        # contribute N correlated rows to the regression fits, purely
-        # because it happened to be pooled from N leagues - see that
-        # function's docstring. A no-op for a single-league table (every
-        # event already has group size 1).
-        # week == 1 is excluded from interest TRAINING only (not price) -
-        # the pooled dataset has zero real no_bid rows for week 1 across
-        # every league (roster/free-agent snapshots start at week 2), so
-        # every week-1 row that reaches this pool is a real bid - training
-        # on that would teach the interest stage a false "week 1 always
-        # draws a bid" signal instead of reflecting real appetite. See
-        # week_bucket_dummies for why week 1 still needs a sane bucket
-        # default at PREDICT time despite never being trained on directly.
-        self.interest_rows = consolidate_cross_league_events(dedupe_events_for_interest([r for r in trainable if r["week"] != 1]), is_price=False)
-        self.price_rows = consolidate_cross_league_events(build_price_rows(trainable), is_price=True)
+        # .parquet (the pooled multi-league table - see load_pools' own
+        # docstring for why this one specifically can't go through a plain
+        # json.loads anymore) vs .json (the small O-League-only table,
+        # still fine to load the old way - see TRAINING_TABLE_PATH's own
+        # comment on why it deliberately stays this function's default).
+        if training_table_path.suffix == ".parquet":
+            self.interest_rows, self.price_rows, self.event_won_rows_index = load_pools(training_table_path)
+        else:
+            all_rows = json.loads(training_table_path.read_text())
+            # add_synthetic_price_wins runs BEFORE any other trainable_rows
+            # consumer sees this data - every league's own synthetic won-
+            # equivalent (the highest other_failure bid for an event with no
+            # real won/outbid row in that league - see that function's
+            # docstring on why this is still a real price signal, just one
+            # that didn't execute) is baked in here once, so interest_rows,
+            # price_rows, and event_won_rows_index below all see it
+            # consistently instead of needing their own separate plumbing.
+            trainable = add_synthetic_price_wins(load_trainable_rows(all_rows))
+            # Every league's own WON (real or synthetic) row per real event -
+            # see build_event_won_rows_index/price_confidence_samples. A league
+            # whose own claim never executed (contingency, roster limit, etc.)
+            # but WAS the highest real attempt still has a real bid price worth
+            # keeping in this event's expansion, not silently dropped just
+            # because some OTHER pooled league happened to have a genuine win
+            # for the same real-world event.
+            self.event_won_rows_index = build_event_won_rows_index(trainable)
+            # consolidate_cross_league_events collapses the SAME real event
+            # (season, week, add_player_id) won/seen across MULTIPLE pooled
+            # leagues into one row - without it, a popular real-world trigger
+            # visible in N leagues would occupy up to N k-NN neighbor slots and
+            # contribute N correlated rows to the regression fits, purely
+            # because it happened to be pooled from N leagues - see that
+            # function's docstring. A no-op for a single-league table (every
+            # event already has group size 1).
+            # week == 1 is excluded from interest TRAINING only (not price) -
+            # the pooled dataset has zero real no_bid rows for week 1 across
+            # every league (roster/free-agent snapshots start at week 2), so
+            # every week-1 row that reaches this pool is a real bid - training
+            # on that would teach the interest stage a false "week 1 always
+            # draws a bid" signal instead of reflecting real appetite. See
+            # week_bucket_dummies for why week 1 still needs a sane bucket
+            # default at PREDICT time despite never being trained on directly.
+            self.interest_rows = consolidate_cross_league_events(dedupe_events_for_interest([r for r in trainable if r["week"] != 1]), is_price=False)
+            self.price_rows = consolidate_cross_league_events(build_price_rows(trainable), is_price=True)
         self.price_coefs = fit_price_regression(self.price_rows)
         self.interest_coefs, self.interest_stats = fit_interest_regression(self.interest_rows)
 

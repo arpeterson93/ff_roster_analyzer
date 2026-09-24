@@ -25,7 +25,7 @@ functions in a loop - this evaluates ~3,600 holdout rows against pools up to
 ~14,000 rows; the naive per-query Python loop was too slow to iterate on.
 
 --table/--holdout-league-id let this run against
-tools/faab_history/combined-training-table.json (The O League plus every
+tools/faab_history/combined-training-table.parquet (The O League plus every
 other vetted public league) instead of The O League alone - see
 build_training_table.py's module docstring for why pooling is expected to
 help the PRICE stage for every league regardless (more real comps at
@@ -36,7 +36,7 @@ i.e. those pull_public_league_rosters.py has been run for (see
 interest_eligible_leagues below) - since a league with only real bid rows
 and no roster pull would just teach the model "someone always bids".
 Compare a plain run (o-league-training-table.json) against a pooled run
-(--table combined-training-table.json --holdout-league-id 355398, so the
+(--table combined-training-table.parquet --holdout-league-id 355398, so the
 test holdout is still only The O League's own bids) to see whether pooling
 actually lowers held-out error, rather than assuming it does.
 """
@@ -111,7 +111,7 @@ def stratified_split(
     league's events only - every other league's events go straight into
     train regardless of test_fraction. This is what makes a leave-one-
     league-out-style evaluation possible on a pooled multi-league table
-    (tools/faab_history/combined-training-table.json): "if I train on
+    (tools/faab_history/combined-training-table.parquet): "if I train on
     everyone (other public leagues, fully, plus 80% of The O League's own
     events), how well does that predict the 20% of The O League's OWN bids
     I held out?" - never testing against another league's own idiosyncratic
@@ -211,17 +211,30 @@ def fit_interest_logistic_np(interest_rows: list[dict], max_iter: int = 25, l2: 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--table", type=Path, default=TRAINING_TABLE_PATH, help="which training table to evaluate against - point at combined-training-table.json to include the other public leagues")
+    parser.add_argument("--table", type=Path, default=TRAINING_TABLE_PATH, help="which training table to evaluate against - point at combined-training-table.parquet to include the other public leagues")
     parser.add_argument(
         "--holdout-league-id", type=int, default=None,
         help="only this league's events go into the test holdout; every other league's events are folded into training unconditionally. "
-        "Use with --table combined-training-table.json --holdout-league-id 355398 to test whether pooling other public leagues' bids "
+        "Use with --table combined-training-table.parquet --holdout-league-id 355398 to test whether pooling other public leagues' bids "
         "improves prediction of The O League's own held-out bids, vs a plain run against o-league-training-table.json alone.",
     )
     parser.add_argument("--out", type=Path, default=OUT_PATH)
     args = parser.parse_args()
 
-    all_rows = json.loads(args.table.read_text())
+    # .parquet (the pooled table - see engine/faab_estimate.py's load_pools
+    # docstring for why a plain json.loads no longer works on it at all) vs
+    # .json (the small O-League-only table, still fine to load directly).
+    # Unlike FaabModel.__init__, this doesn't need the full columnar
+    # treatment below that point - this script is a local, offline research
+    # tool a person runs on their own machine (not CI), and everything
+    # after this line already needs the full pool materialized as dicts
+    # anyway (stratified_split, interest_eligible_leagues, ...).
+    if args.table.suffix == ".parquet":
+        import polars as pl
+
+        all_rows = pl.read_parquet(args.table).to_dicts()
+    else:
+        all_rows = json.loads(args.table.read_text())
     # add_synthetic_price_wins here, before the split, mirrors engine.
     # faab_estimate.FaabModel.__init__ (a per-(league,event) transform, not
     # something that learns from the full dataset).
