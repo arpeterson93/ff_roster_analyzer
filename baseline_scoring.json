@@ -1,0 +1,21 @@
+[
+  {"abbr": "2PC", "points": 1.0},
+  {"abbr": "2PR", "points": 2.0},
+  {"abbr": "2PRE", "points": 2.0},
+  {"abbr": "FG0", "points": 3.0},
+  {"abbr": "FG40", "points": 3.0},
+  {"abbr": "FG50", "points": 4.0},
+  {"abbr": "FG60", "points": 5.0},
+  {"abbr": "FTD", "points": 6.0},
+  {"abbr": "FUML", "points": -1.0},
+  {"abbr": "INTT", "points": -1.0},
+  {"abbr": "KRTD", "points": 6.0},
+  {"abbr": "PAT", "points": 1.0},
+  {"abbr": "PRTD", "points": 6.0},
+  {"abbr": "PTD", "points": 4.0},
+  {"abbr": "PY", "points": 0.05},
+  {"abbr": "RETD", "points": 6.0},
+  {"abbr": "REY", "points": 0.1},
+  {"abbr": "RTD", "points": 6.0},
+  {"abbr": "RY", "points": 0.1}
+]
