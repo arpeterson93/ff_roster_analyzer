@@ -111,3 +111,13 @@ init().catch((err) => {
   console.error(err);
   document.body.innerHTML = `<p style="padding:20px; color:#c0392b">Failed to load league data: ${escapeHtml(err.message)}</p>`;
 });
+
+// PWA installability + an offline-capable app shell (see sw.js's own
+// docstring for why league data itself is deliberately NOT cache-first
+// there). Registered after load, not blocking init() - a slow/failed SW
+// registration should never delay the actual app from rendering.
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch((err) => console.error("Service worker registration failed:", err));
+  });
+}

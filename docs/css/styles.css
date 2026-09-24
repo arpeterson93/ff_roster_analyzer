@@ -64,6 +64,10 @@ body {
   z-index: 100;
 }
 
+.app-brand { display: flex; align-items: center; gap: 8px; }
+.app-logo { width: 24px; height: 24px; border-radius: 6px; }
+.app-name { font-weight: 700; font-size: 15px; color: var(--ink-900); white-space: nowrap; }
+
 header.app-header {
   display: flex;
   flex-wrap: wrap;
@@ -850,16 +854,20 @@ details[open] summary { margin-bottom: 8px; }
 
 @media (max-width: 700px) {
   .tabpanel { padding: 10px; }
-  /* The league select is the only item left in normal flow on mobile (it
-     wraps to give the OPTIONS room, e.g. a long league name) - Week X /
-     Updated tucks into the header's own top-right corner via absolute
-     positioning instead of stacking below it, so it doesn't eat vertical
-     space that's precious in the sticky header (--sticky-top eats into the
-     visible page on a short mobile screen). padding-right on the header
-     keeps a long select value from ever running under that corner text. */
-  header.app-header { flex-direction: column; align-items: flex-start; position: relative; padding-right: 110px; }
-  header.app-header select#league-select { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-  .header-meta { position: absolute; top: 12px; right: 16px; margin-left: 0; text-align: right; }
+  /* Two compact rows instead of stacking everything (or overlaying Week X/
+     Updated in a corner) - row 1 is brand (left) / league select (right),
+     row 2 is Week X (left) / Updated ... (right). justify-content applies
+     PER LINE on a wrapped flex container, so this falls out of flex-wrap
+     alone: .header-meta's own flex:1 0 100% forces it, alone, onto its own
+     second line (it can't fit next to brand+select on line 1), leaving
+     brand+select as line 1's only two items. */
+  header.app-header { flex-direction: row; flex-wrap: wrap; justify-content: space-between; position: static; padding-right: 16px; }
+  header.app-header select#league-select { max-width: 55%; overflow: hidden; text-overflow: ellipsis; }
+  .header-meta {
+    position: static; flex: 1 0 100%; display: flex; justify-content: space-between;
+    margin-left: 0; text-align: left;
+  }
+  #header-generated { text-align: right; }
   th, td { padding: 5px 6px; font-size: 12px; }
   select, input, button { font-size: 16px; } /* prevents iOS auto-zoom on focus */
   nav.tabs button { padding: 8px 10px; font-size: 12px; }
