@@ -95,7 +95,7 @@ function depthTable(depth, playersById) {
       depth[pos]
         .map(
           (d, i) =>
-            `<tr data-player-id="${d.id}" class="clickable-row"><td>${pos}${i + 1}</td><td>${escapeHtml((playersById.get(d.id) || {}).name || d.id)}</td><td>${fmt(d.value_delta, 1)}</td><td>${trendSparkline(d.weekly)}</td></tr>`
+            `<tr data-player-id="${d.id}" class="clickable-row"><td>${pos}${i + 1}</td><td>${escapeHtml((playersById.get(d.id) || {}).name || d.id)}</td><td>${fmt(d.starting_value, 1)}</td><td>${fmt(d.depth_value, 1)}</td><td>${fmt(d.value_delta, 1)}</td><td>${trendSparkline(d.weekly)}</td></tr>`
         )
         .join("")
     )
@@ -117,14 +117,29 @@ function pickupsTable(pickups, playersById) {
 // Calculator with both teams and both sides' players already checked, via
 // state.js's setPendingTrade (a one-shot in-memory hint tradeui.js's
 // renderTrade reads on its next render).
+// Desktop keeps Give/Get/Your gain/Their gain as their own columns
+// (".desktop-col", same class Start/Sit already uses for this exact
+// collapse). Mobile folds Give+Get into one "Players" column (stacked, right
+// next to Partner) and Your gain/Their gain into one "Gain" column
+// (".mobile-col", hidden on desktop) - five columns is too tight for a phone
+// width, and give/get read fine stacked since they're never more than a
+// couple of names each.
 function tradeTargetsTable(targets, playersById, teamsById) {
   if (!targets.length) return `<p class="muted small">No favorable trade targets found.</p>`;
-  return `<table><thead><tr><th>Partner</th><th>Give</th><th>Get</th><th>Your gain</th><th>Their gain</th></tr></thead><tbody>${targets
+  return `<table><thead><tr><th>Partner</th><th class="desktop-col">Give</th><th class="desktop-col">Get</th><th class="mobile-col">Players</th><th class="desktop-col">Your gain</th><th class="desktop-col">Their gain</th><th class="mobile-col">Gain</th></tr></thead><tbody>${targets
     .map((t) => {
       const partner = teamsById.get(t.partner_team_id);
       const give = t.give.map((id) => (playersById.get(id) || {}).name || id).join(", ");
       const get = t.get.map((id) => (playersById.get(id) || {}).name || id).join(", ");
-      return `<tr class="clickable-row" data-trade-target data-partner-team-id="${t.partner_team_id}" data-give="${t.give.join(",")}" data-get="${t.get.join(",")}"><td>${escapeHtml(partner ? teamLabel(partner) : t.partner_team_id)}</td><td>${escapeHtml(give)}</td><td>${escapeHtml(get)}</td><td>+${fmt(t.gain_self, 1)}</td><td>+${fmt(t.gain_partner, 1)}</td></tr>`;
+      return `<tr class="clickable-row" data-trade-target data-partner-team-id="${t.partner_team_id}" data-give="${t.give.join(",")}" data-get="${t.get.join(",")}">
+        <td>${escapeHtml(partner ? teamLabel(partner) : t.partner_team_id)}</td>
+        <td class="desktop-col">${escapeHtml(give)}</td>
+        <td class="desktop-col">${escapeHtml(get)}</td>
+        <td class="mobile-col small"><div>Give: ${escapeHtml(give)}</div><div>Get: ${escapeHtml(get)}</div></td>
+        <td class="desktop-col">+${fmt(t.gain_self, 1)}</td>
+        <td class="desktop-col">+${fmt(t.gain_partner, 1)}</td>
+        <td class="mobile-col small"><div>You: +${fmt(t.gain_self, 1)}</div><div>Them: +${fmt(t.gain_partner, 1)}</div></td>
+      </tr>`;
     })
     .join("")}</tbody></table>`;
 }
@@ -154,7 +169,7 @@ function leagueWideTable(data, yourTeamId) {
   const totals = data.teams.map(totalFor);
   const totalRange = { min: Math.min(...totals), max: Math.max(...totals) };
 
-  const header = `<tr><th>Team</th>${slots.map((s) => `<th>${s}</th>`).join("")}<th>Total</th></tr>`;
+  const header = `<tr><th class="sticky-col-first">Team</th>${slots.map((s) => `<th>${s}</th>`).join("")}<th>Total</th></tr>`;
   const rows = data.teams
     .slice()
     .sort((a, b) => totalFor(b) - totalFor(a))
@@ -172,10 +187,10 @@ function leagueWideTable(data, yourTeamId) {
       const totalRatio = totalRange.max > totalRange.min ? (total - totalRange.min) / (totalRange.max - totalRange.min) : 0.5;
       const totalCell = `<td class="heat-cell" style="background:${colorForRatio(totalRatio)}"><strong>${fmt(total, 1)}</strong></td>`;
       const isYours = t.team_id === yourTeamId;
-      return `<tr class="${isYours ? "your-team-row" : ""}"><td>${isYours ? "<strong>" : ""}${escapeHtml(teamLabel(t))}${isYours ? "</strong>" : ""}</td>${cells}${totalCell}</tr>`;
+      return `<tr class="${isYours ? "your-team-row" : ""}"><td class="sticky-col-first">${isYours ? "<strong>" : ""}${escapeHtml(teamLabel(t))}${isYours ? "</strong>" : ""}</td>${cells}${totalCell}</tr>`;
     })
     .join("");
-  return `<table>${header}${rows}</table>`;
+  return `<table class="sticky-col-table">${header}${rows}</table>`;
 }
 
 // Team x Position heatmap of the NEW replacement-value calc (see
@@ -228,7 +243,7 @@ function positionValueLeagueTable(data, yourTeamId) {
   const totals = [...matrices.values()].map(totalFor);
   const totalRange = { min: Math.min(...totals), max: Math.max(...totals) };
 
-  const header = `<tr><th>Team</th>${positions.map((p) => `<th>${p}</th>`).join("")}<th>Total</th></tr>`;
+  const header = `<tr><th class="sticky-col-first">Team</th>${positions.map((p) => `<th>${p}</th>`).join("")}<th>Total</th></tr>`;
   const rows = data.teams
     .slice()
     .sort((a, b) => totalFor(matrices.get(b.team_id)) - totalFor(matrices.get(a.team_id)))
@@ -250,10 +265,10 @@ function positionValueLeagueTable(data, yourTeamId) {
       const totalRatio = totalRange.max > totalRange.min ? (total - totalRange.min) / (totalRange.max - totalRange.min) : 0.5;
       const totalCell = `<td class="heat-cell" style="background:${colorForRatio(totalRatio)}"><strong>${total >= 0 ? "+" : ""}${fmt(total, 1)}</strong></td>`;
       const isYours = t.team_id === yourTeamId;
-      return `<tr class="${isYours ? "your-team-row" : ""}"><td>${isYours ? "<strong>" : ""}${escapeHtml(teamLabel(t))}${isYours ? "</strong>" : ""}</td>${cells}${totalCell}</tr>`;
+      return `<tr class="${isYours ? "your-team-row" : ""}"><td class="sticky-col-first">${isYours ? "<strong>" : ""}${escapeHtml(teamLabel(t))}${isYours ? "</strong>" : ""}</td>${cells}${totalCell}</tr>`;
     })
     .join("");
-  return `<table>${header}${rows}</table>`;
+  return `<table class="sticky-col-table">${header}${rows}</table>`;
 }
 
 function wirePlayerClicks(container, data) {
@@ -292,8 +307,8 @@ export function renderStrength(container, data, slug) {
       <div class="select-row"><label>Your team:</label> ${teamSelect(data, slug, team.team_id)}</div>
       <h2>Starting Lineup vs. League Avg</h2>
       ${positionBars(team.slot_strength, computeTotalStrength(data, team))}
-      <h3>Depth (points above replacement)</h3>
-      <div class="table-wrap"><table><thead><tr><th>Slot</th><th>Player</th><th title="Points above the best available free agent for his slot/position - Starting weeks vs. Depth weeks blended (Depth discounted 50%). See his player card's own NMD week-by-week tab for the full split.">Value</th><th title="Starting value only, week by week - 0 in a week he sat, not a modeling gap.">Weekly trend</th></tr></thead><tbody>${depthTable(team.depth, data.playersById)}</tbody></table></div>
+      <h3>Value (Points Above Replacement)</h3>
+      <div class="table-wrap"><table><thead><tr><th>Slot</th><th>Player</th><th title="Points above the best available free agent for his slot, in weeks he started.">Starting</th><th title="Points above the best available free agent at his position, in weeks he sat (discounted 50% into Total).">Depth</th><th title="Starting + Depth (Depth discounted 50%). See his player card's own Value week-by-week tab for the full split.">Total</th><th title="Starting value only, week by week - 0 in a week he sat, not a modeling gap.">Weekly trend</th></tr></thead><tbody>${depthTable(team.depth, data.playersById)}</tbody></table></div>
       <h3>Suggested pickups</h3>
       <div class="table-wrap">${pickupsTable(team.pickups, data.playersById)}</div>
       <h3>Trade targets</h3>
@@ -304,8 +319,8 @@ export function renderStrength(container, data, slug) {
       <div class="table-wrap">${leagueWideTable(data, Number(team.team_id))}</div>
     </div>
     <div class="card card-medium">
-      <h2>Team Value (starting + depth, by position)</h2>
-      <p class="muted small">Points above replacement (best currently-available free agent) - same calc as the Trade Calculator's own "Team value" panel, computed here for every team at once. Green = excess value at that position, red = a real need. Each cell: total, with starting/depth split below it.</p>
+      <h2>Team Value</h2>
+      <p class="muted small">Points above replacement (best currently-available free agent). Each cell: total, with starting/depth split below it. </p>
       <div class="table-wrap">${positionValueLeagueTable(data, Number(team.team_id))}</div>
     </div>
   `;

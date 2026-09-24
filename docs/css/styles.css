@@ -151,7 +151,11 @@ nav.tabs button.active {
 
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
-th { color: var(--ink-500); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; cursor: pointer; }
+/* Headers default to centered - most columns are numeric/rank/stat values,
+   and a centered label over a left-aligned identifying column (Player/Team/
+   Slot) is a normal, readable pattern too, so this is one site-wide default
+   rather than a "center" class repeated on every table's own header row. */
+th { color: var(--ink-500); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; cursor: pointer; text-align: center; }
 /* Grouped stat-column headers (Passing/Rushing/Receiving/Ret/etc - see
    docs/js/statcolumns.js's groupedHeaderHtml) span multiple sub-columns via
    colspan - center them over that span instead of the site-wide left
@@ -174,17 +178,20 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 
 .row-meta { margin-top: 2px; line-height: 1.2; }
 
-/* Start/Sit's lineup/bench rows: ESPN headshot (or team logo for D/ST) to
-   the left of the existing name/meta stack, sized to roughly match ESPN's
-   own lineup view. object-fit:cover crops a non-square source to the
-   circle instead of squishing it; the background shows through the
-   transparent margin most headshot PNGs have around the subject. */
-.player-cell { display: flex; align-items: center; gap: 8px; }
+/* Start/Sit's lineup/bench rows: ESPN headshot (or team logo for D/ST) in
+   its own leading .photo-col cell, sized to roughly match ESPN's own lineup
+   view. object-fit:cover crops a non-square source to the circle instead of
+   squishing it; the background shows through the transparent margin most
+   headshot PNGs have around the subject. */
 .player-photo { width: 34px; height: 34px; min-width: 34px; border-radius: 50%; object-fit: cover; background: color-mix(in srgb, var(--ink-500) 12%, transparent); }
 
 /* Player modal header: the same photo, a little bigger, next to the
    name/rank line instead of inline within it. */
-.player-modal-header { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+/* padding-right clears the modal's own absolutely-positioned close button
+   (top:10px/right:12px, ~30px wide) - without it .compare-btn's own
+   margin-left:auto pushes it flush against the modal's right edge, directly
+   under the X. */
+.player-modal-header { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; padding-right: 36px; }
 .player-modal-header h2 { margin: 0; }
 .player-modal-header p { margin: 2px 0 0; }
 .player-photo-lg { width: 56px; height: 56px; min-width: 56px; border-radius: 50%; object-fit: cover; background: color-mix(in srgb, var(--ink-500) 12%, transparent); }
@@ -215,20 +222,38 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
    narrower share of the row. */
 #tab-startsit td.stat-col, #tab-startsit td.player-td, #tab-startsit td.desktop-col { white-space: nowrap; }
 
-/* Only Player stays frozen while the stat columns scroll underneath - Slot
-   scrolls away with everything else (it's redundant with the pos-tag chip
-   already inside the Player cell, and freezing it too left too little
-   width for stat columns on a phone screen). Same frozen-first-column
-   pattern as the Rest-of-season grid below (.ros-name) - separate borders
-   again, since sticky cells are unreliable under the site-wide
-   collapsed-border default in every major engine. At rest (unscrolled)
-   this looks identical to a normal table - sticky only pins Player once
-   scrolling would otherwise carry it past the left edge, by which point
-   Slot has already scrolled out of view ahead of it. */
+/* Photo+Player stay frozen together while the stat columns scroll
+   underneath - Slot scrolls away with everything else (it's redundant with
+   the pos-tag chip already inside the Player cell, and freezing it too left
+   too little width for stat columns on a phone screen). Same frozen-first-
+   column pattern as the Rest-of-season grid below (.ros-name) - separate
+   borders again, since sticky cells are unreliable under the site-wide
+   collapsed-border default in every major engine. At rest (unscrolled) this
+   looks identical to a normal table - sticky only pins these once scrolling
+   would otherwise carry them past the left edge, by which point Slot has
+   already scrolled out of view ahead of them.
+   Photo is its own real table cell now, NOT an element nested inside
+   .player-td (see startsit.js's playerRow) - a sticky element can only stay
+   pinned within the bounds of ITS OWN containing block, so a photo nested
+   inside the wide .player-td would still vanish once that whole cell
+   scrolled past the edge (confirmed live). As a first-class cell with the
+   same sticky treatment as .player-td itself, it has nowhere to "run out of
+   room" within, so it keeps showing regardless of how far the row scrolls -
+   exactly the ros-name/Slot-column freeze pattern, just two frozen columns
+   deep instead of one. width is fixed (not just min-width) so .player-td's
+   own left offset below is a reliable constant. */
 #tab-startsit .lineup-table { border-collapse: separate; border-spacing: 0; }
-#tab-startsit .lineup-table .player-td {
+#tab-startsit .lineup-table .photo-col {
   position: sticky;
   left: 0;
+  z-index: 2;
+  width: 34px;
+  padding: 6px 5px;
+  background: var(--card);
+}
+#tab-startsit .lineup-table .player-td {
+  position: sticky;
+  left: 44px;
   z-index: 1;
   background: var(--card);
   border-right: 1px solid var(--border);
@@ -259,7 +284,7 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
    of the table row gets - and, same opaque-not-transparent requirement as
    the totals row above, needs to stay solid so it still hides scrolled
    content behind it rather than letting it show/collide through. */
-#tab-startsit .lineup-table .streamed-row .player-td {
+#tab-startsit .lineup-table .streamed-row .player-td, #tab-startsit .lineup-table .streamed-row .photo-col {
   background: color-mix(in srgb, var(--amber-500) 14%, var(--card));
 }
 
@@ -301,7 +326,18 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
   position: sticky; left: 0; z-index: 2; background: var(--card);
   border-right: 1px solid var(--border);
 }
-.ros-name { white-space: nowrap; }
+/* max-width+ellipsis (not just nowrap) at every width, not only the mobile
+   breakpoint below - a name still wrapped here on some engines even with
+   nowrap set, likely position:sticky + this table's auto layout interacting
+   badly (caught live 2026-09-14 - "Omarion Hampton"/"Parker Washington"
+   both wrapped despite nowrap alone); an explicit cap forces single-line
+   rendering regardless of viewport width. */
+/* #tab-startsit-scoped selector, not plain .ros-name - needed to OUTRANK
+   "#tab-startsit td { white-space: normal }" above (an ID+type selector
+   beats a plain class regardless of source order) - confirmed live as the
+   actual cause of names still wrapping "F." / "Gibbs" onto two lines despite
+   this nowrap already being declared. */
+#tab-startsit .ros-name { white-space: nowrap; max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
 /* Same "sticky <th> inside an overflow-x wrap silently doesn't stick"
    fix already worked out for #rankings-table-wrap above: overflow-x forces
    overflow-y to compute as non-visible too (CSS Overflow Module's pairing
@@ -327,6 +363,30 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
    pinned while scrolling down into a different position's rows. */
 .ros-divider-label { position: sticky; left: 8px; display: inline-block; }
 
+/* Generic frozen-first-column pattern (Team Strength's ROS/Team Value
+   tables, Standings) - same border-collapse:separate + sticky requirement
+   as .ros-grid/.lineup-table above (sticky <th>/<td> is unreliable under the
+   site-wide collapsed-border default in every major engine). */
+.sticky-col-table { border-collapse: separate; border-spacing: 0; }
+.sticky-col-first {
+  position: sticky; left: 0; z-index: 1; background: var(--card);
+  border-right: 1px solid var(--border);
+}
+thead .sticky-col-first { z-index: 2; }
+
+/* Standings: Seed+Team freeze together as one leading group (Team isn't the
+   first column here) - Seed gets a fixed width so Team's own left offset has
+   something stable to sit against. */
+.standings-table { border-collapse: separate; border-spacing: 0; }
+.standings-table .sticky-seed {
+  position: sticky; left: 0; z-index: 1; width: 44px; background: var(--card);
+}
+.standings-table .sticky-team {
+  position: sticky; left: 44px; z-index: 1; background: var(--card);
+  border-right: 1px solid var(--border);
+}
+.standings-table thead .sticky-seed, .standings-table thead .sticky-team { z-index: 2; }
+
 /* Settings' field rows used a fixed 220px label + inline range/select/checkbox
    in one unbroken flex row - on a narrow phone that's simply wider than the
    screen, with nothing to scroll (it's not a table). Letting the row wrap
@@ -350,8 +410,23 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 
 /* Start/Sit rows: ".desktop-col" (Opp/ESPN-proj columns) and ".mobile-line"
    (the same info, stacked inside the Player/Score cells instead) are two
-   renderings of the same data - the 700px breakpoint below picks one. */
+   renderings of the same data - the 700px breakpoint below picks one. Team
+   Strength's Trade Targets table reuses the same "two renderings, one
+   breakpoint decides" pattern via ".mobile-col" (Give+Get / gain columns
+   folded together on mobile - see strength.js's tradeTargetsTable). */
 .mobile-line { display: none; }
+.mobile-col { display: none; }
+/* Rankings' collapsible-filters toggle - a plain button only ever shown on
+   mobile (see the max-width:700px rule below); on desktop the filters row
+   stays always visible and this never renders as anything but display:none. */
+.mobile-filters-toggle { display: none; }
+/* Desktop default for the search bar's position within the filter row (see
+   the max-width:700px override below) - declared here, BEFORE that media
+   block, on purpose: it shares a selector with the mobile override at equal
+   specificity, so whichever one is LATER in the file wins regardless of
+   which media query actually matches (confirmed live - had this backwards
+   once already, which pinned the mobile order permanently). */
+.rankings-filters .filter-search { order: 99; margin-left: auto; }
 
 /* Schedule's symmetric lineup table: ".full-name"/".short-name" are the same
    name in two forms ("Christian McCaffrey" vs "C. McCaffrey" - see
@@ -617,6 +692,11 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 .trade-verdict { font-size: 16px; font-weight: 700; margin: 10px 0; }
 
 .heat-cell { text-align: center; font-variant-numeric: tabular-nums; color: #111; }
+/* Center a value WITHOUT .heat-cell's hardcoded #111 - that color only reads
+   fine against .heat-cell's own bright inline ratio-color fill; a cell with
+   no fill (just centered on the plain card background) went near-invisible
+   in dark mode with it (confirmed live - Matchups grid's AVG FPTS column). */
+.cell-center { text-align: center; font-variant-numeric: tabular-nums; }
 /* Starting/Depth sub-line inside a heat-cell (positionValueLeagueTable) -
    dims via opacity, not a muted color token, since a fixed grey reads fine
    on the plain table background .muted is normally used against but loses
@@ -723,7 +803,13 @@ details[open] summary { margin-bottom: 8px; }
 .lineup-player-home { text-align: right; }
 .lineup-player-away { text-align: left; }
 .lineup-score { text-align: center; font-variant-numeric: tabular-nums; }
-.lineup-slot { display: flex; align-items: center; justify-content: center; text-align: center; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+/* NOT display:flex - that would pull this <td> out of the table's own
+   row/column layout (a flex-ified table-cell no longer sizes/aligns via the
+   table algorithm the same way its row siblings do), which is exactly what
+   made the home/slot/away row border render as three vertically-offset
+   segments instead of one flat line. text-align + the site-wide td vertical
+   centering are enough for this cell's plain short text label. */
+.lineup-slot { text-align: center; vertical-align: middle; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
 
 /* :not([hidden]) matters here - a bare .modal-overlay{display:flex} rule
    ties in specificity with the UA's [hidden]{display:none} and, as the
@@ -782,6 +868,7 @@ details[open] summary { margin-bottom: 8px; }
   .bar-value { width: 46px; }
   .player-picker { gap: 4px; }
   .desktop-col { display: none; }
+  .mobile-col { display: table-cell; }
 
   /* Start/Sit's Team/Week row: drop the label text (the selects' own values
      are self-explanatory - a manager name, a week number) and let the team
@@ -801,13 +888,68 @@ details[open] summary { margin-bottom: 8px; }
   .full-name { display: none; }
   .short-name { display: inline; }
 
+  /* Start/Sit's lineup card: drop the desktop shrink-wrap (".lineup-card"
+     above) so the card itself never grows wider than the phone screen -
+     .lineup-scroll's own overflow-x is what should handle the width, not
+     the card ballooning out and forcing the whole PAGE to scroll sideways. */
+  #tab-startsit .lineup-card { width: auto; }
+  /* ...and only .photo-col freezes while scrolling, not .player-td - the
+     name/meta text scrolls away with the rest of the row instead of staying
+     pinned alongside it (desktop keeps both frozen together - see the
+     site-wide, non-mobile ".photo-col"/".player-td" rules above). .photo-col
+     itself stays sticky here (inherited, not overridden) since it's what's
+     supposed to keep showing regardless of scroll position. */
+  #tab-startsit .lineup-table .player-td, #tab-startsit .lineup-table .totals-row .slot-col {
+    position: static; background: none; border-right: none;
+  }
+  #tab-startsit .lineup-table .streamed-row .player-td { background: none; }
+
   /* Belt-and-suspenders on top of the "F. Last" swap above: even a short
      name could still wrap to 2 lines here specifically (caught live
      2026-09-14 - "Omarion Hampton"/"Parker Washington" both still wrapped
      despite white-space:nowrap, likely position:sticky + this table's auto
      layout interacting badly on some engines) - an explicit max-width plus
      ellipsis forces single-line rendering no matter what caused that. */
-  .ros-name { max-width: 84px; overflow: hidden; text-overflow: ellipsis; }
+  /* #tab-startsit-scoped, matching the base rule above - needed for this
+     narrower mobile max-width to actually outrank it (equal-specificity
+     .ros-name alone would lose to the higher-specificity base selector
+     regardless of source order). */
+  #tab-startsit .ros-name { max-width: 84px; overflow: hidden; text-overflow: ellipsis; }
+
+  /* Rankings' Player column freezes while scrolling horizontally (the
+     abbreviation above just shortens the TEXT once scrolled - this keeps the
+     column itself on screen at all, same corner-freeze idea as
+     .ros-grid's own thead th:first-child). td gets a plain left-sticky; th
+     needs BOTH left (this) and top (inherited from #rankings-table-wrap's
+     own thead th rule) at once, with a higher z-index so it renders above
+     the (top-sticky-only) headers scrolling underneath it. */
+  #rankings-table-wrap td.rankings-player-col {
+    position: sticky; left: 0; z-index: 1; background: var(--card); border-right: 1px solid var(--border);
+  }
+  #rankings-table-wrap th.rankings-player-col {
+    position: sticky; left: 0; z-index: 3; border-right: 1px solid var(--border);
+  }
+
+  /* Rankings' filter row: search bar becomes its own full-width top row
+     (order -2 + flex-basis 100% forces every later item onto new lines),
+     then position/team selects, then every checkbox grouped together on its
+     own row - rather than My Team landing on row 1 with the selects while
+     Available/Watch List wrap to row 2. */
+  .rankings-filters .filter-search { order: -2; flex: 1 1 100%; margin-left: 0; }
+  .rankings-filters .filter-checkbox { order: 1; }
+  .rankings-filters .filter-stats-week { order: 2; }
+
+  /* Filters section becomes collapsible - the toggle button shows, and the
+     row itself starts hidden until it's clicked open. Rankings.js toggles
+     ".open" on both; the row's own sticky/margin rules are untouched, they
+     just don't render at all while collapsed. */
+  .mobile-filters-toggle {
+    display: block; width: 100%; text-align: left; margin-bottom: 8px;
+    padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--card); color: var(--ink-700); font-size: 13px; font-weight: 600;
+  }
+  .rankings-filters { display: none; }
+  .rankings-filters.open { display: flex; }
 }
 
 @media (pointer: coarse) {
@@ -825,6 +967,14 @@ details[open] summary { margin-bottom: 8px; }
   padding: 6px 0;
   margin: 0 0 12px;
 }
+/* Rankings' Player column, once scrolled out from under the left edge -
+   swaps its full name for "F. Last" (see rankings.js's commonColumns/the
+   #rankings-table-wrap scroll listener). Reuses the site-wide .full-name/
+   .short-name pair, scoped to this wrap specifically so it doesn't fight the
+   *viewport-width* full-name/short-name toggle Start/Sit's ROS grid and
+   Schedule's symmetric lineup already use at the 700px breakpoint. */
+#rankings-table-wrap.name-col-scrolled .full-name { display: none; }
+#rankings-table-wrap.name-col-scrolled .short-name { display: inline; }
 /* The table header can NOT use the same page-level sticky trick: any
    ancestor with overflow-x set (needed here so a 14+ column table can
    scroll horizontally on a narrow screen) forces its overflow-y to compute
@@ -960,39 +1110,57 @@ details[open] summary { margin-bottom: 8px; }
    playermodal.js's openComparePlayerModal). .modal-overlay-wide only
    applies while a wide modal is open (see modal.js's openModal(html,
    {wide}) - the plain single-player modal keeps its normal 860px cap. */
-.modal-overlay-wide .modal-box { max-width: min(1500px, 96vw); }
-.compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+/* 1900px, not 1500 - measured live: Game Log's grouped stat table (Passing/
+   Rushing/Receiving/Misc/Usage) needs ~816px per side on its own, and 1500
+   only left ~700px per side after the grid gap/padding, forcing an inner
+   horizontal scroll on every widescreen compare even though the monitor had
+   room to spare. 98vw (not 96) for the same reason - every extra px here
+   is a px neither side has to scroll for. */
+.modal-overlay-wide .modal-box { max-width: min(1900px, 98vw); }
+/* minmax(0, 1fr), NOT plain 1fr - a bare 1fr track still won't shrink below
+   its content's min-content size, so a wide inner table (Game Log's grouped
+   Passing/Rushing/Receiving/Usage columns easily runs wider than half the
+   modal) blew the right column past 50% and pushed values outside it
+   instead of scrolling within its own .table-wrap. minmax(0, 1fr) lets both
+   tracks actually shrink to an even split, so each side's own overflow-x
+   handles anything wider than that instead of the grid itself. */
+.compare-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; }
 .compare-col { padding-right: 4px; }
 .compare-col[data-compare-col="a"] { border-right: 1px solid var(--border); padding-right: 20px; }
 .compare-toggle { display: none; }
 
-.compare-checkbox { margin-right: 6px; vertical-align: middle; cursor: pointer; }
-
-/* Floating "N selected, ready to compare" tray - a fixed pill at the bottom
-   of the viewport rather than anything tied to one tabpanel, since the
-   selection itself (compare.js) persists across Start/Sit <-> Rankings. */
-.compare-tray {
-  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
-  display: flex; align-items: center; gap: 10px;
-  background: var(--card); border: 1px solid var(--border); border-radius: 999px;
-  box-shadow: var(--shadow); padding: 8px 10px 8px 16px; z-index: 500; max-width: 90vw;
+/* "+ Compare" trigger on a player modal's header, and the inline search
+   panel it reveals (see playermodal.js's compareSearchHtml/wireCompareTrigger) -
+   replaces the old checkbox-per-row + floating-tray flow entirely: pick a
+   player, open their modal, search for the second one right there. */
+.compare-btn {
+  margin-left: auto; align-self: flex-start;
+  border: 1px solid var(--accent); border-radius: 999px; padding: 5px 12px;
+  font-size: 12.5px; font-weight: 600; cursor: pointer;
+  background: transparent; color: var(--accent); white-space: nowrap;
 }
-/* This class's own "display: flex" above otherwise beats the browser's
-   default "[hidden] { display: none }" at equal specificity, so setting
-   el.hidden = true (see compare.js) would do nothing without this - the
-   tray would always render, empty, until something was selected. */
-.compare-tray[hidden] { display: none; }
-.compare-tray-label { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.compare-tray-go {
-  border: none; border-radius: 999px; padding: 6px 14px; font-size: 12.5px; font-weight: 600; cursor: pointer;
-  background: var(--accent); color: var(--accent-ink); white-space: nowrap;
+.compare-btn:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.compare-search { margin: 10px 0; }
+.compare-search input[type="search"] {
+  width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--card); color: var(--ink-900);
 }
-.compare-tray-go:disabled { background: color-mix(in srgb, var(--ink-500) 25%, transparent); color: var(--ink-500); cursor: default; }
-.compare-tray-clear { border: none; background: transparent; color: var(--ink-500); font-size: 18px; line-height: 1; cursor: pointer; padding: 0 2px; }
+.compare-search-results { margin-top: 6px; max-height: 220px; overflow-y: auto; }
+.compare-search-result { padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+.compare-search-result:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 
 @media (max-width: 700px) {
   .modal-tab-btn { padding: 8px 10px; font-size: 12px; }
   .modal-overlay-wide .modal-box { max-width: 100%; padding: 14px; }
+  /* +Compare pulled out of the header's flex row and stacked under the
+     close X instead - inline (with margin-left:auto competing against the
+     photo+name for the same row) forced the player's name to wrap on a
+     narrow screen, which it never used to do before this button existed.
+     Absolute, not a flex child, so it no longer takes width away from the
+     name at all; padding-right on the header goes back to 0 for the same
+     reason (nothing left in the flex row needs clearance from the corner). */
+  .player-modal-header { padding-right: 0; }
+  .compare-btn { position: absolute; top: 40px; right: 12px; margin-left: 0; }
   .compare-toggle { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
   .compare-side-btn {
     flex: 1; border: none; background: transparent; color: var(--ink-500); padding: 8px 6px; font-size: 12.5px;
@@ -1002,10 +1170,7 @@ details[open] summary { margin-bottom: 8px; }
   .compare-grid { display: block; }
   .compare-col { display: none; padding-right: 0 !important; border-right: none !important; }
   .compare-col.active { display: block; }
-  .compare-tray { bottom: 10px; padding: 6px 8px 6px 12px; }
-  .compare-tray-label { max-width: 40vw; }
 }
 @media (pointer: coarse) {
   .modal-tab-btn { min-height: 30px; }
-  .compare-checkbox { width: 18px; height: 18px; }
 }

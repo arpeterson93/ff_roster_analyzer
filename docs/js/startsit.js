@@ -2,7 +2,6 @@ import { fmt, escapeHtml, getYourTeam, setYourTeam } from "./state.js";
 import { POSITION_COLOR, INJURY_BADGE, impliedTotalCellHtml, opponentCellHtml, formatKickoff, shortName, sortByPositionOrder, teamLabel, playerPhotoHtml, weeklyProjection, pointsWeeksAgo, seasonAvgPoints, weatherCellHtml, rosCellHtml } from "./colors.js";
 import { openPlayerModal } from "./playermodal.js";
 import { openPointsAgainstModal } from "./pointsagainstmodal.js";
-import { compareCheckboxHtml, wireCompareCheckboxes } from "./compare.js";
 
 function posTag(pos) {
   const color = POSITION_COLOR[pos] || "#888";
@@ -43,10 +42,10 @@ function fmtPts(v) {
 // only when viewing that week's lineup rather than as a column of dashes for
 // every other week.
 const headerRow = (isCurrentWeek) => `<tr>
-    <th class="slot-col">Slot</th><th class="player-td">Player</th><th class="desktop-col">Opp</th>
+    <th class="slot-col">Slot</th><th class="photo-col"></th><th class="player-td">Player</th><th class="desktop-col">Opp</th>
     ${isCurrentWeek ? `<th class="stat-col" title="FantasyPros weekly positional rank">FP Rank</th>` : ""}
     <th class="stat-col">Proj</th>
-    <th class="stat-col" title="Fantasy points per game played this season (byes/missed games excluded)">Szn Avg</th>
+    <th class="stat-col" title="Fantasy points per game played this season (byes/missed games excluded)">Szn</th>
     <th class="stat-col" title="Fantasy points 3 weeks ago (byes/missed games excluded)">3wk</th>
     <th class="stat-col" title="Fantasy points 2 weeks ago (byes/missed games excluded)">2wk</th>
     <th class="stat-col" title="Fantasy points 1 week ago (byes/missed games excluded)">1wk</th>
@@ -56,7 +55,7 @@ const headerRow = (isCurrentWeek) => `<tr>
 
 function totalsRow(label, total, isCurrentWeek) {
   return `<tr class="totals-row">
-    <td colspan="2" class="slot-col">${label}</td>
+    <td colspan="3" class="slot-col">${label}</td>
     <td class="desktop-col"></td>
     ${isCurrentWeek ? `<td class="stat-col"></td>` : ""}
     <td class="stat-col"><strong>${fmt(total, 1)}</strong></td>
@@ -87,15 +86,11 @@ function playerRow(p, week, currentWeek, slotLabel, isStreamed) {
   const streamBadge = isStreamed ? `<span class="pill small stream-badge" title="Your rostered starter is on bye - this is the best free agent available that week instead">FA</span>` : "";
   return `<tr data-player-id="${p.id}" class="clickable-row ${isStreamed ? "streamed-row" : ""}">
     ${slotCell}
+    <td class="photo-col">${playerPhotoHtml(p)}</td>
     <td class="player-td">
-      <div class="player-cell">
-        ${playerPhotoHtml(p)}
-        <div>
-          <div>${compareCheckboxHtml(p)}${posTag(p.position)} <strong>${escapeHtml(p.name)}</strong> ${healthBadge(p.injury_status)} ${streamBadge}</div>
-          <div class="muted small row-meta">${playerMetaLine(p)}</div>
-          <div class="muted small row-meta mobile-line" ${oppAttrs}>${kickoff ? escapeHtml(kickoff) + " " : ""}${opponentCellHtml(weekEntry)}</div>
-        </div>
-      </div>
+      <div>${posTag(p.position)} <strong>${escapeHtml(p.name)}</strong> ${healthBadge(p.injury_status)} ${streamBadge}</div>
+      <div class="muted small row-meta">${playerMetaLine(p)}</div>
+      <div class="muted small row-meta mobile-line" ${oppAttrs}>${kickoff ? escapeHtml(kickoff) + " " : ""}${opponentCellHtml(weekEntry)}</div>
     </td>
     <td class="desktop-col" ${oppAttrs}>
       ${kickoff ? `<div class="muted small row-meta">${kickoff}</div>` : ""}
@@ -179,6 +174,34 @@ function syncHorizontalScroll(elements) {
   });
 }
 
+// Starters and Bench are two separate <table>s (same thead markup, but
+// auto-layout sizes each table's columns off only ITS OWN body content) - a
+// long name/value in one but not the other left their columns drifting out
+// of alignment despite scrolling in lockstep (see syncHorizontalScroll).
+// Measures both tables' real rendered header-cell widths (same "read the
+// DOM, then apply" approach as app.js's --sticky-top/rankings.js's
+// --rankings-filters-h), takes the max per column, then locks both tables to
+// those widths via table-layout:fixed - CSS 2.1's fixed-layout algorithm
+// reads column widths off the FIRST row's own cells, which is exactly the
+// (identical) header row every one of these tables has.
+function alignLineupColumnWidths(tables) {
+  if (tables.length < 2) return;
+  const headerRows = tables.map((t) => t.querySelector("thead tr")).filter(Boolean);
+  if (headerRows.length < 2) return;
+  const colCount = headerRows[0].children.length;
+  const widths = [];
+  for (let i = 0; i < colCount; i++) {
+    widths.push(Math.max(...headerRows.map((row) => row.children[i]?.getBoundingClientRect().width || 0)));
+  }
+  tables.forEach((t) => {
+    t.style.tableLayout = "fixed";
+    const row = t.querySelector("thead tr");
+    Array.from(row.children).forEach((th, i) => {
+      th.style.width = `${widths[i]}px`;
+    });
+  });
+}
+
 function scheduleGrid(roster, currentWeek, finalWeek) {
   const weeks = [];
   for (let w = currentWeek; w <= finalWeek; w++) weeks.push(w);
@@ -232,7 +255,6 @@ function wireRowClicks(container, data) {
       if (team) openPointsAgainstModal(team, cell.dataset.pos, data);
     });
   });
-  wireCompareCheckboxes(container, data);
 }
 
 export function renderStartSit(container, data, slug) {
@@ -276,6 +298,7 @@ export function renderStartSit(container, data, slug) {
     });
     wireRowClicks(container, data);
     syncHorizontalScroll(Array.from(container.querySelectorAll(".lineup-scroll")));
+    alignLineupColumnWidths(Array.from(container.querySelectorAll(".lineup-table")));
   }
 
   draw();

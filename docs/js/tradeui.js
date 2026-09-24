@@ -1,7 +1,6 @@
 import { fmt, escapeHtml, getYourTeam, consumePendingTrade } from "./state.js";
 import { POSITION_COLOR, sortByPositionOrder, teamLabel } from "./colors.js";
 import { openPlayerModal } from "./playermodal.js";
-import { compareCheckboxHtml, wireCompareCheckboxes } from "./compare.js";
 
 export function buildPlayersMap(data) {
   const map = {};
@@ -12,8 +11,13 @@ export function buildPlayersMap(data) {
     });
     // value_delta rides along for docs/js/trade.js's tradeSuggestions - its
     // cheap pre-filter heuristic reads it (see that function's own comment
-    // for why a raw ros_total swing can't substitute here).
-    map[p.id] = { position: p.position, weekly, ros_total: p.ros_total, value_delta: p.value_delta };
+    // for why a raw ros_total swing can't substitute here). starting_value/
+    // depth_value ride along too, purely for rosterTable's own Starting/
+    // Depth/Total display below - nothing else here reads them.
+    map[p.id] = {
+      position: p.position, weekly, ros_total: p.ros_total, value_delta: p.value_delta,
+      starting_value: p.starting_value, depth_value: p.depth_value,
+    };
   });
   return map;
 }
@@ -59,11 +63,10 @@ function sortedRoster(players, sortMode) {
   return list.sort((a, b) => nmdValue(b) - nmdValue(a));
 }
 
-// Row click opens the player modal (same convention as Rankings/Start-Sit -
-// see compareCheckboxHtml's own stopPropagation, which keeps that checkbox
-// independent of it) - trade "gives" selection stays a dedicated checkbox
-// in its own leading column instead, so the two clickable purposes never
-// fight over the same click.
+// Row click opens the player modal (same convention as Rankings/Start-Sit) -
+// trade "gives" selection stays a dedicated checkbox in its own leading
+// column instead, so the two clickable purposes never fight over the same
+// click.
 function rosterTable(side, playersList, selected, sortMode) {
   const rows = sortedRoster(playersList, sortMode)
     .map((p) => {
@@ -71,14 +74,16 @@ function rosterTable(side, playersList, selected, sortMode) {
       const color = POSITION_COLOR[p.position] || "#888";
       return `<tr class="clickable-row ${isSelected ? "selected-row" : ""}" data-side="${side}" data-id="${p.id}">
         <td><input type="checkbox" ${isSelected ? "checked" : ""} data-side="${side}" data-id="${p.id}" /></td>
-        <td>${compareCheckboxHtml(p)}<span class="pos-tag" style="background:${color}">${p.position}</span> ${escapeHtml(p.name)}</td>
+        <td><span class="pos-tag" style="background:${color}">${p.position}</span> ${escapeHtml(p.name)}</td>
         <td class="muted small">#${p.ros_pos_rank ?? "–"}</td>
         <td>${fmt(p.ros_total, 0)}</td>
+        <td>${fmt(p.starting_value, 0)}</td>
+        <td>${fmt(p.depth_value, 0)}</td>
         <td>${fmt(nmdValue(p), 0)}</td>
       </tr>`;
     })
     .join("");
-  return `<table><thead><tr><th></th><th>Player</th><th>Rank</th><th>ROS</th><th>NMD value</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table><thead><tr><th></th><th>Player</th><th>Rank</th><th>ROS</th><th>Starting</th><th>Depth</th><th>Total</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 // One row per generated suggestion - names only (positions/colors would be
@@ -360,7 +365,7 @@ export function renderTrade(container, data) {
         </div>
         <div class="card">
           <h3 style="margin:0 0 8px">Team value (starting + depth, per position)</h3>
-          <p class="muted small">Points above replacement, per position - reflects the trade as currently checked above, or each team's unmodified roster if nothing's checked yet. Green/red deltas show the change from each team's unmodified roster. See the conversation this was built from for the full derivation.</p>
+          <p class="muted small">Points above replacement, per position - reflects the trade as currently checked above, or each team's unmodified roster if nothing's checked yet. Green/red deltas show the change from each team's unmodified roster.</p>
           <div class="trade-result">
             <div class="trade-side">
               <h3>${escapeHtml(teamLabel(teamA))}</h3>
@@ -409,17 +414,14 @@ export function renderTrade(container, data) {
       wireSuggestionRows(container.querySelector("#trade-suggestions"), state.suggestions, state, draw);
     }
 
-    wireCompareCheckboxes(container, data);
-
     function toggle(side, id) {
       const set = side === "a" ? state.givesA : state.givesB;
       set.has(id) ? set.delete(id) : set.add(id);
       draw();
     }
     // Row click opens the player modal (same as Rankings/Start-Sit) - trade
-    // "gives" selection is now the dedicated leading checkbox's job only
-    // (see rosterTable's comment), and the compare checkbox already stops
-    // its own click from bubbling here (see compareCheckboxHtml).
+    // "gives" selection is the dedicated leading checkbox's job only (see
+    // rosterTable's comment).
     container.querySelectorAll("#trade-picker-a tr[data-id], #trade-picker-b tr[data-id]").forEach((row) => {
       row.addEventListener("click", (e) => {
         if (e.target.tagName === "INPUT") return; // checkboxes handle their own click below

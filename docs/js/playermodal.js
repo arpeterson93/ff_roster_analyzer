@@ -388,12 +388,16 @@ function projectionTable(player, currentWeek) {
   // is what actually means "remaining".
   const rows = (player.weekly || [])
     .filter((w) => !w.actual && w.week >= currentWeek)
-    .map((w) => `<tr><td>${w.week}</td><td>${opponentCellHtml(w)}</td><td>${fmt(weeklyProjection(player, w.week, currentWeek), 1)}</td><td>${fmt(w.sd, 1)}</td><td>${fmt(w.our_projected, 1)}</td></tr>`)
+    .map((w) => `<tr><td>${w.week}</td><td>${opponentCellHtml(w)}</td><td>${fmt(weeklyProjection(player, w.week, currentWeek), 1)}</td></tr>`)
     .join("");
   // Only a total-points projection is computed for future weeks (not a full
   // stat line), so this can't show the grouped stat columns the game log
-  // does - just the scalar projection + uncertainty.
-  return `<table><thead><tr><th>Wk</th><th>Opp</th><th>Proj</th><th>SD</th><th>Our proj</th></tr></thead><tbody>${rows}</tbody></table>`;
+  // does - just the scalar projection. SD/"Our proj" (the old proprietary
+  // rank->curve->baseline*matchup reference number) used to have their own
+  // columns here - dropped per the conversation this was built from, this
+  // table now consolidates with Game Log/Value below it and didn't need the
+  // extra reference columns competing for attention.
+  return `<table><thead><tr><th>Wk</th><th>Opp</th><th>Proj</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 // JS port of engine/faab_estimate.py's weighted_percentile - same "first
@@ -936,12 +940,21 @@ function faabEstimateSection(player, data) {
   `;
 }
 
+// Tab is labeled "Game Log" (see playerModalContentHtml) - this used to be
+// two separate tabs (Weekly Projections, Week-to-Week NMD/Value), merged
+// into one per the conversation this was built from: a player's actual
+// stats, remaining schedule, and roster-value breakdown are all "what
+// happened/will happen with this guy," not three unrelated views. No
+// redundant "Game log" heading here (the tab title already says that) - each
+// remaining section still gets its own heading.
 function overviewTabHtml(player, data) {
   const hasGameLog = (player.weekly || []).some((w) => w.actual);
+  const nmdHtml = nmdDetailSection(player, data);
   return `
-    ${hasGameLog ? `<h3>Game log</h3>${gameLogTable(player, data)}` : ""}
+    ${hasGameLog ? gameLogTable(player, data) : ""}
     <h3>${hasGameLog ? "Remaining schedule" : "Weekly projections"}</h3>
     <div class="table-wrap">${projectionTable(player, data.meta.current_week)}</div>
+    ${nmdHtml}
   `;
 }
 
@@ -984,8 +997,7 @@ function nmdDetailSection(player, data) {
       )
       .join("");
     return `
-      <h3>NMD week-by-week</h3>
-      <p class="muted small">Points above replacement. "Starting" is his edge over the best available free agent for his slot, in a week he actually started; "Depth" is his edge over the best available free agent at his own position, in a week he sat (floored at 0 - a real bench player is never forced into the lineup). "Replace by" names the free agent that week's bar came from - re-picked fresh every week, so don't be surprised if the name changes row to row. Total below discounts Depth 50% (a real bench spot doesn't always get used) - the same number the stat tile above shows.</p>
+      <h3>Value week-by-week</h3>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Week</th><th>Starting</th><th>Depth</th><th>Replace by</th></tr></thead>
@@ -1003,8 +1015,7 @@ function nmdDetailSection(player, data) {
     .join("");
   const totalDepth = detail.weekly.reduce((acc, w) => acc + w.depth_value, 0);
   return `
-    <h3>NMD week-by-week</h3>
-    <p class="muted small">Points above replacement against the REST of the free-agent pool at his own position (excluding himself, so the single best free agent at a position gets real credit instead of comparing to himself) - not team-specific, this is the same number for every viewer. Total below discounts 50% (a real bench spot doesn't always get used) - the same number the stat tile above shows.</p>
+    <h3>Value week-by-week</h3>
     <div class="table-wrap">
       <table>
         <thead><tr><th>Week</th><th>Depth</th><th>Replace by</th></tr></thead>
@@ -1032,17 +1043,17 @@ function scheduleRankPillHtml(rank, avgIndex, timeframeLabel) {
 }
 
 // The single-player modal's full inner HTML: header/stat-grid, then always
-// two tabs (Weekly projections, Week-to-week NMD) plus a third (FAAB Lab)
-// only for players on ESPN "WAIVERS" status this week (see engine/
-// pipeline.py's _compute_faab_estimates) - everyone else just doesn't get
-// a third tab, rather than an empty one. Factored out of openPlayerModal
-// so openComparePlayerModal can render the exact same content twice, side
-// by side, rather than reimplementing it.
-function playerModalContentHtml(player, data) {
+// a Game Log tab (actual stats + remaining schedule + roster-value
+// breakdown, all folded into one tab - see overviewTabHtml) plus a second
+// (FAAB Lab) only for players on ESPN "WAIVERS" status this week (see
+// engine/pipeline.py's _compute_faab_estimates) - everyone else just
+// doesn't get a second tab, rather than an empty one. Factored out of
+// openPlayerModal so openComparePlayerModal can render the exact same
+// content twice, side by side, rather than reimplementing it.
+function playerModalContentHtml(player, data, { showCompareTrigger = true } = {}) {
   const color = POSITION_COLOR[player.position] || "#888";
   const team = player.fantasy_team_id !== null ? data.teamsById.get(player.fantasy_team_id) : null;
   const faabHtml = faabEstimateSection(player, data);
-  const nmdHtml = nmdDetailSection(player, data);
 
   const header = `
     <div class="player-modal-header">
@@ -1051,7 +1062,9 @@ function playerModalContentHtml(player, data) {
         <h2><span class="pos-tag" style="background:${color}">${player.position}</span> ${escapeHtml(player.name)} <span class="muted small">${escapeHtml(player.nfl_team || "")}</span></h2>
         <p class="muted small">${team ? escapeHtml(teamLabel(team)) : "Free agent"} · ROS rank ${player.ros_pos_rank ?? "–"} · Bye ${player.bye ?? "–"}</p>
       </div>
+      ${showCompareTrigger ? `<button class="compare-btn" type="button" data-compare-trigger>+ Compare</button>` : ""}
     </div>
+    ${showCompareTrigger ? compareSearchHtml() : ""}
     <div class="player-stat-grid">
       <div class="stat-tile">
         <div class="stat-label">Reg / Playoff sched</div>
@@ -1062,8 +1075,7 @@ function playerModalContentHtml(player, data) {
   `;
 
   const tabs = [
-    { key: "projections", label: "Weekly Projections", html: overviewTabHtml(player, data) },
-    { key: "nmd", label: "Week-to-Week NMD", html: nmdHtml || `<p class="muted small">No roster-value context available for this player.</p>` },
+    { key: "projections", label: "Game Log", html: overviewTabHtml(player, data) },
     ...(faabHtml ? [{ key: "faab", label: "FAAB Lab", html: faabHtml }] : []),
   ];
 
@@ -1074,6 +1086,56 @@ function playerModalContentHtml(player, data) {
     </div>
     ${tabs.map((t, i) => `<div class="modal-tabpanel${i === 0 ? " active" : ""}" data-modal-panel="${t.key}">${t.html}</div>`).join("")}
   `;
+}
+
+// Hidden until "+ Compare" is clicked (see wireCompareTrigger) - a plain
+// text search over data.players rather than a second picker UI, so
+// comparing two players never needs a checkbox anywhere in the app: open
+// player A's modal, click Compare, type player B's name, pick them from the
+// results.
+function compareSearchHtml() {
+  return `
+    <div class="compare-search" data-compare-search hidden>
+      <input type="search" data-compare-search-input placeholder="Search for a player to compare..." autocomplete="off" />
+      <div class="compare-search-results" data-compare-search-results></div>
+    </div>
+  `;
+}
+
+function wireCompareTrigger(scopeEl, player, data) {
+  const trigger = scopeEl.querySelector("[data-compare-trigger]");
+  const panel = scopeEl.querySelector("[data-compare-search]");
+  if (!trigger || !panel) return;
+  const input = panel.querySelector("[data-compare-search-input]");
+  const results = panel.querySelector("[data-compare-search-results]");
+
+  trigger.addEventListener("click", () => {
+    panel.hidden = !panel.hidden;
+    if (!panel.hidden) input.focus();
+  });
+
+  input.addEventListener("input", () => {
+    const q = input.value.trim().toLowerCase();
+    if (!q) {
+      results.innerHTML = "";
+      return;
+    }
+    const matches = data.players.filter((p) => p.id !== player.id && p.name.toLowerCase().includes(q)).slice(0, 8);
+    results.innerHTML = matches.length
+      ? matches
+          .map((p) => {
+            const c = POSITION_COLOR[p.position] || "#888";
+            return `<div class="compare-search-result" data-compare-pick="${p.id}"><span class="pos-tag" style="background:${c}">${p.position}</span> ${escapeHtml(p.name)} <span class="muted small">${escapeHtml(p.nfl_team || "")}</span></div>`;
+          })
+          .join("")
+      : `<p class="muted small">No players found.</p>`;
+    results.querySelectorAll("[data-compare-pick]").forEach((row) => {
+      row.addEventListener("click", () => {
+        const chosen = data.playersById.get(row.dataset.comparePick);
+        if (chosen) openComparePlayerModal(player, chosen, data);
+      });
+    });
+  });
 }
 
 // Scoped to scopeEl (the whole modal for a single player, or one
@@ -1135,6 +1197,7 @@ export function openPlayerModal(player, data) {
   wireFaabConfidenceSlider(scope, player, data);
   wireGameLogRows(scope);
   wirePriceCompRows(scope);
+  wireCompareTrigger(scope, player, data);
 }
 
 // Side-by-side on a wide screen (see .compare-grid/.modal-overlay-wide in
@@ -1148,8 +1211,8 @@ export function openComparePlayerModal(playerA, playerB, data) {
       <button class="compare-side-btn" data-compare-side="b">${escapeHtml(playerB.name)}</button>
     </div>
     <div class="compare-grid">
-      <div class="compare-col active" data-compare-col="a">${playerModalContentHtml(playerA, data)}</div>
-      <div class="compare-col" data-compare-col="b">${playerModalContentHtml(playerB, data)}</div>
+      <div class="compare-col active" data-compare-col="a">${playerModalContentHtml(playerA, data, { showCompareTrigger: false })}</div>
+      <div class="compare-col" data-compare-col="b">${playerModalContentHtml(playerB, data, { showCompareTrigger: false })}</div>
     </div>
   `;
   openModal(html, { wide: true });

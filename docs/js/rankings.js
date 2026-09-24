@@ -2,12 +2,11 @@ import { fmt, escapeHtml, getYourTeam } from "./state.js";
 import {
   POSITION_COLOR, INJURY_BADGE, impliedTotalCellHtml, opponentCellHtml, sortByPositionOrder, teamLabel,
   pointsWeeksAgo, seasonAvgPoints, seasonTotalPoints, weatherCellHtml, rosCellHtml, projectedCellHtml,
-  snapPct, attPct, tgtPct,
+  snapPct, attPct, tgtPct, shortName,
 } from "./colors.js";
 import { openPlayerModal } from "./playermodal.js";
 import { openPointsAgainstModal } from "./pointsagainstmodal.js";
 import { loadWatchlist, setWatched } from "./watchlist.js";
-import { compareCheckboxHtml, wireCompareCheckboxes } from "./compare.js";
 import { STATS_TAB_BLOCKS, blocksForPosition, blockEndIndices, statCellsHtml } from "./statcolumns.js";
 
 const FLEX_POSITIONS = ["RB", "WR", "TE"];
@@ -88,12 +87,25 @@ function commonColumns(data, watched) {
         }]
       : []),
     {
-      key: "ros_overall_rank", label: "Rank",
+      key: "ros_overall_rank", label: "RK",
       fmt: (v, p) => (v === null ? "–" : `${v} <span class="muted small">(${p.position}${p.ros_pos_rank ?? "–"})</span>`),
     },
     {
-      key: "name", label: "Player",
-      fmt: (v, p) => `${compareCheckboxHtml(p)}<span class="pos-tag" style="background:${POSITION_COLOR[p.position] || "#888"}">${p.position}</span> ${escapeHtml(v)} ${healthBadge(p.injury_status)}`,
+      key: "name", label: "Player", className: "rankings-player-col",
+      // full-name/short-name swap to "F. Last" once the Player column has
+      // scrolled off the left edge (see #rankings-table-wrap's scroll
+      // listener in renderRankings) - same abbreviation Start/Sit's ROS grid
+      // and Schedule's symmetric lineup already use on narrow screens, here
+      // driven by horizontal SCROLL POSITION instead of viewport width, so
+      // the identifying name stays legible a little longer as the row's
+      // stat columns scroll into view. rawTd (own complete <td>, not the
+      // generic wrapper every other column gets) so the class needed to
+      // freeze this column on mobile (see styles.css's ".rankings-player-col")
+      // actually lands on the <td>, not just the <th> - the generic wrapper
+      // in renderFlatTable/renderStatsTable never applied a column's
+      // className to its body cells, only its header.
+      rawTd: true,
+      fmt: (v, p) => `<td class="rankings-player-col"><span class="pos-tag" style="background:${POSITION_COLOR[p.position] || "#888"}">${p.position}</span> <span class="full-name">${escapeHtml(v)}</span><span class="short-name">${escapeHtml(shortName(v))}</span> ${healthBadge(p.injury_status)}</td>`,
     },
     { key: "nfl_team", label: "Team" },
   ];
@@ -125,8 +137,8 @@ function overviewColumns(data) {
     // Sorted by the underlying NUMBER (week_pos_rank), not the displayed
     // "RB2"-style label - a string sort would put "RB10" before "RB2".
     { key: "fp_week_pos_rank_label", label: "FP RK", fmt: (v) => v ?? "–" },
-    { key: "espn_projected_week", label: "ESPN WK", fmt: (v) => fmt(v, 1) },
-    { key: "_season_avg", label: "Szn Avg", fmt: (_v, p) => fmtOrDash(seasonAvgPoints(p, cw)) },
+    { key: "espn_projected_week", label: "PROJ", fmt: (v) => fmt(v, 1) },
+    { key: "_season_avg", label: "Szn", fmt: (_v, p) => fmtOrDash(seasonAvgPoints(p, cw)) },
     { key: "_wk3", label: "3wk", fmt: (_v, p) => fmtOrDash(pointsWeeksAgo(p, 3, cw)) },
     { key: "_wk2", label: "2wk", fmt: (_v, p) => fmtOrDash(pointsWeeksAgo(p, 2, cw)) },
     { key: "_wk1", label: "1wk", fmt: (_v, p) => fmtOrDash(pointsWeeksAgo(p, 1, cw)) },
@@ -204,7 +216,7 @@ function overviewColumns(data) {
       },
     },
     {
-      key: "_fa_value", label: "NMD", title: "Points above replacement - a rostered player's own current starting/depth value, or a free agent's value against the rest of the pool at his position",
+      key: "_fa_value", label: "Value", title: "Points above replacement - a rostered player's own current starting/depth value, or a free agent's value against the rest of the pool at his position",
       fmt: (_v, p) => (p.value_delta === undefined || p.value_delta === null ? "–" : `${p.value_delta >= 0 ? "+" : ""}${fmt(p.value_delta, 1)}`),
     },
   ];
@@ -433,7 +445,6 @@ function wireTableInteractions(wrap, data, watched, onResort) {
       if (team) openPointsAgainstModal(team, cell.dataset.pos, data);
     });
   });
-  wireCompareCheckboxes(wrap, data);
 }
 
 // Overview/Schedule: one flat column list, one header row. A column with
@@ -506,7 +517,12 @@ function renderStatsTable(wrap, container, data, filters, watched) {
     .slice(0, 300)
     .map((p) => {
       const isYours = getYourTeam(data.meta.slug) !== null && p.fantasy_team_id === getYourTeam(data.meta.slug);
-      const commonCells = common.map((c) => `<td>${c.fmt ? c.fmt(p[c.key], p) : (p[c.key] ?? "–")}</td>`).join("");
+      const commonCells = common
+        .map((c) => {
+          const value = c.fmt ? c.fmt(p[c.key], p) : (p[c.key] ?? "–");
+          return c.rawTd ? value : `<td>${value}</td>`;
+        })
+        .join("");
       const statCells = statCellsHtml(statsForWeek(p, filters.statsWeek, cw), flatColumns, blockEnds);
       const trailingCells = trailing.map((c) => `<td${isTrailingBlockEnd(c) ? ` class="block-end"` : ""}>${c.fmt(undefined, p)}</td>`).join("");
       return `<tr data-player-id="${p.id}" class="clickable-row ${isYours ? "your-team-row" : ""}">${commonCells}${statCells}${trailingCells}</tr>`;
@@ -549,14 +565,15 @@ export function renderRankings(container, data, slug) {
   function draw() {
     container.innerHTML = `
       <div class="card">
+        <button class="mobile-filters-toggle" type="button" id="rankings-filters-toggle">Filters ▾</button>
         <div class="select-row rankings-filters" id="rankings-filters">
+          <input type="search" id="rankings-search" class="filter-search" placeholder="Search players..." autocomplete="off" value="${escapeHtml(filters.search)}" />
           <select id="rankings-pos-filter">${positions.map((p) => `<option value="${p}">${p}</option>`).join("")}</select>
-          <select id="rankings-team-filter">${nflTeams.map((t) => `<option value="${t}">${t === "ALL" ? "All" : t}</option>`).join("")}</select>
-          ${yourTeamId !== null ? `<label><input type="checkbox" id="rankings-myteam-only" /> My Team</label>` : ""}
-          <label><input type="checkbox" id="rankings-fa-only" /> Available</label>
-          ${yourTeamId !== null ? `<label><input type="checkbox" id="rankings-watched-only" /> Watch List</label>` : ""}
-          ${filters.tab === "stats" ? `<select id="rankings-stats-week"><option value="season">Season</option>${weekOptions.map((w) => `<option value="${w}">Week ${w}</option>`).join("")}</select>` : ""}
-          <input type="search" id="rankings-search" placeholder="Search players..." autocomplete="off" value="${escapeHtml(filters.search)}" />
+          <select id="rankings-team-filter">${nflTeams.map((t) => `<option value="${t}">${t}</option>`).join("")}</select>
+          ${filters.tab === "stats" ? `<select id="rankings-stats-week" class="filter-stats-week"><option value="season">Season</option>${weekOptions.map((w) => `<option value="${w}">Week ${w}</option>`).join("")}</select>` : ""}
+          ${yourTeamId !== null ? `<label class="filter-checkbox"><input type="checkbox" id="rankings-myteam-only" /> My Team</label>` : ""}
+          <label class="filter-checkbox"><input type="checkbox" id="rankings-fa-only" /> Available</label>
+          ${yourTeamId !== null ? `<label class="filter-checkbox"><input type="checkbox" id="rankings-watched-only" /> Watch List</label>` : ""}
         </div>
         <div class="modal-tabs" id="rankings-tabs">
           ${TABS.map((t) => `<button class="modal-tab-btn${filters.tab === t.key ? " active" : ""}" data-rankings-tab="${t.key}">${t.label}</button>`).join("")}
@@ -573,7 +590,23 @@ export function renderRankings(container, data, slug) {
     setFiltersHeightVar();
     new ResizeObserver(setFiltersHeightVar).observe(filtersEl);
 
+    // Swaps the Player column's full name for "F. Last" once it's scrolled
+    // out from under the left edge (see the ".name-col-scrolled" rule in
+    // styles.css) - the wrap element itself survives re-renders from filter/
+    // sort changes (only its innerHTML is replaced - see render()), so one
+    // listener attached here covers every tab.
+    const tableWrapEl = container.querySelector("#rankings-table-wrap");
+    tableWrapEl.addEventListener("scroll", () => {
+      tableWrapEl.classList.toggle("name-col-scrolled", tableWrapEl.scrollLeft > 0);
+    });
+
     render(container, data, filters, watched);
+
+    container.querySelector("#rankings-filters-toggle").addEventListener("click", () => {
+      const filtersEl2 = container.querySelector("#rankings-filters");
+      const nowOpen = filtersEl2.classList.toggle("open");
+      container.querySelector("#rankings-filters-toggle").textContent = nowOpen ? "Filters ▴" : "Filters ▾";
+    });
 
     container.querySelectorAll("[data-rankings-tab]").forEach((btn) => {
       btn.addEventListener("click", () => {

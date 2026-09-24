@@ -34,8 +34,8 @@ export function renderStandings(container, data, slug) {
       const team = teamsById.get(s.team_id);
       const isYours = s.team_id === yourTeamId;
       return `<tr class="${isYours ? "your-team-row" : ""}">
-        <td>${s.seed ?? "–"}</td>
-        <td>${isYours ? "<strong>" : ""}${escapeHtml(team ? teamLabel(team) : s.team_id)}${isYours ? "</strong>" : ""}</td>
+        <td class="sticky-seed">${s.seed ?? "–"}</td>
+        <td class="sticky-team">${isYours ? "<strong>" : ""}${escapeHtml(team ? teamLabel(team) : s.team_id)}${isYours ? "</strong>" : ""}</td>
         <td>${escapeHtml(s.division)}</td>
         <td>${s.wins}-${s.losses}${s.ties ? "-" + s.ties : ""}</td>
         <td>${fmt(s.points_for, 1)}</td>
@@ -53,8 +53,8 @@ export function renderStandings(container, data, slug) {
     <div class="card">
       <h2>Standings &amp; playoff odds <span class="muted small">(${data.standings[0] ? data.standings[0].iterations.toLocaleString() : 0} simulations)</span></h2>
       <div class="table-wrap">
-        <table>
-          <thead><tr><th>Seed</th><th>Team</th><th>Div</th><th>Record</th><th>PF</th><th>PA</th><th>xWins</th><th>Playoff%</th><th>Bye%</th><th>Div win%</th><th>Seed dist.</th></tr></thead>
+        <table class="standings-table">
+          <thead><tr><th class="sticky-seed">Seed</th><th class="sticky-team">Team</th><th>Div</th><th>Record</th><th>PF</th><th>PA</th><th>xWins</th><th>Playoff%</th><th>Bye%</th><th>Div win%</th><th>Seed dist.</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>

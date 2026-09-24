@@ -8,7 +8,6 @@ import { renderMatchups } from "./matchups.js";
 import { renderTrade } from "./tradeui.js";
 import { renderSchedule } from "./schedule.js";
 import { renderSettings } from "./settings.js";
-import { clearCompareSelection } from "./compare.js";
 
 const VIEWS = {
   strength: renderStrength,
@@ -32,7 +31,6 @@ function wireTabs() {
       document.querySelectorAll("nav.tabs button").forEach((b) => b.classList.toggle("active", b === btn));
       document.querySelectorAll(".tabpanel").forEach((p) => p.classList.toggle("active", p.id === `tab-${currentView}`));
       setHash(currentLeagueSlug, currentView);
-      clearCompareSelection();
       renderActiveView();
     });
   });
@@ -48,7 +46,8 @@ function renderActiveView() {
 function renderHeader(leagueMeta) {
   document.getElementById("header-week").textContent = `Week ${leagueMeta.current_week}`;
   const generated = new Date(leagueMeta.generated_at);
-  document.getElementById("header-generated").textContent = `Updated ${generated.toLocaleString()}`;
+  const formatted = generated.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  document.getElementById("header-generated").textContent = `Updated ${formatted}`;
 
   const banner = document.getElementById("warning-banner");
   const warnings = leagueMeta.warnings || [];
