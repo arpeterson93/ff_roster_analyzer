@@ -44,6 +44,20 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
+      # Same key as build.yml's own cache step - lets this run reuse
+      # whatever build.yml's last (typically same-day) run already
+      # downloaded from nflverse's release CDN, instead of re-fetching those
+      # multi-season parquet files from scratch every week. That CDN fetch
+      # is slow and occasionally flaky regardless (a transient timeout there
+      # once burned a full ~30-minute, 500+-league ESPN pull further up this
+      # same job - see the conversation this was built from); a cache hit
+      # means this step usually doesn't hit that CDN at all.
+      - name: Cache nflverse history seasons
+        uses: actions/cache@v4
+        with:
+          path: .cache/nflverse
+          key: nflverse-${{ hashFiles('config/leagues/*.yml') }}
+
       - run: pip install -r requirements.txt
 
       - name: Pull current-week bids

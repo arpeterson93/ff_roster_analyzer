@@ -47,7 +47,6 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-import nflreadpy as nfl
 from espn_api.football import League as EspnLeague
 
 from engine.faab_estimate import KNOWN_BAD_BID_TRANSACTION_IDS, load_trainable_rows
@@ -227,10 +226,21 @@ def main() -> int:
     idmap = build_id_map()
     gsis_to_pfr = build_gsis_to_pfr_map()
     baseline_scoring = ScoringRules.from_espn(load_baseline_scoring_items())
+    # ingest.nfl_data's own cached wrappers, not nflreadpy directly (what
+    # this used before) - nflreadpy's own cache is in-memory-only and gone
+    # the moment this process exits, so every run re-downloaded the same
+    # multi-season parquet files from GitHub's release-assets CDN from
+    # scratch. That download is exactly what a transient CDN timeout took
+    # down a full ~30-minute, 500+-league ESPN pull with on 2026-09-24 (see
+    # the conversation this was built from) - the CDN fetch itself is slow
+    # and occasionally flaky regardless, but there's no reason to pay for it
+    # more than once when build.yml's own daily run already populated
+    # .cache/nflverse (see that workflow's own actions/cache step, and this
+    # one's matching step added alongside this change).
     season_index_by_season = {
         SEASON: build_season_index(
-            nfl.load_player_stats([SEASON]), nfl.load_injuries([SEASON]), nfl.load_snap_counts([SEASON]),
-            nfl.load_rosters_weekly([SEASON]),
+            nd.player_stats([SEASON], current_season=SEASON), nd.injuries([SEASON], current_season=SEASON),
+            nd.snap_counts([SEASON], current_season=SEASON), nd.rosters_weekly([SEASON], current_season=SEASON),
         )
     }
     rank_index = build_rank_index([SEASON])
