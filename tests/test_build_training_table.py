@@ -181,7 +181,11 @@ def test_build_no_bid_rows_widens_to_a_ros_ranked_player_with_no_stats_row_at_al
     }
     rows = build_no_bid_rows(
         league_id=1,
-        bids=[],
+        # A single unrelated real bid, just to satisfy the Tier 1 league-
+        # season validity gate (see build_no_bid_rows' own docstring) -
+        # without ANY real transaction that season, no no_bid rows get
+        # generated at all, regardless of this test's actual subject.
+        bids=[{"season": 2024, "week": 2, "add_player_id": -1}],
         rostered_by_week={"2024": {"2": []}},  # nobody rostered him - a genuine free agent
         idmap=idmap,
         gsis_to_pfr={},
@@ -211,7 +215,10 @@ def test_build_no_bid_rows_does_not_widen_a_player_above_the_ros_rank_ceiling():
     }
     rows = build_no_bid_rows(
         league_id=1,
-        bids=[],
+        # See the Tier 1 gate comment in the test above - without this,
+        # rows == [] here for the wrong reason (no season activity at all),
+        # not because this player's rank is actually above the ceiling.
+        bids=[{"season": 2024, "week": 2, "add_player_id": -1}],
         rostered_by_week={"2024": {"2": []}},
         idmap=idmap,
         gsis_to_pfr={},

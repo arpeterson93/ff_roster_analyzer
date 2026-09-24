@@ -30,6 +30,22 @@ from espn_api.football.constant import POSITION_MAP, SETTINGS_SCORING_FORMAT_MAP
 # turning up. {abbr: {"status": "good"|"bad", "comment": free text}}.
 SCORING_LEDGER_PATH = Path(__file__).resolve().parent.parent.parent / "scoring_ledger.json"
 
+# The single canonical scoring standard tools/faab_history/build_training_
+# table.py uses to compute every FAAB-relevant points-based feature (prior_
+# week_actual_points, trailing_2_3_avg_points, season_avg_points) for EVERY
+# pooled row, regardless of which league actually placed that bid - see the
+# conversation this was built from (2026-09-21): a bid's real dollar amount
+# stays denominated in that bid's own league's real budget (target_pct never
+# touches scoring at all), but the FEATURE describing "how good was this
+# game" needs one fixed yardstick or a 28-point PPR game and a 20-point
+# Standard game for the same real box score train as two different
+# situations, silently corrupting both the k-NN comp search and the
+# regression fit. User-edited via a "Baseline Scoring" artifact (same
+# review-and-export pattern as SCORING_LEDGER_PATH's "Scoring Ledger") -
+# same [{abbr, points}] shape scoring_format_items() produces, so it can
+# feed straight into ScoringRules.from_espn() unchanged.
+BASELINE_SCORING_PATH = Path(__file__).resolve().parent.parent.parent / "baseline_scoring.json"
+
 SETTINGS_URL = "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/{year}/segments/0/leagues/{league_id}"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -219,6 +235,23 @@ def load_scoring_ledger(path: Path = SCORING_LEDGER_PATH) -> dict[str, dict]:
     exported here."""
     if not path.exists():
         return {}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_baseline_scoring_items(path: Path = BASELINE_SCORING_PATH) -> list[dict]:
+    """[{abbr, points}, ...] - see BASELINE_SCORING_PATH. Raises, deliberately,
+    if the file doesn't exist: unlike the scoring ledger (empty = permissive,
+    fine to skip until a review has happened), there's no safe default here -
+    training every pooled row's points-based features off an accidentally-
+    empty scoring standard would silently zero out prior_week_actual_points/
+    trailing_2_3_avg_points/season_avg_points for every single row instead of
+    failing loudly."""
+    if not path.exists():
+        raise FileNotFoundError(
+            f"{path} not found - export a baseline scoring definition from the "
+            "\"Baseline Scoring\" artifact (or copy an existing league's own "
+            "scoring_format_items() output) before running build_training_table.py"
+        )
     return json.loads(path.read_text(encoding="utf-8"))
 
 
