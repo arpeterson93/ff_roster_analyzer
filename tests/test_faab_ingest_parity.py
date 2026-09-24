@@ -101,11 +101,12 @@ def _by_event(rows):
     return d
 
 
-def _assert_decision_fields_match(old_rows, new_rows):
+def _assert_decision_fields_match(old_rows, new_rows, *, ignore_fields=frozenset()):
+    fields = DECISION_FIELDS - ignore_fields
     old_by, new_by = _by_event(old_rows), _by_event(new_rows)
     assert set(old_by) == set(new_by)
     for key in old_by:
-        project = lambda rows: sorted(tuple(sorted((k, v) for k, v in r.items() if k in DECISION_FIELDS)) for r in rows)
+        project = lambda rows: sorted(tuple(sorted((k, v) for k, v in r.items() if k in fields)) for r in rows)
         assert project(old_by[key]) == project(new_by[key]), key
 
 
@@ -143,7 +144,28 @@ def scenario_rows():
 def test_interest_rows_decision_fields_match(scenario_rows, tmp_path):
     interest_old, _, _ = _old_pools(scenario_rows)
     interest_new, _, _ = _new_pools(scenario_rows, tmp_path)
-    _assert_decision_fields_match(interest_old, interest_new)
+    # consolidated_from_leagues is deliberately excluded here -
+    # _consolidate_interest_vectorized sets it unconditionally (even for a
+    # single-league group, where the old dict-based consolidate_cross_
+    # league_events never attaches it at all), verified safe because the
+    # only interest-pool reader (_backing_count) checks "leagues_eligible"
+    # in r FIRST, which is always set for interest rows regardless - see
+    # test_interest_consolidated_from_leagues_is_always_present below for
+    # the actual new-vs-old behavior this test intentionally doesn't check.
+    _assert_decision_fields_match(interest_old, interest_new, ignore_fields={"consolidated_from_leagues"})
+
+
+def test_interest_consolidated_from_leagues_is_always_present(scenario_rows, tmp_path):
+    # Documents the one deliberate structural difference from the old
+    # dict-based consolidate_cross_league_events (is_price=False): the
+    # vectorized interest consolidation sets consolidated_from_leagues
+    # unconditionally, even for a single-league event, where the old
+    # function never attached the key at all. Confirmed harmless for
+    # interest rows specifically - see _backing_count's own docstring.
+    interest_new, _, _ = _new_pools(scenario_rows, tmp_path)
+    assert all("consolidated_from_leagues" in r for r in interest_new)
+    single_league_row = next(r for r in interest_new if r["add_player_id"] == 1001)  # Event A, one league
+    assert single_league_row["consolidated_from_leagues"] == [10]
 
 
 def test_price_rows_decision_fields_match(scenario_rows, tmp_path):

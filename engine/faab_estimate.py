@@ -905,24 +905,93 @@ def _dedupe_for_interest_vectorized(df: "pl.DataFrame") -> "pl.DataFrame":
     return ranked.filter(pl.col("_rank") == 1).drop("_rank")
 
 
+def _consolidate_interest_vectorized(df: "pl.DataFrame") -> list[dict]:
+    """Vectorized twin of consolidate_cross_league_events(is_price=False) -
+    same reasoning as _promote_synthetic_wins/_dedupe_for_interest_vectorized
+    (no_bid rows correctly surviving those two - see load_pools' own
+    docstring on the fix this followed - made the interest pool ~2x bigger
+    AND each group up to ~100x bigger, since a single popular event can now
+    show a no_bid confirmation from every roster-pulled league that had
+    that player available; _consolidate_groups' per-group Python callback
+    went from ~19s to ~107s on the real pooled table as a result).
+
+    Reuses the SAME "mean of a size-1 group is just its own value" identity
+    already exploited in target_pct/_CROSS_LEAGUE_POINTS_FEATURES elsewhere:
+    leagues_with_bid/leagues_eligible/consolidated_from_leagues and the
+    3 points-based features can all be computed with ONE uniform formula
+    regardless of group size (verified: gives byte-identical results to the
+    old function's explicit size==1 special case, since a 1-element mean/
+    n_unique/sorted-set IS that element). o_league_detail is the one
+    genuinely size-gated field (see consolidate_cross_league_events' own
+    docstring: a size-1 group's row already directly IS its one league's
+    record, so attaching a redundant o_league_detail even when that one
+    league happens to be The O League would show real data the original
+    function deliberately never attached at group size 1 - see the
+    pl.when(_group_size > 1 & ...) guard below, not just "if O League is in
+    the group") - a `.get("o_league_detail")` consumer can't tell "key
+    absent" from "key present with value None" apart anyway, so nothing
+    else here needs a group-size branch, just this one field's VALUE.
+
+    consolidated_from_leagues IS attached unconditionally here (even at
+    group size 1, unlike the old function) - confirmed safe: the only
+    interest-pool reader of that field, _backing_count, checks
+    "leagues_eligible" in r FIRST, which consolidate_cross_league_events
+    already set unconditionally for every interest row regardless of group
+    size, so it never falls through to consolidated_from_leagues for an
+    interest row at all."""
+    priority = pl.col("signal").replace_strict({"won": 0, "outbid": 1, "other_failure": 2, "no_bid": 3}, default=99)
+    ranked = df.with_columns(priority.rank(method="ordinal").over(_CONSOLIDATE_KEYS).alias("_rank"))
+    representative = ranked.filter(pl.col("_rank") == 1).drop("_rank", _ORIG_IDX, _IS_SYNTHETIC)
+
+    agg = df.group_by(_CONSOLIDATE_KEYS, maintain_order=True).agg(
+        pl.len().alias("_group_size"),
+        pl.col("source_league_id").n_unique().alias("leagues_eligible"),
+        pl.col("source_league_id").filter(pl.col("signal") != "no_bid").n_unique().alias("leagues_with_bid"),
+        pl.col("source_league_id").unique().sort().alias("consolidated_from_leagues"),
+        pl.col("signal").filter(pl.col("source_league_id") == O_LEAGUE_ID).first().alias("_o_signal"),
+        pl.col("bid_amount_dollars").filter(pl.col("source_league_id") == O_LEAGUE_ID).first().alias("_o_bid"),
+        *[pl.col(f).mean().alias(f"_avg_{f}") for f in _CROSS_LEAGUE_POINTS_FEATURES],
+    )
+
+    merged = representative.join(agg, on=_CONSOLIDATE_KEYS, how="left")
+    merged = merged.with_columns([pl.col(f"_avg_{f}").alias(f) for f in _CROSS_LEAGUE_POINTS_FEATURES])
+    o_league_detail = (
+        pl.when((pl.col("_group_size") > 1) & pl.col("_o_signal").is_not_null())
+        .then(
+            pl.struct(
+                pl.col("_o_signal").alias("signal"),
+                pl.when(pl.col("_o_signal") == "won").then(pl.col("_o_bid")).otherwise(None).alias("bid_dollars"),
+            )
+        )
+        .otherwise(None)
+    )
+    merged = merged.with_columns(o_league_detail.alias("o_league_detail"))
+    merged = merged.drop([f"_avg_{f}" for f in _CROSS_LEAGUE_POINTS_FEATURES] + ["_group_size", "_o_signal", "_o_bid"])
+    return merged.to_dicts()
+
+
 def _consolidate_groups(df: "pl.DataFrame", *, is_price: bool) -> list[dict]:
-    """Same idea as _stage1_group/_interest_group (existing, unchanged
-    consolidate_cross_league_events run on one small group at a time, never
-    the whole pool), but via plain group_by ITERATION rather than
-    map_groups - consolidate_cross_league_events deliberately returns
-    differently-SHAPED dicts depending on group size (a single-league event
-    skips consolidated_from_leagues/o_league_detail/leagues_with_bid/
-    consolidated_target_pct entirely, a multi-league one adds them - see its
-    own docstring), which map_groups can't reassemble (it needs every
+    """PRICE side only now (see load_pools - the interest side moved to
+    _consolidate_interest_vectorized once the no_bid fix made this
+    function's per-group Python callback too slow there, see that
+    function's own docstring). Still fine here: the price pool is won-only
+    (~19K rows on the real pooled table, unaffected by that fix - no_bid
+    rows can never be signal=="won"), so a Python callback per group stays
+    comfortably fast at this scale.
+
+    Runs the existing, unchanged consolidate_cross_league_events on one
+    small group at a time (never the whole pool) via plain group_by
+    ITERATION rather than map_groups - consolidate_cross_league_events
+    deliberately returns differently-SHAPED dicts depending on group size
+    (a single-league event skips consolidated_from_leagues/o_league_detail/
+    consolidated_target_pct entirely, a multi-league one adds them - see
+    its own docstring), which map_groups can't reassemble (it needs every
     group's returned DataFrame to share one schema). Padding the missing
     keys with None to force a uniform schema was considered and rejected -
     target_pct() checks `"consolidated_target_pct" in r`, not `r.get(...)`,
     specifically to distinguish a real consolidated value from none at all,
     so a padded None would silently change its behavior. Iterating and
-    collecting into a plain Python list sidesteps the whole problem - the
-    final pool is only ~tens of thousands of rows regardless (see load_pools'
-    docstring), so holding it as a plain list[dict] here is exactly as cheap
-    as it already was for every other consumer of interest_rows/price_rows."""
+    collecting into a plain Python list sidesteps the whole problem."""
     out: list[dict] = []
     for _, group_df in df.group_by(_CONSOLIDATE_KEYS, maintain_order=True):
         group_rows = [{k: v for k, v in r.items() if k not in (_ORIG_IDX, _IS_SYNTHETIC)} for r in group_df.to_dicts()]
@@ -936,18 +1005,26 @@ def load_pools(table_path: Path) -> tuple[list[dict], list[dict], dict[tuple, li
     `all_rows = json.loads(table_path.read_text())` chain. table_path is a
     Parquet file (see tools/faab_history/build_training_table.py).
 
-    The filter, synthetic-win promotion, and interest dedupe steps run as
-    native polars expressions across the WHOLE pool at once (see
-    _promote_synthetic_wins/_dedupe_for_interest_vectorized) rather than
-    the existing dict-based load_trainable_rows/add_synthetic_price_wins/
-    dedupe_events_for_interest run per group - those stay correct at any
-    scale (see tests/test_faab_ingest_parity.py) but a Python callback per
-    group is too slow once there are hundreds of thousands of groups (this
-    table's real (league, event) count). Only consolidate_cross_league_
-    events (the final step, on the already-shrunk-to-~44K/~26K-row pool -
-    see below) still runs the actual unchanged function, since a Python
-    callback per group is fine at that scale and its logic (differently-
-    shaped output dicts depending on group size) doesn't vectorize cleanly.
+    The filter, synthetic-win promotion, interest dedupe, AND interest-side
+    consolidation steps all run as native polars expressions across the
+    WHOLE pool at once (see _promote_synthetic_wins/
+    _dedupe_for_interest_vectorized/_consolidate_interest_vectorized)
+    rather than the existing dict-based load_trainable_rows/
+    add_synthetic_price_wins/dedupe_events_for_interest/
+    consolidate_cross_league_events run per group - those stay correct at
+    any scale (see tests/test_faab_ingest_parity.py, which every vectorized
+    twin is checked against) but a Python callback per group is too slow at
+    this table's real scale, especially for the interest pool once no_bid
+    rows are correctly included (hundreds of thousands of (league, event)
+    groups, some individually huge - a popular player can show a no_bid
+    confirmation from every roster-pulled league that had him available).
+    Only the PRICE side's final consolidate_cross_league_events call (via
+    _consolidate_groups) still runs the actual unchanged function - the
+    price pool is won-only (~19K rows on the real table) and was never
+    affected by the no_bid fix, so a Python callback per group stays
+    comfortably fast there, and its logic (differently-shaped output dicts
+    depending on group size) doesn't vectorize as cleanly as the interest
+    side's does.
 
     Regrouping by a DIFFERENT key at each stage (first per-(league, event)
     for dedupe/synthetic-win promotion, then per-event across leagues for
@@ -998,7 +1075,7 @@ def load_pools(table_path: Path) -> tuple[list[dict], list[dict], dict[tuple, li
     interest_deduped = _dedupe_for_interest_vectorized(trainable_df.filter(pl.col("week") != 1)).sort(
         [_IS_SYNTHETIC, _ORIG_IDX]
     )
-    interest_rows = _consolidate_groups(interest_deduped, is_price=False)
+    interest_rows = _consolidate_interest_vectorized(interest_deduped)
     price_rows = _consolidate_groups(trainable_df.filter(pl.col("signal") == "won"), is_price=True)
 
     return interest_rows, price_rows, event_won_rows_index
