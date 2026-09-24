@@ -617,6 +617,11 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 .trade-verdict { font-size: 16px; font-weight: 700; margin: 10px 0; }
 
 .heat-cell { text-align: center; font-variant-numeric: tabular-nums; color: #111; }
+/* Starting/Depth sub-line inside a heat-cell (positionValueLeagueTable) -
+   dims via opacity, not a muted color token, since a fixed grey reads fine
+   on the plain table background .muted is normally used against but loses
+   contrast on heat-cell's own saturated red/green fills. */
+.heat-sub { font-size: 10.5px; opacity: 0.72; }
 /* Rounded only on Schedule's own score cells (the win-probability-adjacent
    ones) - Team Strength, Start/Sit's ROS opponent grid, and the Matchups
    tab share this same class but stay square-cornered. */

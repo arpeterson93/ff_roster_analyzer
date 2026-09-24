@@ -102,7 +102,6 @@ function commonColumns(data, watched) {
 // ---------- Overview ----------
 
 function overviewColumns(data) {
-  const yourTeamId = getYourTeam(data.meta.slug);
   const cw = data.meta.current_week;
   // Set by engine/pipeline.py's _compute_faab_estimates whenever
   // pull_current_week_bids.py actually ran for this week (reserved "_meta"
@@ -158,7 +157,14 @@ function overviewColumns(data) {
         if (sameWeekAvailable) {
           const sw = est.same_week;
           if (sw?.conditional_price) {
-            return `<span class="faab-live" title="Actual cross-league bid this week">${fmt(sw.conditional_price.median * 100, 1)}%</span>`;
+            // A real median of $0 (common - most winning claims are
+            // uncontested) renders as "0.0%" here, one decimal place
+            // different from the confirmed-no-activity case's plain "0%"
+            // below - not enough on its own to tell the two apart at a
+            // glance, so the tooltip spells out the real league count
+            // rather than leaving it to that single character.
+            const title = `Actual cross-league bid this week - ${sw.leagues_with_activity} other league${sw.leagues_with_activity === 1 ? "" : "s"} had activity on him`;
+            return `<span class="faab-live" title="${escapeHtml(title)}">${fmt(sw.conditional_price.median * 100, 1)}%</span>`;
           }
           // Puller ran and found literally nothing on this player - a real
           // zero, not "unknown" - EXCEPT when there's real activity still
@@ -166,7 +172,7 @@ function overviewColumns(data) {
           // case falls through to the historical estimate below since
           // there's no real price to show yet.
           if (!sw) {
-            return `<span class="faab-live" title="No real cross-league bids on this player this week">0%</span>`;
+            return `<span class="faab-live" title="No other pooled league had any activity on this player this week">0%</span>`;
           }
         }
         // below_relevance_threshold means the model never actually ran a
@@ -190,24 +196,17 @@ function overviewColumns(data) {
         // rate (see same_week_signal's own docstring), so INT stays on the
         // historical model whenever there WAS activity this week.
         if (sameWeekAvailable && !est.same_week) {
-          return `<span class="faab-live" title="No real cross-league bids on this player this week">0%</span>`;
+          return `<span class="faab-live" title="No other pooled league had any activity on this player this week">0%</span>`;
         }
         if (est.below_relevance_threshold) return `<span class="muted" title="Not enough recent usage to model - see FAAB Lab tab">–</span>`;
         const pct = (est.bid_probability || {}).comp_based_median;
         return `${fmt(pct * 100, 0)}%`;
       },
     },
-    ...(yourTeamId !== null
-      ? [{
-          key: "_fa_value", label: "NMD",
-          fmt: (_v, p) => {
-            if (p.fantasy_team_id !== null) return "–";
-            const teamValues = (data.faValues || {})[String(yourTeamId)] || {};
-            const gain = teamValues[p.id];
-            return gain === undefined ? "–" : `${gain >= 0 ? "+" : ""}${fmt(gain, 1)}`;
-          },
-        }]
-      : []),
+    {
+      key: "_fa_value", label: "NMD", title: "Points above replacement - a rostered player's own current starting/depth value, or a free agent's value against the rest of the pool at his position",
+      fmt: (_v, p) => (p.value_delta === undefined || p.value_delta === null ? "–" : `${p.value_delta >= 0 ? "+" : ""}${fmt(p.value_delta, 1)}`),
+    },
   ];
 }
 
@@ -327,10 +326,7 @@ function sortValue(p, key, data, filters) {
     return pct === undefined || pct === null || Number.isNaN(pct) ? 0 : pct;
   }
   if (key === "_fa_value") {
-    const yourTeamId = getYourTeam(data.meta.slug);
-    if (yourTeamId === null || p.fantasy_team_id !== null) return -Infinity;
-    const v = ((data.faValues || {})[String(yourTeamId)] || {})[p.id];
-    return v === undefined ? -Infinity : v;
+    return p.value_delta === undefined || p.value_delta === null ? -Infinity : p.value_delta;
   }
   if (key === "_snap_pct") return snapPct(p, filters.statsWeek, cw) ?? -Infinity;
   if (key === "_att_pct") return attPct(p, filters.statsWeek, cw) ?? -Infinity;

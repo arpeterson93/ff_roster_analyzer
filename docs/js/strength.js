@@ -1,6 +1,7 @@
 import { fmt, escapeHtml, getYourTeam, setYourTeam } from "./state.js";
 import { colorForRatio, teamLabel } from "./colors.js";
 import { openPlayerModal } from "./playermodal.js";
+import { buildPlayersMap, buildFreeAgentsByPos } from "./tradeui.js";
 
 function teamSelect(data, slug, selectedId) {
   const options = data.teams
@@ -69,15 +70,19 @@ function computeTotalStrength(data, team) {
   return { ppw, vs_avg: totalFor(team), rank };
 }
 
+// Starting value specifically, not the blended Total - shows how much this
+// player has actually been WINNING his own starting slot by, week to week
+// (0 in a week he sat, per position_value_by_player - a real bench week,
+// not a modeling gap).
 function trendSparkline(weekly) {
   if (!weekly || !weekly.length) return "";
-  const values = weekly.map((w) => w.value_delta);
+  const values = weekly.map((w) => w.starting_value);
   const maxAbs = Math.max(1, ...values.map((v) => Math.abs(v)));
   const bars = weekly
     .map((w) => {
-      const heightPct = Math.max(4, (Math.abs(w.value_delta) / maxAbs) * 100);
-      const ratio = 0.5 + (w.value_delta / maxAbs) * 0.5;
-      return `<div class="spark-bar" style="height:${heightPct}%; background:${colorForRatio(ratio)}" title="Wk ${w.week}: ${fmt(w.value_delta, 1)}"></div>`;
+      const heightPct = Math.max(4, (Math.abs(w.starting_value) / maxAbs) * 100);
+      const ratio = 0.5 + (w.starting_value / maxAbs) * 0.5;
+      return `<div class="spark-bar" style="height:${heightPct}%; background:${colorForRatio(ratio)}" title="Wk ${w.week}: ${fmt(w.starting_value, 1)}"></div>`;
     })
     .join("");
   return `<div class="sparkline">${bars}</div>`;
@@ -169,6 +174,84 @@ function leagueWideTable(data, yourTeamId) {
   return `<table>${header}${rows}</table>`;
 }
 
+// Team x Position heatmap of the NEW replacement-value calc (see
+// docs/js/trade.js's positionValueMatrix docstring for the full
+// derivation) - the same {startingValue, depthValue, total} the Trade
+// Calculator's own "Team value" panel shows for whichever two teams are
+// picked there, computed here for EVERY team so a need/excess at a
+// position jumps out at a glance across the whole league. That function is
+// client-side only (never written into the pipeline JSON - see the
+// conversation this was built from), so this loops it once per team on
+// render rather than reading a precomputed field.
+//
+// Colored (like leagueWideTable above) by the spread WITHIN each
+// position's own column, not a fixed points scale shared across columns -
+// a wide-range position (RB) and a narrow one (K) would otherwise get
+// squeezed onto the same ruler. Color follows `total`; starting/depth ride
+// along as compact sub-text in the same cell rather than their own
+// columns - a separate column per position x {starting,depth,total} would
+// triple the column count and defeat the point of a quick-glance table.
+function positionValueLeagueTable(data, yourTeamId) {
+  const players = buildPlayersMap(data);
+  const freeAgentsByPos = buildFreeAgentsByPos(data);
+  const weeks = [];
+  for (let w = data.meta.current_week; w <= data.meta.final_week; w++) weeks.push(w);
+  const slots = data.meta.slots;
+  const eligibility = data.meta.slot_eligibility;
+
+  // Same "every base position any slot is eligible for" derivation
+  // positionValueMatrix itself uses internally, so this table's own column
+  // set always matches whatever position buckets the matrix can return.
+  const positions = [];
+  Object.keys(eligibility).forEach((base) => {
+    (eligibility[base] || []).forEach((pos) => {
+      if (positions.indexOf(pos) === -1) positions.push(pos);
+    });
+  });
+
+  const matrices = new Map();
+  data.teams.forEach((t) => {
+    const teamPlayerIds = data.players.filter((p) => p.fantasy_team_id === t.team_id).map((p) => p.id);
+    matrices.set(t.team_id, window.FFTrade.positionValueMatrix({ teamPlayerIds, players, freeAgentsByPos, weeks, slots, eligibility }));
+  });
+
+  const totalFor = (m) => positions.reduce((acc, pos) => acc + (m[pos] ? m[pos].total : 0), 0);
+  const ranges = {};
+  positions.forEach((pos) => {
+    const vals = [...matrices.values()].map((m) => (m[pos] ? m[pos].total : 0));
+    ranges[pos] = { min: Math.min(...vals), max: Math.max(...vals) };
+  });
+  const totals = [...matrices.values()].map(totalFor);
+  const totalRange = { min: Math.min(...totals), max: Math.max(...totals) };
+
+  const header = `<tr><th>Team</th>${positions.map((p) => `<th>${p}</th>`).join("")}<th>Total</th></tr>`;
+  const rows = data.teams
+    .slice()
+    .sort((a, b) => totalFor(matrices.get(b.team_id)) - totalFor(matrices.get(a.team_id)))
+    .map((t) => {
+      const m = matrices.get(t.team_id);
+      const cells = positions
+        .map((pos) => {
+          const v = m[pos];
+          if (!v) return "<td>–</td>";
+          const { min, max } = ranges[pos];
+          const ratio = max > min ? (v.total - min) / (max - min) : 0.5;
+          return `<td class="heat-cell" style="background:${colorForRatio(ratio)}">
+            <div>${v.total >= 0 ? "+" : ""}${fmt(v.total, 1)}</div>
+            <div class="heat-sub" title="Starting / Depth">${v.startingValue >= 0 ? "+" : ""}${fmt(v.startingValue, 1)} / ${fmt(v.depthValue, 1)}</div>
+          </td>`;
+        })
+        .join("");
+      const total = totalFor(m);
+      const totalRatio = totalRange.max > totalRange.min ? (total - totalRange.min) / (totalRange.max - totalRange.min) : 0.5;
+      const totalCell = `<td class="heat-cell" style="background:${colorForRatio(totalRatio)}"><strong>${total >= 0 ? "+" : ""}${fmt(total, 1)}</strong></td>`;
+      const isYours = t.team_id === yourTeamId;
+      return `<tr class="${isYours ? "your-team-row" : ""}"><td>${isYours ? "<strong>" : ""}${escapeHtml(teamLabel(t))}${isYours ? "</strong>" : ""}</td>${cells}${totalCell}</tr>`;
+    })
+    .join("");
+  return `<table>${header}${rows}</table>`;
+}
+
 function wirePlayerClicks(container, data) {
   container.querySelectorAll("tr[data-player-id]").forEach((row) => {
     row.addEventListener("click", () => {
@@ -187,8 +270,8 @@ export function renderStrength(container, data, slug) {
       <div class="select-row"><label>Your team:</label> ${teamSelect(data, slug, team.team_id)}</div>
       <h2>Starting Lineup vs. League Avg</h2>
       ${positionBars(team.slot_strength, computeTotalStrength(data, team))}
-      <h3>Depth (next-man-down value)</h3>
-      <div class="table-wrap"><table><thead><tr><th>Slot</th><th>Player</th><th title="Lineup points your team loses if he's dropped outright, backfilled by whichever teammate OR available free agent projects best in his slot that week - whichever the optimizer actually prefers.">Value</th><th>Weekly trend</th></tr></thead><tbody>${depthTable(team.depth, data.playersById)}</tbody></table></div>
+      <h3>Depth (points above replacement)</h3>
+      <div class="table-wrap"><table><thead><tr><th>Slot</th><th>Player</th><th title="Points above the best available free agent for his slot/position - Starting weeks vs. Depth weeks blended (Depth discounted 50%). See his player card's own NMD week-by-week tab for the full split.">Value</th><th title="Starting value only, week by week - 0 in a week he sat, not a modeling gap.">Weekly trend</th></tr></thead><tbody>${depthTable(team.depth, data.playersById)}</tbody></table></div>
       <h3>Suggested pickups</h3>
       <div class="table-wrap">${pickupsTable(team.pickups, data.playersById)}</div>
       <h3>Trade targets</h3>
@@ -197,6 +280,11 @@ export function renderStrength(container, data, slug) {
     <div class="card card-medium">
       <h2>ROS Projected Points/Week</h2>
       <div class="table-wrap">${leagueWideTable(data, Number(team.team_id))}</div>
+    </div>
+    <div class="card card-medium">
+      <h2>Team Value (starting + depth, by position)</h2>
+      <p class="muted small">Points above replacement (best currently-available free agent) - same calc as the Trade Calculator's own "Team value" panel, computed here for every team at once. Green = excess value at that position, red = a real need. Each cell: total, with starting/depth split below it.</p>
+      <div class="table-wrap">${positionValueLeagueTable(data, Number(team.team_id))}</div>
     </div>
   `;
 

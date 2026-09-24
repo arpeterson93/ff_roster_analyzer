@@ -3,7 +3,7 @@ import { POSITION_COLOR, sortByPositionOrder, teamLabel } from "./colors.js";
 import { openPlayerModal } from "./playermodal.js";
 import { compareCheckboxHtml, wireCompareCheckboxes } from "./compare.js";
 
-function buildPlayersMap(data) {
+export function buildPlayersMap(data) {
   const map = {};
   data.players.forEach((p) => {
     const weekly = {};
@@ -29,7 +29,7 @@ function rosterIds(data, teamId) {
 // scored as a bigger loss/gain than the wire would actually allow. Built
 // once per render, not per evaluate() call - data.players doesn't change
 // while the calculator is open.
-function buildFreeAgentsByPos(data) {
+export function buildFreeAgentsByPos(data) {
   const byPos = {};
   data.players.forEach((p) => {
     if (p.fantasy_team_id !== null) return;

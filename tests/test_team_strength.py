@@ -2,14 +2,13 @@ import pytest
 
 from engine.team_strength import (
     PlayerCtx,
-    depth_values,
-    depth_values_by_week,
-    fa_values,
+    fa_pool_value,
     lineup_total,
     lineup_total_with_streaming,
     optimal_lineup_for_week_with_bye_fill,
     pickups,
     position_strength,
+    position_value_by_player,
     position_value_matrix,
     rank_and_compare,
     slot_strength,
@@ -31,55 +30,10 @@ def test_lineup_total_sums_over_weeks():
     assert total == pytest.approx(60.0)  # (20+10) * 2 weeks
 
 
-def test_depth_values_rb1_higher_than_rb2_with_steep_dropoff():
-    # 3 RBs on a 2-RB-slot team: RB1/RB2 both start, RB3 is a zero-value bench arm.
-    players = {
-        "rb1": _player("rb1", "RB", 20.0),
-        "rb2": _player("rb2", "RB", 15.0),
-        "rb3": _player("rb3", "RB", 2.0),
-    }
-    values = depth_values(["rb1", "rb2", "rb3"], players, {}, WEEKS, SLOTS, ELIGIBILITY)
-    assert values["rb1"]["value_delta"] > values["rb2"]["value_delta"] > 0
-    assert values["rb3"]["value_delta"] == pytest.approx(0.0)  # never starts either way
-
-
-def test_depth_values_by_week_spikes_on_starters_bye():
-    slots = {"RB": 1}
-    eligibility = {"RB": {"RB"}}
-    weeks = [1, 2]
-    players = {
-        "rb1": PlayerCtx(id="rb1", position="RB", ros_total=20.0, weekly={1: 20.0, 2: 0.0}),  # bye week 2
-        "rb2": PlayerCtx(id="rb2", position="RB", ros_total=10.0, weekly={1: 5.0, 2: 5.0}),
-    }
-    by_week = depth_values_by_week(["rb1", "rb2"], players, {}, weeks, slots, eligibility)
-    # rb2 is worthless while rb1 starts (week 1), but fully replaces the bye (week 2).
-    assert by_week["rb2"]["value_delta"][1] == pytest.approx(0.0)
-    assert by_week["rb2"]["value_delta"][2] == pytest.approx(5.0)
-    # summing the weekly breakdown must match depth_values()'s ROS total
-    ros = depth_values(["rb1", "rb2"], players, {}, weeks, slots, eligibility)
-    assert sum(by_week["rb2"]["value_delta"].values()) == pytest.approx(ros["rb2"]["value_delta"])
-
-
-def test_depth_values_waiver_backfill_reduces_value_delta():
-    # A rostered player's own consolidated value already accounts for the
-    # waiver wire - compare against the SAME roster with no free agents
-    # available at all, rather than two parallel fields on one call.
-    players = {
-        "rb1": _player("rb1", "RB", 20.0),
-        "rb2": _player("rb2", "RB", 15.0),
-    }
-    fa = _player("fa1", "RB", 18.0)  # a strong free agent backfill option
-    values_no_fa = depth_values(["rb1", "rb2"], players, {}, WEEKS, SLOTS, ELIGIBILITY)
-    values_with_fa = depth_values(["rb1", "rb2"], players, {"RB": [fa]}, WEEKS, SLOTS, ELIGIBILITY)
-    # losing rb1 (20 ppw starter) without backfill costs the full 20ppw*2wk;
-    # with an 18ppw free agent available, the loss is much smaller.
-    assert values_with_fa["rb1"]["value_delta"] < values_no_fa["rb1"]["value_delta"]
-
-
-def test_depth_values_by_week_prefers_bench_over_a_weaker_free_agent():
-    # A weak free agent is available, but the bench teammate outscores him
-    # every week - the free agent is only ADDED to the candidate pool, never
-    # forced into the lineup, so the bench teammate must still be named.
+def test_position_value_by_player_starter_scored_against_best_available_fa():
+    # rb1 starts (the only RB slot); rb2 is bench. Both scored against the
+    # single available free agent - rb1 as a STARTER (starting_value),
+    # rb2 as DEPTH (depth_value, floored at 0 if he'd lose to the FA too).
     slots = {"RB": 1}
     eligibility = {"RB": {"RB"}}
     weeks = [1, 2]
@@ -87,67 +41,68 @@ def test_depth_values_by_week_prefers_bench_over_a_weaker_free_agent():
         "rb1": PlayerCtx(id="rb1", position="RB", ros_total=40.0, weekly={1: 20.0, 2: 20.0}),
         "rb2": PlayerCtx(id="rb2", position="RB", ros_total=13.0, weekly={1: 5.0, 2: 8.0}),
     }
-    free_agents = {"RB": [PlayerCtx(id="fa_weak", position="RB", ros_total=2.0, weekly={1: 1.0, 2: 1.0})]}
-    by_week = depth_values_by_week(["rb1", "rb2"], players, free_agents, weeks, slots, eligibility)
-    rb1 = by_week["rb1"]
-    assert rb1["replacement_id"] == {1: "rb2", 2: "rb2"}
-    assert rb1["value_delta"][1] == pytest.approx(15.0)  # 20 - rb2's wk1 5
-    assert rb1["value_delta"][2] == pytest.approx(12.0)  # 20 - rb2's wk2 8
+    free_agents = {"RB": [PlayerCtx(id="fa1", position="RB", ros_total=12.0, weekly={1: 6.0, 2: 6.0})]}
+    result = position_value_by_player(["rb1", "rb2"], players, free_agents, weeks, slots, eligibility)
+    # rb1 starts every week, scored against fa1 (6 pts both weeks).
+    assert result["rb1"]["starting_value"] == pytest.approx((20 - 6) + (20 - 6))
+    assert result["rb1"]["depth_value"] == pytest.approx(0.0)
+    assert [w["replacement_id"] for w in result["rb1"]["weekly"]] == ["fa1", "fa1"]
+    # rb2 never starts (rb1 always wins the lone slot) - depth-scored against
+    # fa1 too, floored at 0 since he's below fa1 both weeks (5<6, but 8>6).
+    assert result["rb2"]["starting_value"] == pytest.approx(0.0)
+    assert result["rb2"]["depth_value"] == pytest.approx(0.0 + (8 - 6))
 
 
-def test_depth_values_by_week_names_a_free_agent_replacement_that_can_change_weekly():
-    # Two free agents whose better week flips: FA-A the better play in
-    # week 1, FA-B in week 2, both stronger than the bench teammate every
-    # week - the NAMED replacement must flip with it, not stay pinned to
-    # whichever one wins by season-long ros_total, and not fall back to the
-    # (weaker) bench teammate.
+def test_position_value_by_player_replacement_is_always_a_free_agent_never_a_teammate():
+    # Unlike the old lineup-delta engine, a starter's replacement level is
+    # ALWAYS the best free agent for his slot - even when a real bench
+    # teammate exists and outscores that free agent every week.
     slots = {"RB": 1}
     eligibility = {"RB": {"RB"}}
-    weeks = [1, 2]
-    players = {
-        "rb1": PlayerCtx(id="rb1", position="RB", ros_total=40.0, weekly={1: 20.0, 2: 20.0}),
-        "rb2": PlayerCtx(id="rb2", position="RB", ros_total=13.0, weekly={1: 5.0, 2: 8.0}),
-    }
-    free_agents = {
-        "RB": [
-            PlayerCtx(id="fa_a", position="RB", ros_total=10.0, weekly={1: 9.0, 2: 1.0}),
-            PlayerCtx(id="fa_b", position="RB", ros_total=8.0, weekly={1: 2.0, 2: 9.0}),
-        ]
-    }
-    by_week = depth_values_by_week(["rb1", "rb2"], players, free_agents, weeks, slots, eligibility)
-    rb1 = by_week["rb1"]
-    assert rb1["replacement_id"] == {1: "fa_a", 2: "fa_b"}
-    assert rb1["value_delta"][1] == pytest.approx(11.0)  # 20 - fa_a's wk1 9
-    assert rb1["value_delta"][2] == pytest.approx(11.0)  # 20 - fa_b's wk2 9
-
-
-def test_depth_values_by_week_value_delta_floored_at_zero():
-    # A free agent who genuinely beats a mediocre rostered player can make
-    # the candidate lineup score HIGHER than the real one even with that
-    # player gone - a real negative raw delta, floored to 0 rather than
-    # shown as a negative "value".
-    slots = {"RB": 1}
-    eligibility = {"RB": {"RB"}}
-    weeks = [1]
-    players = {"rb1": PlayerCtx(id="rb1", position="RB", ros_total=5.0, weekly={1: 5.0})}
-    free_agents = {"RB": [PlayerCtx(id="fa_better", position="RB", ros_total=12.0, weekly={1: 12.0})]}
-    by_week = depth_values_by_week(["rb1"], players, free_agents, weeks, slots, eligibility)
-    assert by_week["rb1"]["value_delta"][1] == pytest.approx(0.0)
-    assert by_week["rb1"]["replacement_id"][1] == "fa_better"
-
-
-def test_depth_values_by_week_replacement_id_none_when_bench_too_thin():
-    # No bench RB at all - dropping the only RB starter changes nothing
-    # about who else starts (nobody else is even RB-eligible).
-    slots = {"RB": 1, "WR": 1}
-    eligibility = {"RB": {"RB"}, "WR": {"WR"}}
     weeks = [1]
     players = {
         "rb1": PlayerCtx(id="rb1", position="RB", ros_total=20.0, weekly={1: 20.0}),
-        "wr1": PlayerCtx(id="wr1", position="WR", ros_total=10.0, weekly={1: 10.0}),
+        "rb2": PlayerCtx(id="rb2", position="RB", ros_total=15.0, weekly={1: 15.0}),  # strong bench teammate
     }
-    by_week = depth_values_by_week(["rb1", "wr1"], players, {}, weeks, slots, eligibility)
-    assert by_week["rb1"]["replacement_id"][1] is None
+    free_agents = {"RB": [PlayerCtx(id="fa_weak", position="RB", ros_total=2.0, weekly={1: 2.0})]}
+    result = position_value_by_player(["rb1", "rb2"], players, free_agents, weeks, slots, eligibility)
+    assert result["rb1"]["weekly"][0]["replacement_id"] == "fa_weak"
+    assert result["rb1"]["starting_value"] == pytest.approx(18.0)  # 20 - fa_weak's 2, not 20 - rb2's 15
+
+
+def test_position_value_by_player_true_bye_excluded_entirely():
+    slots = {"RB": 1}
+    eligibility = {"RB": {"RB"}}
+    weeks = [1, 2]
+    players = {"rb1": PlayerCtx(id="rb1", position="RB", ros_total=20.0, weekly={1: 20.0, 2: 0.0})}
+    result = position_value_by_player(["rb1"], players, {}, weeks, slots, eligibility)
+    assert result["rb1"]["weekly"][1] == {"week": 2, "starting_value": 0.0, "depth_value": 0.0, "replacement_id": None}
+
+
+def test_position_value_by_player_sums_match_position_value_matrix():
+    # Direct invariant: position_value_matrix is now a thin wrapper that
+    # sums this per-player breakdown by position - the two must agree.
+    slots = {"RB": 1, "WR": 1, "FLEX": 1}
+    eligibility = {"RB": {"RB"}, "WR": {"WR"}, "FLEX": {"RB", "WR"}}
+    weeks = [1, 2, 3]
+    players = {
+        "rb1": PlayerCtx(id="rb1", position="RB", ros_total=60.0, weekly={1: 20.0, 2: 22.0, 3: 18.0}),
+        "rb2": PlayerCtx(id="rb2", position="RB", ros_total=30.0, weekly={1: 10.0, 2: 11.0, 3: 9.0}),
+        "wr1": PlayerCtx(id="wr1", position="WR", ros_total=45.0, weekly={1: 15.0, 2: 16.0, 3: 14.0}),
+        "wr2": PlayerCtx(id="wr2", position="WR", ros_total=15.0, weekly={1: 5.0, 2: 4.0, 3: 6.0}),
+    }
+    free_agents = {
+        "RB": [PlayerCtx(id="fa_rb", position="RB", ros_total=24.0, weekly={1: 8.0, 2: 8.0, 3: 8.0})],
+        "WR": [PlayerCtx(id="fa_wr", position="WR", ros_total=21.0, weekly={1: 7.0, 2: 7.0, 3: 7.0})],
+    }
+    team = ["rb1", "rb2", "wr1", "wr2"]
+    by_player = position_value_by_player(team, players, free_agents, weeks, slots, eligibility)
+    by_position = position_value_matrix(team, players, free_agents, weeks, slots, eligibility)
+    for pos in ("RB", "WR"):
+        starting_sum = sum(v["starting_value"] for pid, v in by_player.items() if players[pid].position == pos)
+        depth_sum = sum(v["depth_value"] for pid, v in by_player.items() if players[pid].position == pos)
+        assert starting_sum == pytest.approx(by_position[pos]["starting_value"])
+        assert depth_sum == pytest.approx(by_position[pos]["depth_value"])
 
 
 def test_position_strength_attributes_flex_to_real_position():
@@ -268,45 +223,47 @@ def test_streaming_backfills_a_lone_kickers_bye_week():
     assert streamed == pytest.approx(18.0)  # week1 k1(10) + week2 streamed FA(8)
 
 
-def test_pickups_does_not_suggest_covering_a_bye_the_baseline_already_assumes():
-    # Rostering a single kicker with a bye week should NOT surface as a
-    # "pickup" once the baseline already assumes bye-week streaming - the
-    # only free agent kicker available is exactly the one the baseline
-    # would already stream in, so actually rostering him full-time gains ~0.
-    k_slots = {"K": 1}
-    k_eligibility = {"K": {"K"}}
-    weeks = [1, 2]
-    players = {"k1": PlayerCtx(id="k1", position="K", ros_total=10.0, weekly={1: 10.0, 2: 0.0})}
-    backup_fa = PlayerCtx(id="k_fa", position="K", ros_total=16.0, weekly={1: 8.0, 2: 8.0})
-    free_agents = {"K": [backup_fa]}
-
-    result = pickups(["k1"], players, free_agents, weeks, k_slots, k_eligibility, max_pickups=5)
-    assert result == []
-
-
-def test_fa_values_includes_negative_gains_unlike_pickups():
-    players = {"rb1": _player("rb1", "RB", 20.0), "rb2": _player("rb2", "RB", 4.0)}
-    strong_fa = _player("fa_strong", "RB", 25.0)
-    weak_fa = _player("fa_weak", "RB", 1.0)
-    free_agents = {"RB": [strong_fa, weak_fa]}
-    values = fa_values(["rb1", "rb2"], players, free_agents, WEEKS, SLOTS, ELIGIBILITY)
-    assert values["fa_strong"]["gain"] > 0
-    assert values["fa_weak"]["gain"] <= 0  # worse than the worst rostered RB
-    # pickups() filters fa_weak out; fa_values() keeps it visible.
-    pickup_result = pickups(["rb1", "rb2"], players, free_agents, WEEKS, SLOTS, ELIGIBILITY, max_pickups=5)
-    assert {c["add"] for c in pickup_result} == {"fa_strong"}
+def test_fa_pool_value_leave_one_out_credits_the_best_fa_against_the_second_best():
+    # The single best FA at a position must be compared against someone
+    # ELSE, not himself - otherwise he'd always score exactly 0.
+    free_agents = {
+        "RB": [
+            PlayerCtx(id="fa_best", position="RB", ros_total=20.0, weekly={1: 20.0}),
+            PlayerCtx(id="fa_second", position="RB", ros_total=12.0, weekly={1: 12.0}),
+        ]
+    }
+    result = fa_pool_value(free_agents, [1])
+    assert result["fa_best"]["depth_value"] == pytest.approx(8.0)  # 20 - fa_second's 12
+    assert result["fa_best"]["weekly"][0]["replacement_id"] == "fa_second"
+    # fa_second is compared against fa_best (the only OTHER RB) - he's worse, floored at 0.
+    assert result["fa_second"]["depth_value"] == pytest.approx(0.0)
+    assert result["fa_second"]["starting_value"] == pytest.approx(0.0)  # never a starter, by definition
 
 
-def test_fa_values_weekly_breakdown_sums_to_gain():
-    # Same sum-check pattern as test_depth_values_by_week_spikes_on_starters_
-    # bye above - a player modal's NMD week-by-week view is only trustworthy
-    # if the weekly numbers it shows actually add up to the headline total.
-    players = {"rb1": _player("rb1", "RB", 20.0), "rb2": _player("rb2", "RB", 4.0)}
-    strong_fa = _player("fa_strong", "RB", 25.0)
-    free_agents = {"RB": [strong_fa]}
-    values = fa_values(["rb1", "rb2"], players, free_agents, WEEKS, SLOTS, ELIGIBILITY)
-    assert sum(values["fa_strong"]["weekly"].values()) == pytest.approx(values["fa_strong"]["gain"])
-    assert set(values["fa_strong"]["weekly"]) == set(WEEKS)
+def test_fa_pool_value_scales_by_depth_weight():
+    free_agents = {
+        "RB": [
+            PlayerCtx(id="fa_a", position="RB", ros_total=20.0, weekly={1: 20.0}),
+            PlayerCtx(id="fa_b", position="RB", ros_total=10.0, weekly={1: 10.0}),
+        ]
+    }
+    result = fa_pool_value(free_agents, [1], depth_weight=0.5)
+    assert result["fa_a"]["value_delta"] == pytest.approx(0.5 * 10.0)  # 0.5 * (20 - 10)
+
+
+def test_fa_pool_value_never_widens_to_flex_stays_position_only():
+    # A separate WR pool never enters an RB's comparison - fa_pool_value only
+    # ever takes a free_agents_by_pos dict, no slots/eligibility, so there's
+    # no FLEX concept for it to widen into in the first place.
+    free_agents = {
+        "RB": [PlayerCtx(id="fa_rb", position="RB", ros_total=10.0, weekly={1: 10.0})],
+        "WR": [PlayerCtx(id="fa_wr", position="WR", ros_total=50.0, weekly={1: 50.0})],
+    }
+    result = fa_pool_value(free_agents, [1])
+    # fa_rb is the ONLY RB - no other RB to compare against (best_other
+    # defaults to 0), so his full raw value counts regardless of the much
+    # higher-scoring WR sitting in a different position bucket.
+    assert result["fa_rb"]["depth_value"] == pytest.approx(10.0)
 
 
 def test_pickups_prefers_same_position_drop_over_unrelated_bench_player():
@@ -315,73 +272,103 @@ def test_pickups_prefers_same_position_drop_over_unrelated_bench_player():
     # (keeping two kickers while cutting an unrelated skill player).
     slots = {"K": 1, "WR": 1}
     eligibility = {"K": {"K"}, "WR": {"WR"}}
+    weeks = [1, 2]
     players = {
         "k_weak": _player("k_weak", "K", 5.0),
         "wr_bench": _player("wr_bench", "WR", 1.0),
     }
     strong_fa_k = _player("k_strong", "K", 15.0)
-    result = pickups(["k_weak", "wr_bench"], players, {"K": [strong_fa_k]}, WEEKS, slots, eligibility, max_pickups=5)
+    free_agents = {"K": [strong_fa_k]}
+    team_values = position_value_by_player(["k_weak", "wr_bench"], players, free_agents, weeks, slots, eligibility)
+    fa_values = fa_pool_value(free_agents, weeks)
+    result = pickups(["k_weak", "wr_bench"], players, team_values, fa_values, free_agents, max_pickups=5)
     assert len(result) == 1
     assert result[0]["add"] == "k_strong"
     assert result[0]["drop"] == "k_weak"
 
 
-def test_pickups_only_returns_positive_gain_sorted():
-    players = {"rb1": _player("rb1", "RB", 5.0), "rb2": _player("rb2", "RB", 4.0)}
-    strong_fa = _player("fa_strong", "RB", 25.0)
+def test_pickups_excludes_fa_that_does_not_beat_the_weakest_droppable():
+    players = {"rb1": _player("rb1", "RB", 20.0), "rb2": _player("rb2", "RB", 15.0)}
     weak_fa = _player("fa_weak", "RB", 1.0)
-    free_agents = {"RB": [strong_fa, weak_fa]}
-    result = pickups(["rb1", "rb2"], players, free_agents, WEEKS, SLOTS, ELIGIBILITY, max_pickups=5)
-    assert len(result) == 1  # only the strong FA beats a rostered starter
-    assert result[0]["add"] == "fa_strong"
-    assert result[0]["gain"] > 0
+    free_agents = {"RB": [weak_fa]}
+    team_values = position_value_by_player(["rb1", "rb2"], players, free_agents, WEEKS, SLOTS, ELIGIBILITY)
+    fa_values = fa_pool_value(free_agents, WEEKS)
+    result = pickups(["rb1", "rb2"], players, team_values, fa_values, free_agents, max_pickups=5)
+    assert result == []
+
+
+def test_pickups_excludes_ir_players_from_the_droppable_pool():
+    slots = {"RB": 1}
+    eligibility = {"RB": {"RB"}}
+    weeks = [1, 2]
+    players = {
+        "rb1": _player("rb1", "RB", 20.0),  # the starter
+        "rb2": _player("rb2", "RB", 3.0),  # the obvious drop, but on IR
+    }
+    strong_fa = _player("fa_strong", "RB", 30.0)
+    free_agents = {"RB": [strong_fa]}
+    team_values = position_value_by_player(["rb1", "rb2"], players, free_agents, weeks, slots, eligibility)
+    fa_values = fa_pool_value(free_agents, weeks)
+    result = pickups(
+        ["rb1", "rb2"], players, team_values, fa_values, free_agents, max_pickups=5, ir_player_ids=frozenset(["rb2"])
+    )
+    # rb2 (the real drop candidate) is unavailable - rb1 must be named instead.
+    assert len(result) == 1
+    assert result[0]["drop"] == "rb1"
 
 
 # --- trade_targets fairness ratio: both sides > 0 alone lets through wildly
-# lopsided "trades" (send a duplicate kicker, take back a real bench RB) -
-# see the conversation this was built from. Two positions (RB/K) with a weak
-# K free-agent pool, week-varying RB output (a bye week), and 3 weeks so a
-# "throwaway" bench RB can earn real value by covering a bye - the same shape
-# a real roster produces, not just a toy constant-ppw swap.
+# lopsided "trades" - see the conversation this was built from. Now scored
+# by position_value_team_total (points above replacement), not a lineup-
+# total delta - a "change of scenery" shape: a_k2 is genuinely good but
+# buried on the bench behind a_k1 (discounted 50% as depth), while B has NO
+# kicker at all, so receiving a_k2 makes him B's full-value STARTER;
+# symmetrically, b_rb2 is a real RB but buried behind a dominant b_rb1
+# (discounted depth), becoming pure discounted depth on A's side too (A's
+# own a_rb1 is even bigger, so it never displaces him as starter either).
 _TRADE_SLOTS = {"RB": 1, "K": 1}
 _TRADE_ELIGIBILITY = {"RB": {"RB"}, "K": {"K"}}
-_TRADE_WEEKS = [1, 2, 3]
+_TRADE_WEEKS = [1, 2]
+_TRADE_FA = {
+    "RB": [PlayerCtx(id="fa_rb", position="RB", ros_total=10.0, weekly={1: 5.0, 2: 5.0})],
+    "K": [PlayerCtx(id="fa_k", position="K", ros_total=2.0, weekly={1: 1.0, 2: 1.0})],
+}
 
 
 def _wk(pid, pos, weekly: dict) -> PlayerCtx:
     return PlayerCtx(id=pid, position=pos, ros_total=sum(weekly.values()), weekly=weekly)
 
 
-def _trade_setup(a_k2_ppw: float):
-    """My team: a real RB1, a weak everyday RB2 (covers RB1's bye), and TWO
-    kickers - a starter and a near-duplicate backup (a_k2) I'd give away.
-    Partner: a real RB1 plus a genuinely idle bench RB2 (never once beats
-    RB1, even on RB1's off weeks - not a real trade chip on its own) and NO
-    rostered kicker at all (relies on a weak FA kicker). a_k2_ppw controls
-    how much the kicker side of the trade is worth to the partner, without
-    touching my own side's gain at all."""
+def _trade_setup(a_k2_ppw: float, b_rb2_ppw: float):
+    """My team (A): a dominant RB1 (a_rb1=20, never displaced) and a
+    dominant starting kicker (a_k1=10, never displaced by a_k2), plus a_k2 -
+    a real bench kicker (tunable ppw) I'd give away, discounted 50% as
+    depth behind a_k1. Partner (B): a dominant RB1 (b_rb1=15, never
+    displaced by b_rb2) plus b_rb2 - a real bench RB (tunable ppw),
+    discounted 50% as depth behind b_rb1 - and NO rostered kicker at all,
+    so a_k2 would become B's own full-value STARTER if traded there."""
     players = {
-        "a_rb1": _wk("a_rb1", "RB", {1: 20.0, 2: 0.0, 3: 20.0}),  # bye week 2
-        "a_rb2": _wk("a_rb2", "RB", {1: 1.0, 2: 1.0, 3: 1.0}),
-        "a_k1": _wk("a_k1", "K", {1: 5.0, 2: 5.0, 3: 5.0}),
-        "a_k2": _wk("a_k2", "K", {w: a_k2_ppw for w in _TRADE_WEEKS}),
-        "b_rb1": _wk("b_rb1", "RB", {1: 10.0, 2: 10.0, 3: 10.0}),
-        "b_rb2": _wk("b_rb2", "RB", {1: 9.0, 2: 9.0, 3: 9.0}),
+        "a_rb1": _wk("a_rb1", "RB", {1: 20.0, 2: 20.0}),
+        "a_k1": _wk("a_k1", "K", {1: 10.0, 2: 10.0}),
+        "a_k2": _wk("a_k2", "K", {1: a_k2_ppw, 2: a_k2_ppw}),
+        "b_rb1": _wk("b_rb1", "RB", {1: 15.0, 2: 15.0}),
+        "b_rb2": _wk("b_rb2", "RB", {1: b_rb2_ppw, 2: b_rb2_ppw}),
     }
-    free_agents = {"K": [_wk("fa_k", "K", {1: 0.5, 2: 0.5, 3: 0.5})]}
-    team_a = ["a_rb1", "a_rb2", "a_k1", "a_k2"]
+    team_a = ["a_rb1", "a_k1", "a_k2"]
     team_b = ["b_rb1", "b_rb2"]
-    return players, free_agents, team_a, team_b
+    return players, team_a, team_b
 
 
 def test_trade_targets_excludes_a_lopsided_trade_below_the_fairness_ratio():
-    # a_k2 barely edges out the FA kicker (0.6 > 0.5) - the partner gains
-    # almost nothing from it, while I gain a lot from b_rb2 covering my RB1's
-    # bye (real, sizeable gain). Both sides are positive but nowhere close.
-    players, free_agents, team_a, team_b = _trade_setup(a_k2_ppw=0.6)
+    # a_k2=3 (+2 over the K bar, discounted to +1 as MY depth) vs.
+    # b_rb2=8.9 (+3.9 over the RB bar, discounted to +1.9 as depth either
+    # side) - my gain (1.9) dwarfs the partner's gain from a_k2 becoming
+    # their full-value starter (2*2 - 3.9 = 0.1). Both positive, ratio
+    # ~0.05, nowhere near 0.5.
+    players, team_a, team_b = _trade_setup(a_k2_ppw=3.0, b_rb2_ppw=8.9)
     results = trade_targets(
         team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=players,
-        free_agents_by_pos=free_agents, weeks=_TRADE_WEEKS, slots=_TRADE_SLOTS,
+        free_agents_by_pos=_TRADE_FA, weeks=_TRADE_WEEKS, slots=_TRADE_SLOTS,
         eligibility=_TRADE_ELIGIBILITY, max_trade_targets=20, fairness_ratio=0.5,
     )
     matches = [r for r in results if r["give"] == ["a_k2"] and r["get"] == ["b_rb2"]]
@@ -389,13 +376,13 @@ def test_trade_targets_excludes_a_lopsided_trade_below_the_fairness_ratio():
 
 
 def test_trade_targets_includes_a_trade_within_the_fairness_ratio():
-    # Same roster shape, but a_k2 is a real, useful kicker - the partner's
-    # gain (a real kicker over a weak FA stream) is now comparable in size
-    # to my own gain, so the trade clears the fairness bar.
-    players, free_agents, team_a, team_b = _trade_setup(a_k2_ppw=4.0)
+    # Same a_k2, but b_rb2=8.0 (+3 over the RB bar, discounted to +1.5 as
+    # depth) - now my gain (1.5-1=... see gain_self below) and the
+    # partner's gain from a_k2's full-value promotion are comparable.
+    players, team_a, team_b = _trade_setup(a_k2_ppw=3.0, b_rb2_ppw=8.0)
     results = trade_targets(
         team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=players,
-        free_agents_by_pos=free_agents, weeks=_TRADE_WEEKS, slots=_TRADE_SLOTS,
+        free_agents_by_pos=_TRADE_FA, weeks=_TRADE_WEEKS, slots=_TRADE_SLOTS,
         eligibility=_TRADE_ELIGIBILITY, max_trade_targets=20, fairness_ratio=0.5,
     )
     matches = [r for r in results if r["give"] == ["a_k2"] and r["get"] == ["b_rb2"]]
@@ -408,10 +395,10 @@ def test_trade_targets_fairness_ratio_zero_reduces_to_the_old_both_positive_chec
     # fairness_ratio=0.0 (min/max always >= 0) is a no-op on top of the
     # existing > 0 check - the lopsided trade from the exclusion test above
     # reappears once fairness is switched off.
-    players, free_agents, team_a, team_b = _trade_setup(a_k2_ppw=0.6)
+    players, team_a, team_b = _trade_setup(a_k2_ppw=3.0, b_rb2_ppw=8.9)
     results = trade_targets(
         team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=players,
-        free_agents_by_pos=free_agents, weeks=_TRADE_WEEKS, slots=_TRADE_SLOTS,
+        free_agents_by_pos=_TRADE_FA, weeks=_TRADE_WEEKS, slots=_TRADE_SLOTS,
         eligibility=_TRADE_ELIGIBILITY, max_trade_targets=20, fairness_ratio=0.0,
     )
     matches = [r for r in results if r["give"] == ["a_k2"] and r["get"] == ["b_rb2"]]
@@ -422,9 +409,9 @@ def test_trade_targets_does_not_crash_on_a_zero_gain_candidate():
     # Regression test for a real live pipeline crash (ZeroDivisionError in
     # the fairness check's min/max ratio) - a candidate whose gain is
     # exactly 0 for one or both sides must be excluded, never evaluated
-    # through the ratio at all. Identical-value 1-for-1 swap: both sides'
-    # lineup total is unchanged by the trade, so gain_self == gain_partner
-    # == 0 exactly for this candidate.
+    # through the ratio at all. Identical-value 1-for-1 swap: both rosters'
+    # points-above-replacement total is unchanged by the trade, so
+    # gain_self == gain_partner == 0 exactly for this candidate.
     slots = {"RB": 1}
     eligibility = {"RB": {"RB"}}
     weeks = [1, 2]
@@ -445,30 +432,19 @@ def test_trade_targets_does_not_crash_on_a_zero_gain_candidate():
 def test_trade_targets_stays_symmetric_even_when_my_team_would_be_overpaying():
     # Unlike the Trade Calculator's client-side twin (docs/js/trade.js's
     # tradeSuggestions), these passive/browse-only suggestions stay
-    # symmetric in BOTH directions - I give away a luxury duplicate RB
-    # that's worth 0 to ME for a modest kicker upgrade (tiny gain for me,
-    # huge gain for the partner from covering their bye) - ratio ~0.012,
-    # nowhere near 0.5, so this stays excluded even though I'm the one
-    # "overpaying" (see the conversation this was built from).
-    slots = {"RB": 1, "K": 1}
-    eligibility = {"RB": {"RB"}, "K": {"K"}}
-    weeks = [1, 2, 3]
-    players = {
-        "a_rb1": _wk("a_rb1", "RB", {1: 20.0, 2: 20.0, 3: 20.0}),  # no bye - always starts
-        "a_rb2": _wk("a_rb2", "RB", {1: 15.0, 2: 15.0, 3: 15.0}),  # never beats a_rb1 - worth 0 to me
-        "b_rb1": _wk("b_rb1", "RB", {1: 10.0, 2: 0.0, 3: 10.0}),  # bye week 2, no RB depth
-        "b_k1": _wk("b_k1", "K", {1: 0.6, 2: 0.6, 3: 0.6}),
-    }
-    free_agents = {"K": [_wk("fa_k", "K", {1: 0.5, 2: 0.5, 3: 0.5})]}  # no RB free agents - a real bye-week gap
-    team_a = ["a_rb1", "a_rb2"]
-    team_b = ["b_rb1", "b_k1"]
-
+    # symmetric in BOTH directions. a_k2=5 (discounted depth gain for me:
+    # 0.1) vs. b_rb2=9.1 (the partner's full-value-promotion gain: 3.9) -
+    # my own gain is barely positive while the partner's is ~40x bigger,
+    # nowhere near the 0.5 fairness ratio, so this stays excluded even
+    # though I'm the one giving up disproportionately more value (see the
+    # conversation this was built from).
+    players, team_a, team_b = _trade_setup(a_k2_ppw=5.0, b_rb2_ppw=9.1)
     results = trade_targets(
         team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=players,
-        free_agents_by_pos=free_agents, weeks=weeks, slots=slots,
-        eligibility=eligibility, max_trade_targets=20, fairness_ratio=0.5,
+        free_agents_by_pos=_TRADE_FA, weeks=_TRADE_WEEKS, slots=_TRADE_SLOTS,
+        eligibility=_TRADE_ELIGIBILITY, max_trade_targets=20, fairness_ratio=0.5,
     )
-    matches = [r for r in results if r["give"] == ["a_rb2"] and r["get"] == ["b_k1"]]
+    matches = [r for r in results if r["give"] == ["a_k2"] and r["get"] == ["b_rb2"]]
     assert matches == []
 
 

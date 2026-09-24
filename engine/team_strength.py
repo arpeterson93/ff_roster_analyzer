@@ -1,5 +1,6 @@
-"""Team strength: lineup-delta ("next man down") player values, position
-strength vs. the league, pickup suggestions, and trade targets."""
+"""Team strength: points-above-replacement player values (position_value_
+by_player/position_value_matrix/fa_pool_value), position strength vs. the
+league, pickup suggestions, and trade targets."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -142,109 +143,93 @@ def optimal_lineup_for_week_with_bye_fill(
     return total, assignment, streamed
 
 
-def depth_values_by_week(
+def position_value_by_player(
     team_player_ids: list[str],
     players: dict[str, PlayerCtx],
     free_agents_by_pos: dict[str, list[PlayerCtx]],
     weeks: list[int],
     slots: dict[str, int],
     eligibility: dict[str, set[str]],
+    depth_weight: float = 0.5,
 ) -> dict[str, dict]:
-    """Per-player, per-week lineup-delta value: {player_id: {"value_delta":
-    {week: delta}, "replacement_id": {week: teammate_or_fa_id or None}}} -
-    ONE consolidated value per week, not two parallel ones (a rostered
-    player's real marginal value already accounts for the waiver wire,
-    since that's a real alternative to keeping him around, not a separate
-    hypothetical - see the conversation this was built from). Floored at 0
-    - a free agent who genuinely beats a mediocre rostered player can make
-    the candidate lineup (see below) score HIGHER than the real one even
-    with the rostered player gone, i.e. a real negative raw delta; that
-    means this specific player contributes nothing incremental (you'd be
-    equally or better off with a wire pickup in his place), not that he's
-    worth a negative number. depth_values() is just this summed/collapsed
-    across weeks; this is the finer-grained view for charting how a
-    player's marginal value moves week to week (bye weeks, tough matchups
-    elsewhere on the roster creating temporary scarcity, etc).
+    """Per-player points-above-replacement: {player_id: {"starting_value",
+    "depth_value", "value_delta", "weekly": [{"week", "starting_value",
+    "depth_value", "replacement_id"}]}}. The per-player twin of
+    position_value_matrix (see that function's own docstring for the full
+    claim-order/replacement-level derivation - this runs the SAME claim
+    loop, just remembering which player earned each week's credit instead
+    of only accumulating it into a per-position bucket); position_value_
+    matrix is now a thin wrapper that sums this by position. value_delta =
+    starting_value + depth_weight * depth_value, the same blend
+    position_value_matrix's own "total" uses - kept under this name
+    deliberately, so it can replace the old lineup-delta engine's
+    value_delta everywhere without every consumer needing a field rename.
 
-    The replacement is picked FRESH each week, not once for the whole
-    season - a real bench player who'd actually step in depends on THAT
-    week's own matchups/byes, and the best streaming free agent depends on
-    THAT week's own projection, the same "pick fresh each week" philosophy
-    lineup_total_with_streaming_by_week already applies to the aggregate
-    roster-total calc (see that function's docstring) - just applied here
-    to a single player's own marginal value instead. This can genuinely
-    name a DIFFERENT specific replacement in different weeks for the exact
-    same rostered player - a real reflection of how bench/waiver decisions
-    actually work, not an inconsistency.
+    Unlike the old lineup-delta engine this replaces, a starter's
+    replacement is ALWAYS the best available free agent for his slot,
+    never a bench teammate - position_value_matrix never modeled "drop this
+    guy, see who else on the roster steps up," only "how does he compare to
+    what's on the wire," so replacement_id here only ever names a free
+    agent (or None, when no free agent exists at that slot that week)."""
+    instances = _robust_slot_order(slots, eligibility)
 
-    replacement_id is found by diffing optimal_lineup's own slot assignment
-    for the full roster against the CANDIDATE roster (pid dropped, and -
-    when a viable free agent exists at his position that week - that free
-    agent added to the pool, NOT forced into the lineup; the optimizer is
-    still free to prefer an existing bench player over him), THAT SAME
-    WEEK - whichever player newly starts a slot they weren't starting
-    before is the real one absorbing the vacated production, whether
-    that's an existing bench teammate or the free agent. None when the
-    roster (plus the free agent, if any) was deep enough that dropping pid
-    doesn't change who starts at all. Prefers a same-position newly-started
-    player when the optimizer's reshuffle touched more than one slot (a
-    chain reaction, e.g. dropping a flex-eligible player) - same "same
-    position first" preference fa_values() uses when picking which player
-    TO drop, just applied to who fills back in instead."""
-    base_by_week: dict[int, float] = {}
-    base_assignment_by_week: dict[int, dict[str, str]] = {}
+    best_available_cache: dict[tuple[str, ...], dict[int, tuple[float, str | None]]] = {}
+
+    def best_available(base_positions: set[str], w: int) -> tuple[float, str | None]:
+        key = tuple(sorted(base_positions))
+        by_week = best_available_cache.setdefault(key, {})
+        if w not in by_week:
+            best_val, best_id = 0.0, None
+            for pos in base_positions:
+                for fa in free_agents_by_pos.get(pos, []):
+                    v = fa.weekly.get(w, 0.0)
+                    if v > best_val:
+                        best_val, best_id = v, fa.id
+            by_week[w] = (best_val, best_id)
+        return by_week[w]
+
+    starting_value = {pid: 0.0 for pid in team_player_ids}
+    depth_value = {pid: 0.0 for pid in team_player_ids}
+    weekly: dict[str, dict[int, dict]] = {pid: {} for pid in team_player_ids}
+
     for w in weeks:
-        entries = [(pid, players[pid].position, players[pid].weekly.get(w, 0.0)) for pid in team_player_ids if pid in players]
-        total, assignment = optimal_lineup(entries, slots, eligibility)
-        base_by_week[w] = total
-        base_assignment_by_week[w] = assignment
+        candidates = {
+            pid: (players[pid].position, players[pid].weekly.get(w, 0.0))
+            for pid in team_player_ids
+            if pid in players and players[pid].weekly.get(w, 0.0) > 0
+        }
+        claimed: set[str] = set()
+        for _, base_label in instances:
+            elig = eligibility.get(base_label, set())
+            pool = [pid for pid, (pos, _) in candidates.items() if pos in elig and pid not in claimed]
+            if not pool:
+                continue  # true bye/no candidate - no asset here, contributes nothing
+            starter = max(pool, key=lambda pid: candidates[pid][1])
+            replacement, replacement_id = best_available(elig, w)
+            v = candidates[starter][1] - replacement
+            starting_value[starter] += v
+            weekly[starter][w] = {"starting_value": v, "depth_value": 0.0, "replacement_id": replacement_id}
+            claimed.add(starter)
+        for pid, (pos, pts) in candidates.items():
+            if pid in claimed:
+                continue
+            replacement, replacement_id = best_available({pos}, w)
+            v = max(0.0, pts - replacement)
+            depth_value[pid] += v
+            weekly[pid][w] = {"starting_value": 0.0, "depth_value": v, "replacement_id": replacement_id}
 
-    result: dict[str, dict] = {}
-    for pid in team_player_ids:
-        if pid not in players:
-            continue
-        reduced = [p for p in team_player_ids if p != pid]
-        pos = players[pid].position
-        fa_pool = free_agents_by_pos.get(pos, [])
-
-        value_delta: dict[int, float] = {}
-        replacement_id: dict[int, str | None] = {}
-
-        for w in weeks:
-            reduced_entries = [(rpid, players[rpid].position, players[rpid].weekly.get(w, 0.0)) for rpid in reduced if rpid in players]
-            best_fa = max(fa_pool, key=lambda f: f.weekly.get(w, 0.0), default=None)
-            candidate_entries = reduced_entries
-            if best_fa is not None and best_fa.weekly.get(w, 0.0) > 0:
-                candidate_entries = reduced_entries + [(best_fa.id, best_fa.position, best_fa.weekly.get(w, 0.0))]
-            candidate_total, candidate_assignment = optimal_lineup(candidate_entries, slots, eligibility)
-            value_delta[w] = max(0.0, base_by_week[w] - candidate_total)
-
-            candidate_positions = {cid: cpos for cid, cpos, _ in candidate_entries}
-            newly_started = set(candidate_assignment.values()) - set(base_assignment_by_week[w].values())
-            same_pos_replacement = next((npid for npid in newly_started if candidate_positions.get(npid) == pos), None)
-            replacement_id[w] = same_pos_replacement or next(iter(newly_started), None)
-
-        result[pid] = {"value_delta": value_delta, "replacement_id": replacement_id}
-    return result
-
-
-def depth_values(
-    team_player_ids: list[str],
-    players: dict[str, PlayerCtx],
-    free_agents_by_pos: dict[str, list[PlayerCtx]],
-    weeks: list[int],
-    slots: dict[str, int],
-    eligibility: dict[str, set[str]],
-) -> dict[str, dict[str, float]]:
-    by_week = depth_values_by_week(team_player_ids, players, free_agents_by_pos, weeks, slots, eligibility)
     return {
-        # replacement_id is per-week (see depth_values_by_week) - the
-        # season-long aggregate has no single "the" replacement to report,
-        # so it's dropped here rather than picking one week arbitrarily.
-        # Callers that want to know who filled in should use
-        # depth_values_by_week directly.
-        pid: {"value_delta": sum(v["value_delta"].values())}
-        for pid, v in by_week.items()
+        pid: {
+            "starting_value": starting_value[pid],
+            "depth_value": depth_value[pid],
+            "value_delta": starting_value[pid] + depth_weight * depth_value[pid],
+            "weekly": [
+                {"week": w, **weekly[pid].get(w, {"starting_value": 0.0, "depth_value": 0.0, "replacement_id": None})}
+                for w in weeks
+            ],
+        }
+        for pid in team_player_ids
+        if pid in players
     }
 
 
@@ -329,74 +314,95 @@ def rank_and_compare(team_ppw: dict[int, dict[str, float]], positions: list[str]
     return result
 
 
-def fa_values(
-    team_player_ids: list[str],
-    players: dict[str, PlayerCtx],
+def fa_pool_value(
     free_agents_by_pos: dict[str, list[PlayerCtx]],
     weeks: list[int],
-    slots: dict[str, int],
-    eligibility: dict[str, set[str]],
-    ir_player_ids: frozenset[str] = frozenset(),
-    fa_pool_size: int = 30,
+    depth_weight: float = 0.5,
 ) -> dict[str, dict]:
-    """{fa_id: {"gain": .., "drop": .., "weekly": {week: delta}}} for every
-    free agent considered (top `fa_pool_size` per position by ros_total) -
-    the lineup-total gain from adding them and dropping the weakest
-    same-position rostered player (or weakest overall if none at that
-    position), whether or not it's actually a good pickup. pickups() is
-    just this filtered/sorted/truncated to positive gains; this unfiltered
-    version is for showing "value to your team" next to any free agent
-    (e.g. in the Rankings view), not just recommended ones.
+    """{fa_id: {"starting_value": 0.0, "depth_value": float, "value_delta":
+    float, "weekly": [{"week", "depth_value", "replacement_id"}]}} - same
+    field shape position_value_by_player returns for a rostered player
+    (starting_value always 0.0 here - a free agent is never anyone's
+    starter by definition), so both can feed the exact same UI. depth_value
+    is this free agent's OWN value, leave-one-out against the REST of the
+    free-agent pool at his own base position (no flex-widening - a bench
+    RB's value is what he's worth as a straight RB, never a hypothetical
+    FLEX play, same restriction position_value_by_player's own depth_value
+    already applies to a rostered bench player). replacement_id names
+    whichever OTHER free agent set that week's bar. Comparing against every
+    OTHER free agent at his position (not the single best FA overall,
+    including himself) means the single best free agent at a position gets
+    real credit for being the best available, rather than being compared to
+    himself and always scoring zero.
 
-    weekly is the SAME add/drop pairing's per-week breakdown, not a
-    separately-optimized week-by-week choice - a real manager makes one
-    add/drop decision, not a different trade every week - computed via
-    lineup_total_with_streaming_by_week rather than summing it away
-    immediately, since callers wanting week-by-week detail (a player
-    modal's NMD breakdown) shouldn't have to redo this exact computation."""
-    base_by_week = lineup_total_with_streaming_by_week(team_player_ids, players, free_agents_by_pos, weeks, slots, eligibility)
-    depth = depth_values(team_player_ids, players, free_agents_by_pos, weeks, slots, eligibility)
-    droppable = [pid for pid in team_player_ids if pid not in ir_player_ids and pid in depth]
-    if not droppable:
-        return {}
-
+    Team-agnostic by design - computed once for the whole pool, not per
+    team like the old lineup-delta engine's fa_values() was, since a free
+    agent's value here has nothing to do with what any specific roster
+    could gain by adding him. value_delta applies the SAME depth_weight
+    position_value_by_player's own depth_value gets when rolled into a
+    player's value_delta, so a free agent and a rostered bench player land
+    on one consistent scale."""
     result: dict[str, dict] = {}
     for fas in free_agents_by_pos.values():
-        top_fas = sorted(fas, key=lambda f: f.ros_total, reverse=True)[:fa_pool_size]
-        for fa in top_fas:
-            # Prefer dropping the weakest rostered player at the SAME
-            # position as the free agent - adding a better kicker should
-            # suggest replacing your worse kicker, not stashing a redundant
-            # second one while dropping an unrelated bench skill player.
-            same_pos_droppable = [pid for pid in droppable if players[pid].position == fa.position]
-            drop_pool = same_pos_droppable or droppable
-            drop_pid = min(drop_pool, key=lambda pid: depth[pid]["value_delta"])
-            new_roster = [p for p in team_player_ids if p != drop_pid] + [fa.id]
-            new_players = dict(players)
-            new_players[fa.id] = fa
-            # Baseline already assumes bye/gap streaming (see
-            # lineup_total_with_streaming), so a candidate only shows a gain
-            # here when actually rostering them beats that default streaming
-            # plan - e.g. a real talent upgrade, not just filling a bye week.
-            new_by_week = lineup_total_with_streaming_by_week(new_roster, new_players, free_agents_by_pos, weeks, slots, eligibility)
-            weekly = {w: new_by_week[w] - base_by_week[w] for w in weeks}
-            result[fa.id] = {"gain": sum(weekly.values()), "drop": drop_pid, "weekly": weekly}
+        for fa in fas:
+            depth_total = 0.0
+            weekly: list[dict] = []
+            for w in weeks:
+                pts = fa.weekly.get(w, 0.0)
+                if pts <= 0:
+                    weekly.append({"week": w, "depth_value": 0.0, "replacement_id": None})
+                    continue
+                best_other, best_other_id = 0.0, None
+                for other in fas:
+                    if other.id == fa.id:
+                        continue
+                    v = other.weekly.get(w, 0.0)
+                    if v > best_other:
+                        best_other, best_other_id = v, other.id
+                v = max(0.0, pts - best_other)
+                depth_total += v
+                weekly.append({"week": w, "depth_value": v, "replacement_id": best_other_id})
+            result[fa.id] = {
+                "starting_value": 0.0,
+                "depth_value": depth_total,
+                "value_delta": depth_weight * depth_total,
+                "weekly": weekly,
+            }
     return result
 
 
 def pickups(
     team_player_ids: list[str],
     players: dict[str, PlayerCtx],
+    team_values: dict[str, dict],
+    fa_values: dict[str, dict],
     free_agents_by_pos: dict[str, list[PlayerCtx]],
-    weeks: list[int],
-    slots: dict[str, int],
-    eligibility: dict[str, set[str]],
     max_pickups: int,
     ir_player_ids: frozenset[str] = frozenset(),
-    fa_pool_size: int = 30,
 ) -> list[dict]:
-    values = fa_values(team_player_ids, players, free_agents_by_pos, weeks, slots, eligibility, ir_player_ids, fa_pool_size)
-    candidates = [{"add": fa_id, "drop": v["drop"], "gain": v["gain"]} for fa_id, v in values.items() if v["gain"] > 0]
+    """A pickup candidate is any free agent whose OWN value_delta (from
+    fa_pool_value) beats the weakest droppable rostered player's value_delta
+    (from position_value_by_player) at the SAME position - or the weakest
+    overall droppable player if the team has none at that position (an
+    unrelated bench player shouldn't get cut to make room for a redundant
+    second kicker). No lineup re-optimization here at all, unlike the old
+    lineup-delta engine's pickups()/fa_values() - both value sources are
+    already computed once (per team, and once for the whole pool
+    respectively) by the caller, so this is just a cheap sort/compare."""
+    droppable = [pid for pid in team_player_ids if pid not in ir_player_ids and pid in team_values]
+    if not droppable:
+        return []
+
+    candidates = []
+    for fas in free_agents_by_pos.values():
+        for fa in fas:
+            fa_val = fa_values.get(fa.id, {}).get("value_delta", 0.0)
+            same_pos_droppable = [pid for pid in droppable if players[pid].position == fa.position]
+            drop_pool = same_pos_droppable or droppable
+            drop_pid = min(drop_pool, key=lambda pid: team_values[pid]["value_delta"])
+            gain = fa_val - team_values[drop_pid]["value_delta"]
+            if gain > 0:
+                candidates.append({"add": fa.id, "drop": drop_pid, "gain": gain})
     candidates.sort(key=lambda c: c["gain"], reverse=True)
     return candidates[:max_pickups]
 
@@ -417,10 +423,19 @@ def trade_targets(
 ) -> list[dict]:
     """1-for-1 swaps with every other team (top `candidate_pool_size` by
     ros_total each side) plus 2-for-1 swaps (top `two_for_one_pool_size` each
-    side), scored by each side's real before/after lineup-total delta (with
-    waiver-wire streaming assumed for any position a trade leaves empty - see
-    evaluate_with_streaming - so a trade isn't flagged as a big loss for a
-    side that could trivially backfill the position on the wire instead).
+    side), scored by each side's before/after points-above-replacement delta
+    (position_value_team_total - see that function's own docstring). Same
+    cheap greedy-claim calc the Trade Calculator's own client-side trade
+    search (docs/js/trade.js's tradeSuggestions) already uses, replacing the
+    old per-candidate full-lineup-reoptimization cost (evaluate_with_
+    streaming) - a real behavior change, not just a faster equivalent: a
+    reported gain here is now "points above replacement gained/lost," not
+    "lineup total gained/lost," matching every other value number this site
+    shows post-overhaul (see the conversation this was built from). A
+    precise lineup-total before/after for a SPECIFIC chosen trade is still
+    available - see engine/trades.py's evaluate_with_streaming, the same
+    twin the Trade Calculator's own single-trade detail view calls once
+    you've actually picked one of these suggestions to inspect.
 
     Both sides' gain must be positive AND within `fairness_ratio` of each
     other (min/max >= fairness_ratio) - `gain_self > 0 and gain_partner > 0`
@@ -438,15 +453,21 @@ def trade_targets(
     real "my call to make" the way there is once you're actively building a
     specific offer around a player you want (see the conversation this was
     built from)."""
-    from engine.trades import evaluate_with_streaming  # local import: trades.py also imports this module
 
     def top_n(pids: list[str], n: int) -> list[str]:
         return sorted((p for p in pids if p in players), key=lambda p: players[p].ros_total, reverse=True)[:n]
+
+    def team_total(roster: list[str]) -> float:
+        return position_value_team_total(roster, players, free_agents_by_pos, weeks, slots, eligibility)
+
+    my_before = team_total(team_player_ids)
 
     results = []
     for partner_id, partner_roster in other_teams.items():
         if partner_id == team_id:
             continue
+        partner_before = team_total(partner_roster)
+
         my_candidates_1 = top_n(team_player_ids, candidate_pool_size)
         their_candidates_1 = top_n(partner_roster, candidate_pool_size)
 
@@ -462,29 +483,22 @@ def trade_targets(
                     two_for_one.append(([give_a, give_b], [get]))
 
         for gives, gets in one_for_one + two_for_one:
-            result = evaluate_with_streaming(
-                gives_a=gives,
-                gives_b=gets,
-                roster_a=team_player_ids,
-                roster_b=partner_roster,
-                players=players,
-                free_agents_by_pos=free_agents_by_pos,
-                weeks=weeks,
-                slots=slots,
-                eligibility=eligibility,
-            )
+            after_mine = [p for p in team_player_ids if p not in gives] + gets
+            after_theirs = [p for p in partner_roster if p not in gets] + gives
+            gain_self = team_total(after_mine) - my_before
+            gain_partner = team_total(after_theirs) - partner_before
             if (
-                result.side_a.gain > 0
-                and result.side_b.gain > 0
-                and min(result.side_a.gain, result.side_b.gain) / max(result.side_a.gain, result.side_b.gain) >= fairness_ratio
+                gain_self > 0
+                and gain_partner > 0
+                and min(gain_self, gain_partner) / max(gain_self, gain_partner) >= fairness_ratio
             ):
                 results.append(
                     {
                         "partner_team_id": partner_id,
                         "give": gives,
                         "get": gets,
-                        "gain_self": result.side_a.gain,
-                        "gain_partner": result.side_b.gain,
+                        "gain_self": gain_self,
+                        "gain_partner": gain_partner,
                     }
                 )
     results.sort(key=lambda r: r["gain_self"], reverse=True)
@@ -543,48 +557,25 @@ def position_value_matrix(
     bench player is never forced into the lineup. A player who projects 0
     that week (a true bye) is excluded entirely, from both the claim pass
     and the depth pass - there's no real asset there to score, in either
-    direction."""
-    instances = _robust_slot_order(slots, eligibility)
+    direction. A thin wrapper now - see position_value_by_player, which runs
+    this exact claim loop and does all the real work, just keyed by player
+    instead of by position; this sums that by each player's own real
+    position."""
+    by_player = position_value_by_player(team_player_ids, players, free_agents_by_pos, weeks, slots, eligibility, depth_weight)
     positions: list[str] = []
     for base_positions in eligibility.values():
         for pos in base_positions:
             if pos not in positions:
                 positions.append(pos)
 
-    best_available_cache: dict[tuple[str, ...], dict[int, float]] = {}
-
-    def best_available(base_positions: set[str], w: int) -> float:
-        key = tuple(sorted(base_positions))
-        by_week = best_available_cache.setdefault(key, {})
-        if w not in by_week:
-            candidates = [fa.weekly.get(w, 0.0) for pos in base_positions for fa in free_agents_by_pos.get(pos, [])]
-            by_week[w] = max(candidates, default=0.0)
-        return by_week[w]
-
     starting = {pos: 0.0 for pos in positions}
     depth = {pos: 0.0 for pos in positions}
-
-    for w in weeks:
-        candidates = {
-            pid: (players[pid].position, players[pid].weekly.get(w, 0.0))
-            for pid in team_player_ids
-            if pid in players and players[pid].weekly.get(w, 0.0) > 0
-        }
-        claimed: set[str] = set()
-        for _, base_label in instances:
-            elig = eligibility.get(base_label, set())
-            pool = [pid for pid, (pos, _) in candidates.items() if pos in elig and pid not in claimed]
-            if not pool:
-                continue  # true bye/no candidate - no asset here, contributes nothing
-            starter = max(pool, key=lambda pid: candidates[pid][1])
-            replacement = best_available(elig, w)
-            starting[candidates[starter][0]] += candidates[starter][1] - replacement
-            claimed.add(starter)
-        for pid, (pos, pts) in candidates.items():
-            if pid in claimed:
-                continue
-            replacement = best_available({pos}, w)
-            depth[pos] += max(0.0, pts - replacement)
+    for pid, v in by_player.items():
+        pos = players[pid].position
+        if pos not in starting:
+            continue
+        starting[pos] += v["starting_value"]
+        depth[pos] += v["depth_value"]
 
     return {
         pos: {
@@ -594,3 +585,24 @@ def position_value_matrix(
         }
         for pos in positions
     }
+
+
+def position_value_team_total(
+    team_player_ids: list[str],
+    players: dict[str, PlayerCtx],
+    free_agents_by_pos: dict[str, list[PlayerCtx]],
+    weeks: list[int],
+    slots: dict[str, int],
+    eligibility: dict[str, set[str]],
+    depth_weight: float = 0.5,
+) -> float:
+    """Sum of every player's own value_delta (see position_value_by_player) -
+    one roster reduced to a single points-above-replacement number, for
+    before/after trade comparison. Python twin of docs/js/trade.js's
+    positionValueTeamTotal - same cheap greedy claim underneath (no
+    exponential DP), which is what makes this cheap enough to call twice per
+    candidate trade (before/after) across trade_targets' whole search
+    without the old per-candidate full-lineup-reoptimization cost
+    evaluate_with_streaming needed."""
+    by_player = position_value_by_player(team_player_ids, players, free_agents_by_pos, weeks, slots, eligibility, depth_weight)
+    return sum(v["value_delta"] for v in by_player.values())

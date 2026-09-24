@@ -1,4 +1,4 @@
-import { fmt, escapeHtml, getYourTeam } from "./state.js";
+import { fmt, escapeHtml } from "./state.js";
 import { POSITION_COLOR, opponentCellHtml, teamLabel, playerPhotoHtml, weeklyProjection, colorForRatio, ratioForRank, snapPct, attPct, tgtPct } from "./colors.js";
 import { openModal } from "./modal.js";
 import { groupedHeaderHtml, statCellsHtml } from "./statcolumns.js";
@@ -945,75 +945,71 @@ function overviewTabHtml(player, data) {
   `;
 }
 
-// NMD week-by-week (see engine/team_strength.py's depth_values_by_week/
-// fa_values) - for a ROSTERED player, the same "Value" number already
-// shown as a single stat tile above, broken out week by week and naming
-// which specific player it's computed against - a real bench teammate OR
-// the best available free agent, whichever the optimizer actually
-// prefers, re-picked fresh every week (not one fixed pick for the whole
-// series - see that function's docstring). For a WAIVER player, the
-// mirror image: your own team's specific add/drop swing week by week, and
-// who it would replace - scoped to "your team" only (same as the Rankings
-// NMD column and the stat-grid tile above), since fa_values_detail.json
-// only carries this level of detail for candidates that clear the same
-// real bar (gain > 0) for EVERY team, and showing one team's numbers on a
-// click that could be anyone's would be misleading rather than just
-// incomplete.
+// Names whichever free agent set that week's replacement bar (see
+// engine/team_strength.py's position_value_by_player/fa_pool_value) -
+// ALWAYS a free agent under this calc, never a bench teammate (unlike the
+// old lineup-delta engine this replaced, which could name either) - so
+// there's no "is this a free agent" distinction left to highlight, just
+// the name and his own points that week.
+function nmdReplacementCellHtml(w, data, currentWeek) {
+  if (!w.replacement_id) return `<span class="muted small">&ndash;</span>`;
+  const replacement = data.playersById.get(w.replacement_id);
+  if (!replacement) return `<span class="muted small">${escapeHtml(w.replacement_id)}</span>`;
+  return `${escapeHtml(replacement.name)} <span class="muted small">(${fmt(weeklyProjection(replacement, w.week, currentWeek), 1)})</span>`;
+}
+
+// NMD week-by-week (see engine/team_strength.py's position_value_by_player/
+// fa_pool_value) - points above replacement, broken into Starting/Depth per
+// week (the same split the stat-grid tile's single "Value" number above
+// blends together), naming which free agent set each week's bar. Same
+// underlying shape for a rostered player (Starting nonzero the weeks he
+// started, Depth nonzero the weeks he sat, never both the same week) and a
+// free agent (Starting always 0 - he's nobody's starter by definition,
+// Depth is his own leave-one-out value against the rest of the FA pool at
+// his position) - one renderer, two data sources.
 function nmdDetailSection(player, data) {
+  const currentWeek = data.meta.current_week;
   if (player.fantasy_team_id !== null) {
     const team = data.teamsById.get(player.fantasy_team_id);
     const entry = (team?.depth?.[player.position] || []).find((d) => d.id === player.id);
     if (!entry) return "";
-    const currentWeek = data.meta.current_week;
     const rows = entry.weekly
-      .map((w) => {
-        const ownPts = fmt(weeklyProjection(player, w.week, currentWeek), 1);
-        const replacement = w.replacement_id ? data.playersById.get(w.replacement_id) : null;
-        // Not on ANY team's roster - a free agent pickup, not an existing
-        // teammate stepping in. Same highlight Start/Sit uses for a
-        // streamed bye-week fill-in (see startsit.js's isStreamed).
-        const isFreeAgent = !!replacement && replacement.fantasy_team_id === null;
-        const replacementCell = !w.replacement_id
-          ? `<span class="muted small">&ndash;</span>`
-          : replacement
-          ? `${escapeHtml(replacement.name)} <span class="muted small">(${fmt(weeklyProjection(replacement, w.week, currentWeek), 1)})</span>${isFreeAgent ? ` <span class="pill small stream-badge" title="Not on your roster - a free agent pickup">FA</span>` : ""}`
-          : `<span class="muted small">${escapeHtml(w.replacement_id)}</span>`;
-        return `<tr class="${isFreeAgent ? "streamed-row" : ""}">
+      .map(
+        (w) => `<tr>
           <td>Wk ${w.week}</td>
-          <td>${fmt(w.value_delta, 1)}</td>
-          <td>${ownPts} vs ${replacementCell}</td>
-        </tr>`;
-      })
+          <td>${fmt(w.starting_value, 1)}</td>
+          <td>${fmt(w.depth_value, 1)}</td>
+          <td>${nmdReplacementCellHtml(w, data, currentWeek)}</td>
+        </tr>`
+      )
       .join("");
     return `
       <h3>NMD week-by-week</h3>
-      <p class="muted small">"Value" is the lineup points your team loses if he's dropped outright that week - "Replace by" names whichever player's promotion into his slot produces that number, a real bench teammate OR the best available free agent, whichever actually projects best THAT SPECIFIC WEEK (highlighted when it's a free agent pickup, not an existing teammate). Re-picked every week, not fixed for the season - a real reflection of how byes, matchups, and the waiver wire actually shift week to week, so don't be surprised if the name changes row to row.</p>
+      <p class="muted small">Points above replacement. "Starting" is his edge over the best available free agent for his slot, in a week he actually started; "Depth" is his edge over the best available free agent at his own position, in a week he sat (floored at 0 - a real bench player is never forced into the lineup). "Replace by" names the free agent that week's bar came from - re-picked fresh every week, so don't be surprised if the name changes row to row. Total below discounts Depth 50% (a real bench spot doesn't always get used) - the same number the stat tile above shows.</p>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Week</th><th>Value</th><th>Replace by</th></tr></thead>
+          <thead><tr><th>Week</th><th>Starting</th><th>Depth</th><th>Replace by</th></tr></thead>
           <tbody>${rows}</tbody>
-          <tfoot><tr class="totals-row"><td>Total</td><td>${fmt(entry.value_delta, 1)}</td><td></td></tr></tfoot>
+          <tfoot><tr class="totals-row"><td>Total</td><td>${fmt(entry.starting_value, 1)}</td><td>${fmt(entry.depth_value, 1)}</td><td><strong>${fmt(entry.value_delta, 1)}</strong></td></tr></tfoot>
         </table>
       </div>
     `;
   }
 
-  const yourTeamId = getYourTeam(data.meta.slug);
-  if (yourTeamId === null) return "";
-  const detail = (data.faValuesDetail || {})[String(yourTeamId)]?.[player.id];
+  const detail = (data.faValuesDetail || {})[player.id];
   if (!detail) return "";
-  const dropPlayer = data.playersById.get(detail.drop);
-  const weeks = Object.keys(detail.weekly).map(Number).sort((a, b) => a - b);
-  const total = weeks.reduce((acc, w) => acc + detail.weekly[w], 0);
-  const rows = weeks.map((w) => `<tr><td>Wk ${w}</td><td>${detail.weekly[w] >= 0 ? "+" : ""}${fmt(detail.weekly[w], 1)}</td></tr>`).join("");
+  const rows = detail.weekly
+    .map((w) => `<tr><td>Wk ${w.week}</td><td>${fmt(w.depth_value, 1)}</td><td>${nmdReplacementCellHtml(w, data, currentWeek)}</td></tr>`)
+    .join("");
+  const totalDepth = detail.weekly.reduce((acc, w) => acc + w.depth_value, 0);
   return `
-    <h3>NMD week-by-week <span class="muted small">- your team's perspective</span></h3>
-    <p class="muted small">Lineup-point swing, week by week, from adding him and dropping ${dropPlayer ? `<b>${escapeHtml(dropPlayer.name)}</b>` : "your weakest same-position player"} - the same add/drop pairing the "NMD" figure elsewhere on the site is built from, not a different trade every week.</p>
+    <h3>NMD week-by-week</h3>
+    <p class="muted small">Points above replacement against the REST of the free-agent pool at his own position (excluding himself, so the single best free agent at a position gets real credit instead of comparing to himself) - not team-specific, this is the same number for every viewer. Total below discounts 50% (a real bench spot doesn't always get used) - the same number the stat tile above shows.</p>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Week</th><th>Swing</th></tr></thead>
+        <thead><tr><th>Week</th><th>Depth</th><th>Replace by</th></tr></thead>
         <tbody>${rows}</tbody>
-        <tfoot><tr class="totals-row"><td>Total</td><td>${total >= 0 ? "+" : ""}${fmt(total, 1)}</td></tr></tfoot>
+        <tfoot><tr class="totals-row"><td>Total</td><td>${fmt(totalDepth, 1)}</td><td><strong>${fmt(player.value_delta ?? 0, 1)}</strong></td></tr></tfoot>
       </table>
     </div>
   `;
@@ -1061,7 +1057,7 @@ function playerModalContentHtml(player, data) {
         <div class="stat-label">Reg / Playoff sched</div>
         <div class="stat-value">${scheduleRankPillHtml(player.reg_schedule_rank, player.reg_schedule_index, "Regular season")} / ${scheduleRankPillHtml(player.playoff_schedule_rank, player.playoff_schedule_index, "Fantasy playoff")}</div>
       </div>
-      <div class="stat-tile"><div class="stat-label">Value</div><div class="stat-value">${player.value_delta !== null ? fmt(player.value_delta, 1) : "–"}</div></div>
+      <div class="stat-tile"><div class="stat-label">Value</div><div class="stat-value">${player.value_delta === undefined || player.value_delta === null ? "–" : fmt(player.value_delta, 1)}</div></div>
     </div>
   `;
 

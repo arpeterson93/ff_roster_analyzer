@@ -62,12 +62,13 @@ from engine.standings import (
 )
 from engine.team_strength import (
     PlayerCtx,
-    depth_values_by_week,
-    fa_values,
+    fa_pool_value,
     lineup_total,
     optimal_lineup_for_week,
     optimal_lineup_for_week_with_bye_fill,
+    pickups,
     position_strength,
+    position_value_by_player,
     rank_and_compare,
     slot_strength,
     trade_targets,
@@ -239,7 +240,7 @@ def _faab_week_override(current_week: int, week_started: int | None) -> int:
 
 def _compute_faab_estimates(
     cfg: dict, client: EspnClient, players_out: list[dict], season: int, current_week: int,
-    team_rosters: dict[int, list[str]], fa_values_out: dict[str, dict[str, float]],
+    team_rosters: dict[int, list[str]], team_fa_gains: dict[str, dict[str, float]],
     snap_pct_index: dict[str, dict[int, float]], gsis_to_pfr: dict[str, str],
     stats_index: dict[str, dict[int, dict]], team_rb_carries: dict[tuple[str, int], float],
     gsis_by_pid: dict[str, str],
@@ -261,11 +262,13 @@ def _compute_faab_estimates(
 
     Also attaches team_interest (see below) per candidate - team_rosters
     (team_id -> that team's own player ids, already built earlier in
-    run_league for the standings/lineup passes) and fa_values_out (team_id
-    str -> {player_id: lineup-point gain if added, from
-    engine.team_strength.fa_values - already computed per team for the
-    Rankings NMD column) are both already sitting in run_league's scope by
-    the time this is called, at no extra computation cost here.
+    run_league for the standings/lineup passes) and team_fa_gains (team_id
+    str -> {player_id: gain vs. that team's own weakest droppable player at
+    his position, under the new points-above-replacement calc - see
+    run_league's own comment on why this is computed separately from the
+    team-agnostic fa_pool_value the Rankings NMD column uses) are both
+    already sitting in run_league's scope by the time this is called, at no
+    extra computation cost here.
     snap_pct_index/gsis_to_pfr/stats_index/team_rb_carries are ALSO already
     sitting in run_league's scope, built early (before _register's own
     per-player `weekly[]` construction needs them for the Rankings Stats
@@ -452,13 +455,14 @@ def _compute_faab_estimates(
     # team_interest: "which of the OTHER owners in the league would actually
     # want this guy, and why" - the two things a single market-wide FAAB
     # estimate can't tell you (see the conversation this was built from). A
-    # Low/Med/High bucket rather than a raw number on purpose - fa_values'
-    # gain is real lineup points, but "is 3.2 points a lot" only means
-    # anything relative to this week's actual spread of add-value across the
-    # league, which varies by scoring format/roster construction - so bucket
-    # by PERCENTILE of this week's own real gain distribution instead of a
-    # fixed constant that would drift out of calibration league to league.
-    all_positive_gains = sorted(v for gains in fa_values_out.values() for v in gains.values() if v is not None and v > 0)
+    # Low/Med/High bucket rather than a raw number on purpose - team_fa_
+    # gains' gain is real points-above-replacement, but "is 3.2 points a
+    # lot" only means anything relative to this week's actual spread of
+    # add-value across the league, which varies by scoring format/roster
+    # construction - so bucket by PERCENTILE of this week's own real gain
+    # distribution instead of a fixed constant that would drift out of
+    # calibration league to league.
+    all_positive_gains = sorted(v for gains in team_fa_gains.values() for v in gains.values() if v is not None and v > 0)
 
     def gain_level(gain: float | None) -> str | None:
         if not all_positive_gains or gain is None or gain <= 0:
@@ -479,7 +483,7 @@ def _compute_faab_estimates(
         handcuff_owner_ids = {mate.get("fantasy_team_id") for mate in qualifying_mates if mate.get("fantasy_team_id") is not None}
         rows = []
         for team_id in team_rosters:
-            gain = fa_values_out.get(str(team_id), {}).get(p["id"])
+            gain = team_fa_gains.get(str(team_id), {}).get(p["id"])
             is_handcuff = team_id in handcuff_owner_ids
             level = "high" if is_handcuff else gain_level(gain)
             if level is None:
@@ -1151,65 +1155,63 @@ def run_league(cfg: dict) -> dict:
     strength_by_team = rank_and_compare(team_ppw, settings.positions)
     slot_strength_by_team = rank_and_compare(team_slot_ppw, slot_labels)
 
+    # Team-agnostic - a free agent's own value has nothing to do with which
+    # roster is asking (see fa_pool_value's own docstring) - computed ONCE
+    # for the whole pool, not per team the way the old lineup-delta engine's
+    # fa_values() was. Every free agent gets starting_value=0 (never a
+    # starter anywhere by definition) so players.json carries the same
+    # three fields for rostered and unrostered players alike.
+    fa_pool_values = fa_pool_value(free_agents_ctx, weeks)
+    for fa_id, v in fa_pool_values.items():
+        players_by_id[fa_id]["starting_value"] = v["starting_value"]
+        players_by_id[fa_id]["depth_value"] = v["depth_value"]
+        players_by_id[fa_id]["value_delta"] = v["value_delta"]
+    fa_values_out: dict[str, float] = {fa_id: v["value_delta"] for fa_id, v in fa_pool_values.items()}
+    # Week-by-week detail behind the player modal's NMD breakdown - kept for
+    # every free agent fa_pool_value considered (it's cheap now, no lineup
+    # re-optimization per candidate the way the old engine needed), not
+    # filtered to "beats a real bar" the way the old per-team version was,
+    # since there's no per-team bar to filter against anymore.
+    fa_values_detail_out: dict[str, dict] = {fa_id: {"weekly": v["weekly"]} for fa_id, v in fa_pool_values.items()}
+
     teams_out = []
-    fa_values_out: dict[str, dict[str, float]] = {}
-    fa_values_detail_out: dict[str, dict[str, dict]] = {}
+    team_values_by_team: dict[int, dict[str, dict]] = {}
     for t in espn_teams:
         roster_ids = team_rosters[t.team_id]
-        depth_by_week = depth_values_by_week(roster_ids, players_ctx, free_agents_ctx, weeks, settings.slots, settings.slot_eligibility)
-        for pid, vals in depth_by_week.items():
-            players_by_id[pid]["value_delta"] = sum(vals["value_delta"].values())
+        team_values = position_value_by_player(roster_ids, players_ctx, free_agents_ctx, weeks, settings.slots, settings.slot_eligibility)
+        team_values_by_team[t.team_id] = team_values
+        for pid, vals in team_values.items():
+            players_by_id[pid]["starting_value"] = vals["starting_value"]
+            players_by_id[pid]["depth_value"] = vals["depth_value"]
+            players_by_id[pid]["value_delta"] = vals["value_delta"]
 
         depth_table: dict[str, list[dict]] = {pos: [] for pos in settings.positions}
         for pid in roster_ids:
             pos = players_by_id[pid]["position"]
-            vals = depth_by_week.get(pid, {"value_delta": {}, "replacement_id": {}})
+            vals = team_values.get(pid, {"starting_value": 0.0, "depth_value": 0.0, "value_delta": 0.0, "weekly": []})
             depth_table.setdefault(pos, []).append(
                 {
                     "id": pid,
-                    "value_delta": sum(vals["value_delta"].values()),
-                    # The replacement is picked FRESH each week (see
-                    # depth_values_by_week) - a real teammate OR the best
-                    # streaming free agent, whichever the optimizer actually
-                    # prefers, can be a different specific player week to
-                    # week, so it lives in the per-week list below, not as
-                    # one season-long name at the top level.
-                    "weekly": [
-                        {"week": w, "value_delta": vals["value_delta"].get(w, 0.0), "replacement_id": vals["replacement_id"].get(w)}
-                        for w in weeks
-                    ],
+                    "value_delta": vals["value_delta"],
+                    "starting_value": vals["starting_value"],
+                    "depth_value": vals["depth_value"],
+                    # The replacement is picked FRESH each week - the best
+                    # available free agent for whichever slot/position he's
+                    # scored against that week (never a bench teammate under
+                    # this calc - see position_value_by_player's own
+                    # docstring), so it lives in the per-week list below, not
+                    # as one season-long name at the top level.
+                    "weekly": vals["weekly"],
                 }
             )
         for pos_list in depth_table.values():
             pos_list.sort(key=lambda x: x["value_delta"], reverse=True)
 
         team_ir_ids = frozenset(pid for pid in roster_ids if pid in ir_ids)
-        # Compute once and derive both the "recommended pickups" shortlist and
-        # the full per-FA value map (all_fa_values.json) from it, rather than
-        # calling pickups() separately and redoing the same lineup work.
-        team_fa_values = fa_values(
-            roster_ids, players_ctx, free_agents_ctx, weeks, settings.slots, settings.slot_eligibility,
-            ir_player_ids=team_ir_ids,
+        pickup_list = pickups(
+            roster_ids, players_ctx, team_values, fa_pool_values, free_agents_ctx,
+            strength_cfg["max_pickups"], ir_player_ids=team_ir_ids,
         )
-        pickup_list = sorted(
-            (
-                {"add": fa_id, "drop": v["drop"], "gain": v["gain"]}
-                for fa_id, v in team_fa_values.items() if v["gain"] > 0
-            ),
-            key=lambda c: c["gain"], reverse=True,
-        )[: strength_cfg["max_pickups"]]
-        fa_values_out[str(t.team_id)] = {fa_id: v["gain"] for fa_id, v in team_fa_values.items()}
-        # Week-by-week detail (drop identity + per-week swing) behind the FAAB
-        # modal's NMD breakdown - only kept for candidates that actually beat
-        # this team's worst droppable player (gain > 0, same bar pickups()
-        # already uses), since a negative-gain add's per-week detail isn't
-        # something a manager would ever want to inspect, and every team's
-        # full pool of considered free agents would otherwise multiply this
-        # file's size by roughly the number of weeks left in the season for
-        # no real benefit.
-        fa_values_detail_out[str(t.team_id)] = {
-            fa_id: {"drop": v["drop"], "weekly": v["weekly"]} for fa_id, v in team_fa_values.items() if v["gain"] > 0
-        }
 
         other_rosters = {ot.team_id: team_rosters[ot.team_id] for ot in espn_teams if ot.team_id != t.team_id}
         targets = trade_targets(
@@ -1238,6 +1240,31 @@ def run_league(cfg: dict) -> dict:
             }
         )
     _log_checkpoint("team_strength_done")
+
+    # team_interest_for (inside _compute_faab_estimates below) needs a
+    # PER-TEAM "would THIS specific team want him" gain to percentile-bucket
+    # into Low/Med/High - fa_pool_values above is deliberately team-agnostic
+    # (one universal rating per free agent, see fa_pool_value's own
+    # docstring), so it can't answer that by itself. Reuses the exact same
+    # "beats the weakest droppable player at his position" comparison
+    # pickups() makes, just for EVERY free agent rather than pickups()' own
+    # gain>0/max_pickups-filtered shortlist - percentile bucketing needs the
+    # full distribution, not just the ones that already clear a real bar.
+    team_specific_fa_gains: dict[str, dict[str, float]] = {}
+    for team_id, roster_ids in team_rosters.items():
+        team_ir_ids = frozenset(pid for pid in roster_ids if pid in ir_ids)
+        team_values = team_values_by_team.get(team_id, {})
+        droppable = [pid for pid in roster_ids if pid not in team_ir_ids and pid in team_values]
+        gains: dict[str, float] = {}
+        if droppable:
+            for fas in free_agents_ctx.values():
+                for fa in fas:
+                    fa_val = fa_pool_values.get(fa.id, {}).get("value_delta", 0.0)
+                    same_pos = [pid for pid in droppable if players_by_id[pid]["position"] == fa.position]
+                    pool = same_pos or droppable
+                    weakest = min(pool, key=lambda pid: team_values[pid]["value_delta"])
+                    gains[fa.id] = fa_val - team_values[weakest]["value_delta"]
+        team_specific_fa_gains[str(team_id)] = gains
 
     # --- lineups (every remaining week, so Start/Sit can show future weeks) ---
     all_week_lineups: dict[tuple[int, int], tuple[float, dict[str, str]]] = {}
@@ -1604,7 +1631,7 @@ def run_league(cfg: dict) -> dict:
     _log_checkpoint("before_faab_estimates")
     try:
         faab_estimates_out = _compute_faab_estimates(
-            cfg, client, players_out, season, faab_current_week, team_rosters, fa_values_out,
+            cfg, client, players_out, season, faab_current_week, team_rosters, team_specific_fa_gains,
             snap_pct_index, gsis_to_pfr, stats_index, team_rb_carries, gsis_by_pid,
         )
     except Exception as exc:
