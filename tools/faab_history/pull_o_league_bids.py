@@ -47,6 +47,47 @@ OUTBID_STATUSES = {"FAILED_INVALIDPLAYERSOURCE"}
 FREEAGENT_FLAT_COST_DOLLARS = 2.0
 
 
+def fetch_week(league: League, year: int, week: int, *, cents_scale: bool = True) -> list[dict]:
+    """One week's worth of fetch_season's own per-week request/parse body -
+    extracted so tools/faab_history/pull_current_week_bids.py can pull just
+    the current week (one ESPN request per league) instead of paying for
+    fetch_season's full up-to-17-week loop when only the latest week's data
+    is actually wanted. See fetch_season's own docstring for cents_scale."""
+    params = {"view": "mTransactions2", "scoringPeriodId": week}
+    filters = {"transactions": {"filterType": {"value": ["FREEAGENT", "WAIVER", "WAIVER_ERROR"]}}}
+    headers = {"x-fantasy-filter": json.dumps(filters)}
+    try:
+        data = league.espn_request.league_get(params=params, headers=headers)
+    except Exception as exc:
+        print(f"  {year} week {week}: request failed ({exc}), skipping", file=sys.stderr)
+        return []
+    rows = []
+    for t in data.get("transactions", []):
+        if t.get("isPending"):
+            continue
+        add_item = next((i for i in t.get("items", []) if i["type"] == "ADD"), None)
+        if add_item is None:
+            continue  # a pure DROP or a TRADE, not a FAAB bid
+        drop_items = [i for i in t.get("items", []) if i["type"] == "DROP"]
+        rows.append(
+            {
+                "season": year,
+                "week": week,
+                "transaction_id": t.get("id"),
+                "team_id": t.get("teamId"),
+                "type": t.get("type"),  # FREEAGENT adds are always a $0 uncontested pickup, not a real bid - keep this so the FAAB model can exclude them
+                "status": t.get("status"),
+                "bid_amount_raw": t.get("bidAmount"),
+                "bid_amount_dollars": (t.get("bidAmount") or 0) / 100 if cents_scale else (t.get("bidAmount") or 0),
+                "add_player_id": add_item["playerId"],
+                "add_player_name": league.player_map.get(add_item["playerId"], "Unknown"),
+                "drop_player_ids": [d["playerId"] for d in drop_items],
+                "date": t.get("processDate") or t.get("proposedDate"),
+            }
+        )
+    return rows
+
+
 def fetch_season(league: League, year: int, *, cents_scale: bool = True) -> list[dict]:
     """cents_scale=True (The O League's own default - real money changes
     hands here, and ESPN's bidAmount for this league really is in cents,
@@ -61,37 +102,7 @@ def fetch_season(league: League, year: int, *, cents_scale: bool = True) -> list
     ESPN reports it, undivided."""
     rows = []
     for week in WEEKS:
-        params = {"view": "mTransactions2", "scoringPeriodId": week}
-        filters = {"transactions": {"filterType": {"value": ["FREEAGENT", "WAIVER", "WAIVER_ERROR"]}}}
-        headers = {"x-fantasy-filter": json.dumps(filters)}
-        try:
-            data = league.espn_request.league_get(params=params, headers=headers)
-        except Exception as exc:
-            print(f"  {year} week {week}: request failed ({exc}), skipping", file=sys.stderr)
-            continue
-        for t in data.get("transactions", []):
-            if t.get("isPending"):
-                continue
-            add_item = next((i for i in t.get("items", []) if i["type"] == "ADD"), None)
-            if add_item is None:
-                continue  # a pure DROP or a TRADE, not a FAAB bid
-            drop_items = [i for i in t.get("items", []) if i["type"] == "DROP"]
-            rows.append(
-                {
-                    "season": year,
-                    "week": week,
-                    "transaction_id": t.get("id"),
-                    "team_id": t.get("teamId"),
-                    "type": t.get("type"),  # FREEAGENT adds are always a $0 uncontested pickup, not a real bid - keep this so the FAAB model can exclude them
-                    "status": t.get("status"),
-                    "bid_amount_raw": t.get("bidAmount"),
-                    "bid_amount_dollars": (t.get("bidAmount") or 0) / 100 if cents_scale else (t.get("bidAmount") or 0),
-                    "add_player_id": add_item["playerId"],
-                    "add_player_name": league.player_map.get(add_item["playerId"], "Unknown"),
-                    "drop_player_ids": [d["playerId"] for d in drop_items],
-                    "date": t.get("processDate") or t.get("proposedDate"),
-                }
-            )
+        rows.extend(fetch_week(league, year, week, cents_scale=cents_scale))
     return rows
 
 

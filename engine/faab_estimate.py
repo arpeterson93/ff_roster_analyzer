@@ -135,6 +135,13 @@ POOLED_TRAINING_TABLE_PATH = Path(__file__).resolve().parent.parent / "tools" / 
 # row count (5.6M+ as of 2026-09 and growing) makes json.loads(path.read_
 # text()) OOM a GitHub-hosted CI runner outright; Parquet lets polars load
 # and reduce it columnar the whole way down instead.
+CURRENT_WEEK_BIDS_PATH = Path(__file__).resolve().parent.parent / "tools" / "faab_history" / "current-week-bids.json"
+# What tools/faab_history/pull_current_week_bids.py just wrote - real bids
+# from other pooled leagues for THE CURRENT WEEK ONLY (not an accumulating
+# dataset - see that script's own docstring and FaabModel.same_week_signal
+# below). Optional: a week this hasn't run yet, or found nothing, just
+# means same_week_signal always returns None, not a crash - see
+# FaabModel.__init__'s own handling.
 O_LEAGUE_ID = 355398  # duplicated from tools/faab_history/build_training_table.py's own constant - engine/ doesn't import from tools/, wrong dependency direction
 TRAINABLE_SIGNALS = {"won", "outbid", "no_bid", "other_failure"}  # "other_failure" (roster-limit/contingency logistics, e.g. a manager's OTHER simultaneous claim consumed the roster slot - see pull_o_league_bids.py's classify()) is real "someone placed a bid" evidence for the INTEREST stage even though, like outbid, it never carries price signal - see dedupe_events_for_interest and module docstring
 POSITIONS = ["QB", "RB", "WR", "TE", "K"]  # QB is the OLS reference category (no dummy)
@@ -2025,6 +2032,20 @@ def regression_estimate(query: dict, price_coefs: dict[str, float], interest_coe
     }
 
 
+def _same_week_signal_from_rows(rows: list[dict]) -> dict | None:
+    """The actual computation behind FaabModel.same_week_signal - factored
+    out as a standalone function (rows already looked up, never empty) so
+    it's testable without constructing a full FaabModel. See that method's
+    own docstring for the field-by-field rationale."""
+    won_rows = [r for r in rows if r["signal"] == "won"]
+    prices = [target_pct(r) for r in won_rows]
+    return {
+        "conditional_price": {"median": float(np.median(prices)), "mean": float(np.mean(prices))} if prices else None,
+        "leagues_with_activity": len({r["source_league_id"] for r in rows}),
+        "bid_distribution": [{"value": target_pct(r), "source_league_id": r["source_league_id"]} for r in won_rows],
+    }
+
+
 # ---------------------------------------------------------------------------
 class FaabModel:
     """Fit once per pipeline run, reused for every candidate player."""
@@ -2087,6 +2108,47 @@ class FaabModel:
         distance_stats = _feature_stats(self.interest_rows)
         self.interest_max_distance = _position_distance_cutoffs(self.interest_rows, distance_stats)
         self.price_max_distance = _position_distance_cutoffs(self.price_rows, distance_stats)
+
+        # Same-week cross-league signal - see same_week_signal's own
+        # docstring for why this is a completely SEPARATE, independent read
+        # from everything above (never touches interest_rows/price_rows,
+        # comp_based_estimate, or _knn at all). Keyed by (gsis_id, week) -
+        # multiple OTHER leagues' rows for the same real player-week just
+        # become multiple entries under one key, not extra k-NN neighbors.
+        self.same_week_by_gsis: dict[tuple[str, int], list[dict]] = defaultdict(list)
+        if CURRENT_WEEK_BIDS_PATH.exists():
+            for r in json.loads(CURRENT_WEEK_BIDS_PATH.read_text()):
+                if r.get("gsis_id"):
+                    self.same_week_by_gsis[(r["gsis_id"], r["week"])].append(r)
+
+    def same_week_signal(self, gsis_id: str | None, week: int) -> dict | None:
+        """None when there's nothing to show (the common case - most
+        players draw zero cross-league activity most weeks, and this file
+        may not have run yet at all) - the caller shows no card rather than
+        a misleading zero. Otherwise: {conditional_price: {median, mean} or
+        None (real activity but no WINNER yet, e.g. a claim still
+        processing when this ran), leagues_with_activity: how many
+        DISTINCT other leagues had any real transaction on this exact
+        player this week, bid_distribution: [{value, source_league_id}]
+        for winners only, same shape _price_comp_bid_distribution already
+        uses, so the UI's existing dot-plot renderer works unchanged}.
+
+        Deliberately NOT a leagues_with_bid/leagues_eligible-style FRACTION
+        like the k-NN interest comps show - that ratio needs a real
+        "eligible" denominator (confirmed via roster data - see
+        build_no_bid_rows), which this script never pulls (see
+        pull_current_week_bids.py's own docstring: no roster pull, real
+        bids only). leagues_with_activity is a plain count of leagues we
+        have SOME real transaction from, not a rate out of a known
+        population - reported as such, not dressed up as a percentage it
+        isn't.
+
+        target_pct() already handles the % of budget normalization
+        (effective_starting_budget is set on every row from the REAL
+        acquisition_budget pull_current_week_bids.py just fetched live -
+        see that script's _annotate_budget_remaining)."""
+        rows = self.same_week_by_gsis.get((gsis_id, week)) if gsis_id else None
+        return _same_week_signal_from_rows(rows) if rows else None
 
     def estimate(self, query: dict) -> dict:
         comp = comp_based_estimate(

@@ -242,6 +242,7 @@ def _compute_faab_estimates(
     team_rosters: dict[int, list[str]], fa_values_out: dict[str, dict[str, float]],
     snap_pct_index: dict[str, dict[int, float]], gsis_to_pfr: dict[str, str],
     stats_index: dict[str, dict[int, dict]], team_rb_carries: dict[tuple[str, int], float],
+    gsis_by_pid: dict[str, str],
 ) -> dict[str, dict]:
     """FAAB bid estimates for currently-unrostered players on ESPN "WAIVERS"
     status (need a real bid, unlike an instant-add "FREEAGENT") - see
@@ -269,6 +270,11 @@ def _compute_faab_estimates(
     sitting in run_league's scope, built early (before _register's own
     per-player `weekly[]` construction needs them for the Rankings Stats
     tab's usage columns) rather than reloaded a second time here.
+    gsis_by_pid resolves a candidate's internal id to its real gsis_id, for
+    FaabModel.same_week_signal - the k-NN estimate itself never needed to
+    know WHICH real player it's estimating for (query is pure features), but
+    the same-week cross-league lookup is a literal same-player-same-week
+    match, not a similarity search, so it needs the real identity.
 
     Week 1 is a hard cutoff, not just a quiet edge case: there is no PRIOR
     completed week yet (the lookback window is always current_week - 1, by
@@ -495,8 +501,13 @@ def _compute_faab_estimates(
         # Roster-fit context is orthogonal to whether the broader MARKET
         # should bid - a below-threshold player can still be a real personal
         # handcuff stash for one specific owner, so this is computed and
-        # attached regardless of is_relevant below.
+        # attached regardless of is_relevant below. Same reasoning for
+        # same_week: a player too quiet to clear the k-NN relevance bar can
+        # still be a real, literal same-week bid target elsewhere - that's
+        # observed fact, not a model extrapolation, so it isn't gated by
+        # this same relevance threshold at all.
         team_interest = team_interest_for(p, info["qualifying_mates"])
+        same_week = model.same_week_signal(gsis_by_pid.get(pid), current_week)
 
         if not info["is_relevant"]:
             estimates[pid] = {
@@ -505,6 +516,7 @@ def _compute_faab_estimates(
                 "comps": [], "interest_comps": [], "distribution": None,
                 "below_relevance_threshold": True,
                 "team_interest": team_interest,
+                "same_week": same_week,
                 "inputs": {
                     "position": p["position"], "week": current_week,
                     "prior_week_actual_points": prior_points, "prior_week_had_stat_row": prior_actual is not None,
@@ -541,7 +553,11 @@ def _compute_faab_estimates(
             "carry_share_prior_week": carry_share,
             "target_share_prior_week": target_share,
         }
-        estimates[pid] = model.estimate(query) | {"team_interest": team_interest}
+        # same_week computed above (shared with the below_relevance_
+        # threshold branch) - independent of everything estimate() computes,
+        # see same_week_signal's own docstring on why it's never blended
+        # into the k-NN comp/regression numbers, just shown alongside them.
+        estimates[pid] = model.estimate(query) | {"team_interest": team_interest, "same_week": same_week}
 
     return estimates
 
@@ -1581,7 +1597,7 @@ def run_league(cfg: dict) -> dict:
     try:
         faab_estimates_out = _compute_faab_estimates(
             cfg, client, players_out, season, faab_current_week, team_rosters, fa_values_out,
-            snap_pct_index, gsis_to_pfr, stats_index, team_rb_carries,
+            snap_pct_index, gsis_to_pfr, stats_index, team_rb_carries, gsis_by_pid,
         )
     except Exception as exc:
         logger.warning("faab_model: estimate computation failed, writing empty faab_estimates.json: %s", exc)

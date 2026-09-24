@@ -1,0 +1,66 @@
+name: pull-current-week-bids
+
+# Pulls this week's real FAAB bids from every currently-eligible pooled
+# public league (tools/faab_history/pull_current_week_bids.py) and commits
+# the refreshed tools/faab_history/current-week-bids.json straight to main -
+# see that script's own docstring and engine/faab_estimate.py's
+# FaabModel.same_week_signal for what this feeds.
+#
+# workflow_dispatch only, same as build.yml's own reasoning (D2 in
+# update-scripts-implementation-plan.md): GitHub's own `schedule:` trigger
+# was measured firing hours late on a quiet repo, so Alex dispatches this
+# from cron-job.org instead, timed for Wednesday morning - after most other
+# leagues' own Tuesday-night/Wednesday-morning waivers clear, before The O
+# League's own Wednesday-night run. NOTE: this is a deliberate, narrow
+# exception to update-scripts-implementation-plan.md's decision D7
+# ("tools/faab_history/* stay manual, no change") - see the conversation
+# this was built from.
+#
+# No ESPN credentials needed (same as pull_public_league_bids.py) - every
+# pooled league here is genuinely public.
+on:
+  workflow_dispatch:
+    inputs:
+      week:
+        description: "Override auto-detected current week (leave blank to auto-detect)"
+        required: false
+        type: string
+      limit:
+        description: "Only pull the first N eligible leagues (fast dry run, leave blank for all)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  pull:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - run: pip install -r requirements.txt
+
+      - name: Pull current-week bids
+        env:
+          PYTHONIOENCODING: utf-8
+          WEEK_INPUT: ${{ inputs.week }}
+          LIMIT_INPUT: ${{ inputs.limit }}
+        run: |
+          args=()
+          [ -n "$WEEK_INPUT" ] && args+=(--week "$WEEK_INPUT")
+          [ -n "$LIMIT_INPUT" ] && args+=(--limit "$LIMIT_INPUT")
+          python -m tools.faab_history.pull_current_week_bids "${args[@]}"
+
+      - name: Commit updated current-week-bids.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add tools/faab_history/current-week-bids.json
+          git diff --cached --quiet && echo "no changes" || git commit -m "Update current-week-bids.json"
+          git push

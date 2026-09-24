@@ -821,7 +821,33 @@ function faabEstimateSection(player, data) {
       </div>
     </div>
   `;
-  const methodCards = compBasedCard + regressionCard;
+  // Real bids from other pooled leagues on THIS exact player THIS exact
+  // week (engine/faab_estimate.py's FaabModel.same_week_signal) - not a
+  // k-NN read on similar-but-different situations, an observed fact about
+  // this one. Deliberately never blended into Comp-based/Regression above
+  // (see that function's own docstring) - a separate card, absent entirely
+  // (not a zero) whenever nothing pulled for this player this week, which
+  // is most players most weeks. INT here is a plain COUNT of leagues with
+  // any real activity (won/outbid/other_failure), not a %-style rate like
+  // the other two cards' INT - there's no "eligible" denominator without a
+  // roster pull (see same_week_signal's own docstring), so it isn't
+  // dressed up as one. Not backtested (can't be - see the conversation
+  // this was built from), so labelled as such rather than implying the
+  // same evidentiary weight as the two methods above.
+  const sameWeek = est.same_week;
+  const sameWeekCard = sameWeek
+    ? `
+    <div class="faab-method-card">
+      <div class="faab-method-label" title="Real bids from other pooled leagues on this exact player this week - not backtested, shown as-is.">This week, elsewhere</div>
+      <div class="faab-method-values faab-method-values-triple">
+        <div class="faab-method-value"><span class="faab-method-num">${pctOrDash(sameWeek.conditional_price?.median, 1)}</span><span class="faab-method-sub">MED</span></div>
+        <div class="faab-method-value"><span class="faab-method-num">${pctOrDash(sameWeek.conditional_price?.mean, 1)}</span><span class="faab-method-sub">AVG</span></div>
+        <div class="faab-method-value"><span class="faab-method-num">${sameWeek.leagues_with_activity}</span><span class="faab-method-sub">LG</span></div>
+      </div>
+    </div>
+  `
+    : "";
+  const methodCards = compBasedCard + regressionCard + sameWeekCard;
 
   // The actual query inputs driving every method/comp above, formatted the
   // SAME way a Price/Interest comp row is (see recentCellHtml/rankCellHtml/
@@ -846,6 +872,25 @@ function faabEstimateSection(player, data) {
     </div>
   `;
 
+  // Reuses priceCompDistributionHtml unchanged against a synthetic "comp" -
+  // {bid_distribution, pct_of_remaining_budget: undefined} is exactly the
+  // shape it already expects, and the self/mine tick-marker logic degrades
+  // harmlessly to "show nothing" when pct_of_remaining_budget is undefined
+  // (there's no single "this landed here" value for a live same-week read
+  // the way a historical comp has its own real settled price). Expanded by
+  // default (<details open>, not collapsed) - this is the first time we've
+  // ever had a real, this-exact-player distribution rather than a
+  // similar-situations k-NN neighborhood, worth surfacing prominently.
+  const sameWeekDistHtml =
+    sameWeek && sameWeek.bid_distribution.length
+      ? `
+    <details open>
+      <summary class="small">This week's real bids, other leagues</summary>
+      ${priceCompDistributionHtml({ bid_distribution: sameWeek.bid_distribution, pct_of_remaining_budget: undefined })}
+    </details>
+  `
+      : "";
+
   return `
     <p class="muted small">% of your league's starting budget</p>
     <div class="faab-method-grid">${methodCards}</div>
@@ -854,6 +899,8 @@ function faabEstimateSection(player, data) {
     ${teamInterestSection(est.team_interest, data)}
 
     ${thisPlayerSection}
+
+    ${sameWeekDistHtml}
 
     <h3>Price comps</h3>
     <div class="table-wrap"><table><thead><tr><th title="This comp's share of the total weight behind the price estimates above - MED first, then AVG. MED's weight is capped so no single comp can carry more than 5x any other's; AVG's isn't. Comps are already listed highest-weight-first (by AVG).">WT (MED/AVG)</th><th>Player</th><th>% of budget</th><th>Recent pts</th><th>USAGE %</th><th>Rank</th><th>Flags</th></tr></thead><tbody>${priceComps || `<tr><td colspan="7" class="muted small">No comparable winning bids found.</td></tr>`}</tbody></table></div>

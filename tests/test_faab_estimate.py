@@ -16,6 +16,7 @@ from engine.faab_estimate import (
     _position_distance_cutoffs,
     _price_comp_bid_distribution,
     _price_comp_dicts,
+    _same_week_signal_from_rows,
     _shrunk_interest_fractions,
     _weighted_median,
     add_synthetic_price_wins,
@@ -902,3 +903,49 @@ def test_feature_vector_flags_disambiguate_missing_from_a_real_zero():
     assert fv_zero["snap_pct_prior_week"] == 0.0 and fv_zero["had_snap_pct_prior_week"] == 1.0
     assert fv_zero["trailing_2_3_avg_points"] == 0.0 and fv_zero["had_trailing_2_3_avg_points"] == 1.0
     assert fv_zero["season_avg_points"] == 0.0 and fv_zero["had_season_avg_points"] == 1.0
+
+
+# --- FaabModel.same_week_signal (via _same_week_signal_from_rows, its
+# testable core - see that function's own docstring) - the same-week
+# cross-league signal pulled by tools/faab_history/pull_current_week_bids.py
+# and shown as its own card in the FAAB Lab modal tab, deliberately
+# independent of everything above (never touches interest_rows/price_rows,
+# comp_based_estimate, or _knn).
+def test_same_week_signal_median_mean_and_distribution_across_winners():
+    rows = [
+        _bid_row(1, signal="won", effective_cost_dollars=20.0, effective_starting_budget=100.0),  # 0.20
+        _bid_row(2, signal="won", effective_cost_dollars=10.0, effective_starting_budget=100.0),  # 0.10
+        _bid_row(3, signal="won", effective_cost_dollars=30.0, effective_starting_budget=100.0),  # 0.30
+    ]
+    out = _same_week_signal_from_rows(rows)
+    assert out["conditional_price"]["median"] == pytest.approx(0.20)
+    assert out["conditional_price"]["mean"] == pytest.approx(0.20)
+    assert out["leagues_with_activity"] == 3
+    assert sorted(d["value"] for d in out["bid_distribution"]) == pytest.approx([0.10, 0.20, 0.30])
+
+
+def test_same_week_signal_counts_every_league_with_activity_not_just_winners():
+    # leagues_with_activity is a plain count of leagues we have ANY real
+    # transaction from (won/outbid/other_failure) - not just winners, and
+    # deliberately not a fraction of some "eligible" population (see the
+    # function's own docstring on why there's no clean denominator here
+    # without a roster pull).
+    rows = [
+        _bid_row(1, signal="won", effective_cost_dollars=20.0, effective_starting_budget=100.0),
+        _bid_row(2, signal="outbid"),
+        _bid_row(3, signal="other_failure"),
+    ]
+    out = _same_week_signal_from_rows(rows)
+    assert out["leagues_with_activity"] == 3
+    assert len(out["bid_distribution"]) == 1  # only the real winner
+
+
+def test_same_week_signal_no_winner_yet_still_reports_activity():
+    # Real activity (a claim still processing, or every attempt failed for
+    # a non-competitive reason) but no actual winner when the pull ran -
+    # conditional_price is None (nothing to average), not a misleading 0.
+    rows = [_bid_row(1, signal="outbid"), _bid_row(2, signal="other_failure")]
+    out = _same_week_signal_from_rows(rows)
+    assert out["conditional_price"] is None
+    assert out["leagues_with_activity"] == 2
+    assert out["bid_distribution"] == []
