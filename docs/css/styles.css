@@ -566,10 +566,16 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
    colors above, moved live by the range input below rather than a
    separately-scaled widget. */
 .faab-confidence-marker { position: absolute; top: 12px; bottom: 22px; width: 2px; background: var(--blue-500); transform: translateX(-1px); z-index: 2; }
+/* Same-week cross-league confidence marker - green, distinct from every
+   other marker on this chart (median=ink, mean=amber, k-NN confidence=blue)
+   - a real bid on THIS player THIS week, not a k-NN read on similar
+   situations, so it gets its own visual identity. */
+.faab-same-week-marker { position: absolute; top: 12px; bottom: 22px; width: 2px; background: var(--green-600); transform: translateX(-1px); z-index: 2; }
 
 .faab-confidence { margin-top: 12px; }
 .faab-confidence-row { display: flex; justify-content: space-between; align-items: baseline; font-size: 12.5px; margin-bottom: 4px; }
 .faab-confidence-bid { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--blue-500); }
+.faab-confidence-bid-same-week { color: var(--green-600); }
 .faab-confidence-slider { width: 100%; accent-color: var(--blue-500); }
 .bar-label { width: 90px; flex-shrink: 0; color: var(--ink-700); }
 .bar-track { flex: 1; height: 14px; background: var(--border); border-radius: 4px; overflow: hidden; position: relative; }

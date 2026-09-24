@@ -705,6 +705,11 @@ function faabEstimateSection(player, data) {
   // comp_based_estimate) are two independent reads off the SAME k comps,
   // both real candidates for "price if contested," so both get plotted
   // rather than picking one to show.
+  // Real bids from other pooled leagues on THIS exact player THIS exact
+  // week (engine/faab_estimate.py's FaabModel.same_week_signal) - defined
+  // here (not down by sameWeekCard below) so distHtml's own confidence
+  // slider can show it alongside the k-NN read, per player request.
+  const sameWeek = est.same_week;
   const dist = est.distribution;
   const condPriceMean = (est.conditional_price || {}).comp_based_mean;
   const condPriceMedian = (est.conditional_price || {}).comp_based_median;
@@ -724,13 +729,23 @@ function faabEstimateSection(player, data) {
   // (not a value recomputed from the samples here) drive the median/mean
   // markers - the exact same two numbers the Comp-based method card above
   // already shows, so this chart never contradicts them.
+  // Same-week bids, equal-weighted (no k-NN distance concept applies to a
+  // literal same-player-same-week observation - see same_week_signal's own
+  // docstring) - reused here so the confidence slider below can show "what
+  // would this confidence level have cost, going by other leagues' real
+  // bids on this exact player this week" alongside the k-NN read, per
+  // player request. weightedPercentileJs already accepts [value, weight]
+  // pairs, so weight=1 per real bid is a direct, no-new-code reuse.
+  const sameWeekSamples = (sameWeek?.bid_distribution || []).map((d) => [d.value, 1]);
   const distHtml = dist
     ? (() => {
         const sampleValues = samples.map(([v]) => v);
-        const axisMax = niceAxisMax(Math.max(dist.max, condPriceMean || 0, condPriceMedian || 0, ...sampleValues, 0.001) * 1.15, 5);
+        const sameWeekValues = sameWeekSamples.map(([v]) => v);
+        const axisMax = niceAxisMax(Math.max(dist.max, condPriceMean || 0, condPriceMedian || 0, ...sampleValues, ...sameWeekValues, 0.001) * 1.15, 5);
         const xPct = (v) => Math.max(0, Math.min(100, (v / axisMax) * 100));
         const defaultConfidence = 80;
         const defaultBid = weightedPercentileJs(samples, defaultConfidence);
+        const sameWeekDefaultBid = sameWeekSamples.length ? weightedPercentileJs(sameWeekSamples, defaultConfidence) : null;
 
         const ticks = niceTicksJs(axisMax, 5);
         const gridlines = ticks.map((t) => `<div class="faab-gridline" style="left:${xPct(t).toFixed(2)}%"></div>`).join("");
@@ -764,6 +779,7 @@ function faabEstimateSection(player, data) {
                 <div class="faab-mean-tick" style="left:${xPct(condPriceMean).toFixed(2)}%"></div>
                 <span class="faab-mean-tag" style="left:${xPct(condPriceMean).toFixed(2)}%">avg ${fmt(condPriceMean * 100, 1)}%</span>
                 ${samples.length ? `<div class="faab-confidence-marker" data-confidence-marker style="left:${xPct(defaultBid).toFixed(2)}%;"></div>` : ""}
+                ${sameWeekDefaultBid !== null ? `<div class="faab-same-week-marker" data-same-week-confidence-marker style="left:${xPct(sameWeekDefaultBid).toFixed(2)}%;"></div>` : ""}
               </div>
             </div>
             <div class="faab-axis-ticks"><div class="faab-chart-inset">${tickLabels}</div></div>
@@ -775,8 +791,18 @@ function faabEstimateSection(player, data) {
                 <span>Bid for <b data-confidence-pct>${defaultConfidence}%</b> confidence</span>
                 <span class="faab-confidence-bid" data-confidence-bid>${fmt(defaultBid * 100, 1)}%</span>
               </div>
+              ${sameWeekDefaultBid !== null
+                ? `
+              <div class="faab-confidence-row">
+                <span>Same confidence, this week elsewhere</span>
+                <span class="faab-confidence-bid faab-confidence-bid-same-week" data-same-week-confidence-bid>${fmt(sameWeekDefaultBid * 100, 1)}%</span>
+              </div>
+              `
+                : ""}
               <input type="range" min="50" max="99" value="${defaultConfidence}" class="faab-confidence-slider" data-confidence-slider>
-              <p class="muted small">Bid that would have won this share of comparable historical auctions. Pooled from ${samples.length} winning prices behind the comps below.</p>
+              <p class="muted small">Bid that would have won this share of comparable historical auctions. Pooled from ${samples.length} winning prices behind the comps below.${
+                sameWeekDefaultBid !== null ? ` The green marker/row is the same read against ${sameWeekSamples.length} real bid${sameWeekSamples.length === 1 ? "" : "s"} on THIS player, other leagues, this week - not backtested.` : ""
+              }</p>
             </div>
           `
             : ""}
@@ -833,8 +859,8 @@ function faabEstimateSection(player, data) {
   // roster pull (see same_week_signal's own docstring), so it isn't
   // dressed up as one. Not backtested (can't be - see the conversation
   // this was built from), so labelled as such rather than implying the
-  // same evidentiary weight as the two methods above.
-  const sameWeek = est.same_week;
+  // same evidentiary weight as the two methods above. (sameWeek itself is
+  // defined up near dist/samples above, not here.)
   const sameWeekCard = sameWeek
     ? `
     <div class="faab-method-card">
@@ -1078,6 +1104,11 @@ function wireFaabConfidenceSlider(scopeEl, player, data) {
   const samples = est?.price_confidence_samples || [];
   const dist = est?.distribution;
   if (!dist) return;
+  // Same equal-weighted reuse of weightedPercentileJs as faabEstimateSection's
+  // own distHtml (see that IIFE's sameWeekSamples) - kept in sync by reading
+  // straight off est.same_week here too, rather than passed through, same
+  // pattern this function already uses for samples/dist.
+  const sameWeekSamples = (est?.same_week?.bid_distribution || []).map((d) => [d.value, 1]);
   // Same 0-to-axisMax domain the histogram itself was drawn against (see
   // faabEstimateSection's distHtml) - stashed on the track element rather
   // than recomputed here, so the slider's marker always matches whatever
@@ -1092,6 +1123,12 @@ function wireFaabConfidenceSlider(scopeEl, player, data) {
     scopeEl.querySelectorAll("[data-confidence-bid]").forEach((el) => (el.textContent = `${fmt(bid * 100, 1)}%`));
     const marker = scopeEl.querySelector("[data-confidence-marker]");
     if (marker) marker.style.left = `${pctPos(bid)}%`;
+    if (sameWeekSamples.length) {
+      const sameWeekBid = weightedPercentileJs(sameWeekSamples, confidence);
+      scopeEl.querySelectorAll("[data-same-week-confidence-bid]").forEach((el) => (el.textContent = `${fmt(sameWeekBid * 100, 1)}%`));
+      const sameWeekMarker = scopeEl.querySelector("[data-same-week-confidence-marker]");
+      if (sameWeekMarker) sameWeekMarker.style.left = `${pctPos(sameWeekBid)}%`;
+    }
   });
 }
 
