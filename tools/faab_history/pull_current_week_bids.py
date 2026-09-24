@@ -74,38 +74,39 @@ LONG_PAUSE_EVERY = 60
 LONG_PAUSE_RANGE = (15.0, 45.0)
 
 
-def _detect_weeks() -> tuple[int, int]:
-    """Two DIFFERENT "current week" numbers, both genuinely needed - using
-    just one of them (what the very first live run did) means either the
-    ESPN fetch below returns nothing, or the output never matches what
-    FaabModel.same_week_signal queries with. Confirmed empirically (not just
-    reasoned) against The O League's own live endpoint on a Wednesday
-    morning: querying mTransactions2 with scoringPeriodId=league.current_week
-    (3) returned ZERO rows, while scoringPeriodId=week_for_kickoff's value
-    (2) returned that morning's real Tuesday-night waiver activity.
+def _detect_current_week() -> int:
+    """ONE number, used as both the ESPN scoringPeriodId to fetch AND the
+    output row's "week" label - an earlier version of this function used
+    two different numbers for those (see the conversation this was built
+    from), reasoning from a single misleading empirical check that ESPN's
+    transactions endpoint lags a full week behind league.current_week. It
+    doesn't: scoringPeriodId=N starts filling up as soon as week N-1's
+    games END (the Tuesday-night-after-Monday-Night-Football waiver rush),
+    well before week N's own games kick off - confirmed against 5 real
+    POOLED leagues (not just The O League), all showing scoringPeriodId=
+    current_week already full of that week's real, days-old activity while
+    scoringPeriodId=current_week-1 held only the PRIOR week's now-stale
+    batch. The original misleading check queried The O League itself -
+    deliberately excluded from the real pool because (per this module's own
+    docstring) it runs its own waivers a day later than the rest of the
+    pool - at a moment before ITS OWN scoringPeriodId=current_week bucket
+    had anything in it yet; that's an O-League-schedule quirk, not how
+    ESPN's endpoint behaves for the ~530 real leagues this actually pulls
+    from.
 
-    fetch_scoring_period: what to actually send ESPN as scoringPeriodId to
-    get real transactions back. ESPN keeps logging transactions under the
-    PRIOR week's scoring period until the next week's games actually kick
-    off, even though league.current_week (a forward-looking, roster-
-    management-UI concept) has already advanced - so this needs
-    week_for_kickoff's backward-looking "which week has actually started"
-    answer, not league.current_week.
-
-    label_week: what to stamp on each output row's "week" field, so
-    FaabModel.same_week_signal's exact (gsis_id, week) lookup can ever match
-    - engine/pipeline.py queries it with _faab_week_override's result, so
-    this replicates that same function (current_week + 1 only once
-    current_week's own games have started) rather than importing all of
-    engine.pipeline just for one line.
+    Still needs week_for_kickoff (not just league.current_week) for the one
+    case where they diverge - current_week's own games have already kicked
+    off, at which point engine/pipeline.py's _faab_week_override bumps its
+    own query key to current_week + 1; replicated here (rather than
+    importing all of engine.pipeline for one line) so this stays in sync
+    with whatever FaabModel.same_week_signal is actually queried with.
     """
     schedules_df = nd.schedules(SEASON, current_season=SEASON)
     week_started = nd.week_for_kickoff(datetime.now(timezone.utc), schedules_df, SEASON)
     if week_started is None:
         sys.exit(f"couldn't determine the current week for {SEASON} - pass --week explicitly")
     current_week = EspnLeague(league_id=O_LEAGUE_ID, year=SEASON).current_week
-    label_week = current_week + 1 if week_started == current_week else current_week
-    return week_started, label_week
+    return current_week + 1 if week_started == current_week else current_week
 
 
 def _eligible_leagues(limit: int | None) -> list[dict]:
@@ -173,12 +174,8 @@ def main() -> int:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-    # --week is an explicit manual override (testing, or catching up a
-    # missed run) - trusted as both the ESPN fetch param and the output
-    # label, unlike the auto-detected pair below which deliberately differ
-    # (see _detect_weeks).
-    fetch_week_num, label_week = (args.week, args.week) if args.week is not None else _detect_weeks()
-    print(f"pulling season {SEASON} scoringPeriodId {fetch_week_num}, labeling rows week {label_week}...")
+    week = args.week if args.week is not None else _detect_current_week()
+    print(f"pulling season {SEASON} week {week}...")
 
     candidates = _eligible_leagues(args.limit)
     print(f"{len(candidates)} candidate leagues from vetted_candidates.json - re-verifying live FAAB eligibility...")
@@ -197,14 +194,9 @@ def main() -> int:
         except Exception as exc:
             print(f"  [{i + 1}/{len(budgets)}] league {lid} ({provenance['name']!r}): couldn't open ({exc}), skipping", file=sys.stderr)
             continue
-        week_rows = fetch_week(league, SEASON, fetch_week_num, cents_scale=False)
+        week_rows = fetch_week(league, SEASON, week, cents_scale=False)
         for r in week_rows:
             r["source_league_id"] = lid
-            # fetch_week stamps "week" with the scoringPeriodId it queried
-            # ESPN for - relabel to label_week (see _detect_weeks) so
-            # FaabModel.same_week_signal's (gsis_id, week) lookup matches
-            # what engine/pipeline.py actually queries with.
-            r["week"] = label_week
         raw_rows.extend(week_rows)
         print(f"  [{i + 1}/{len(budgets)}] league {lid} ({provenance['name']!r}): {len(week_rows)} raw transaction rows")
 
