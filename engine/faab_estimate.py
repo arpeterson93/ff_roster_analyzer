@@ -972,7 +972,19 @@ def load_pools(table_path: Path) -> tuple[list[dict], list[dict], dict[tuple, li
         pl.col("signal").is_in(list(TRAINABLE_SIGNALS))
         & pl.col("position").is_in(POSITIONS)
         & (pl.col("type") != "FREEAGENT")
-        & ~pl.col("transaction_id").is_in(list(KNOWN_BAD_BID_TRANSACTION_IDS))
+        # fill_null(False) - a synthetic no_bid row's transaction_id is
+        # always None (see build_no_bid_rows), and polars' is_in() on a
+        # null value returns null, not False - a bare
+        # ~pl.col(...).is_in(...) then filters every no_bid row out
+        # entirely (null is not True, and .filter() only keeps rows whose
+        # predicate is exactly True), which is NOT what "transaction_id
+        # not in this known-bad set" means for a row with no transaction_id
+        # at all. Confirmed live: this silently dropped all ~5M real
+        # no_bid rows from the interest pool, collapsing leagues_with_bid/
+        # leagues_eligible to the same number on every single interest
+        # comp (100% "bid rate" shown for literally everything) - see the
+        # conversation this was built from.
+        & ~pl.col("transaction_id").is_in(list(KNOWN_BAD_BID_TRANSACTION_IDS)).fill_null(False)
     )
     trainable_df = _promote_synthetic_wins(filtered).sort([_IS_SYNTHETIC, _ORIG_IDX])
 

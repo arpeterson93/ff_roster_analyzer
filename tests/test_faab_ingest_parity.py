@@ -58,7 +58,12 @@ _BASE = {
 def _row(tid, league_id, add_player_id, season, week, signal, **overrides):
     row = dict(_BASE)
     row.update(
-        transaction_id=f"tx{tid}", source_league_id=league_id, add_player_id=add_player_id,
+        # A real no_bid row's transaction_id is always None - it's
+        # synthetic (see build_no_bid_rows), not a real ESPN transaction.
+        # Modeled here on purpose, not just f"tx{tid}" for every signal -
+        # see test_no_bid_rows_survive_a_null_transaction_id below for why.
+        transaction_id=(None if signal == "no_bid" else f"tx{tid}"),
+        source_league_id=league_id, add_player_id=add_player_id,
         season=season, week=week, signal=signal,
     )
     row.update(overrides)
@@ -165,6 +170,26 @@ def test_synthetic_win_promoted_from_other_failure_only_league(scenario_rows, tm
     assert len(matches) == 1
     assert matches[0]["signal"] == "won"
     assert matches[0]["effective_cost_dollars"] == 6.0
+
+
+def test_no_bid_rows_survive_a_null_transaction_id(scenario_rows, tmp_path):
+    # Regression test: load_pools' native filter used to do
+    # ~pl.col("transaction_id").is_in([...]) directly - polars' is_in()
+    # returns null (not False) for a null input, so ~null is also null,
+    # and .filter() drops any row whose predicate isn't exactly True. Since
+    # EVERY real no_bid row has transaction_id=None (see _row above), this
+    # silently dropped the ENTIRE no_bid population from interest_rows -
+    # collapsing leagues_with_bid/leagues_eligible to the same number on
+    # every single comp (100% "bid rate" shown for literally everything,
+    # confirmed live against the real ~5.6M-row table: exactly 0 of 18,043
+    # interest_rows had signal=="no_bid" before the fix, 19,699 of 37,742
+    # after). Needs the fix in load_pools' filter (.fill_null(False) after
+    # is_in()), not just this fixture change - see that function's own
+    # comment on the exact line.
+    interest_new, _, _ = _new_pools(scenario_rows, tmp_path)
+    no_bid_rows = [r for r in interest_new if r["signal"] == "no_bid"]
+    assert len(no_bid_rows) == 1
+    assert no_bid_rows[0]["add_player_id"] == 1004
 
 
 def test_price_rows_prefers_a_real_win_over_a_synthetic_one_on_ties(tmp_path):
