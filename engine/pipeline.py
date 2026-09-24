@@ -900,8 +900,15 @@ def run_league(cfg: dict) -> dict:
     _log_checkpoint("recent_results_done")
 
     # --- player universe: every rostered player + every fetched free agent ---
-    fa_size = {"QB": 40, "RB": 60, "WR": 60, "TE": 40, "K": 32, "DST": 32}
-    free_agents_espn = {pos: client.get_free_agents(pos, fa_size.get(pos)) for pos in settings.positions}
+    # No per-position cap - request ESPN's whole free-agent pool at each
+    # position (1000 comfortably exceeds any real position's full player
+    # count; ESPN just returns everyone it has rather than erroring past the
+    # real count). A player used to be able to fall out of Rankings/Team
+    # Strength/etc. entirely just for being a deep enough waiver name (see
+    # the conversation this was built from - a size cap this small used to
+    # hide legitimately-searched-for players like a deep WR3).
+    _FA_POOL_SIZE = 1000
+    free_agents_espn = {pos: client.get_free_agents(pos, _FA_POOL_SIZE) for pos in settings.positions}
     _log_checkpoint("free_agents_fetched")
 
     players_out: list[dict] = []
@@ -1209,7 +1216,8 @@ def run_league(cfg: dict) -> dict:
 
         team_ir_ids = frozenset(pid for pid in roster_ids if pid in ir_ids)
         pickup_list = pickups(
-            roster_ids, players_ctx, team_values, fa_pool_values, free_agents_ctx,
+            roster_ids, players_ctx, team_values, free_agents_ctx,
+            weeks, settings.slots, settings.slot_eligibility,
             strength_cfg["max_pickups"], ir_player_ids=team_ir_ids,
         )
 

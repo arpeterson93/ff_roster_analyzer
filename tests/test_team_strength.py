@@ -282,8 +282,7 @@ def test_pickups_prefers_same_position_drop_over_unrelated_bench_player():
     strong_fa_k = _player("k_strong", "K", 15.0)
     free_agents = {"K": [strong_fa_k]}
     team_values = position_value_by_player(["k_weak", "wr_bench"], players, free_agents, weeks, slots, eligibility)
-    fa_values = fa_pool_value(free_agents, weeks)
-    result = pickups(["k_weak", "wr_bench"], players, team_values, fa_values, free_agents, max_pickups=5)
+    result = pickups(["k_weak", "wr_bench"], players, team_values, free_agents, weeks, slots, eligibility, max_pickups=5)
     assert len(result) == 1
     assert result[0]["add"] == "k_strong"
     assert result[0]["drop"] == "k_weak"
@@ -294,8 +293,7 @@ def test_pickups_excludes_fa_that_does_not_beat_the_weakest_droppable():
     weak_fa = _player("fa_weak", "RB", 1.0)
     free_agents = {"RB": [weak_fa]}
     team_values = position_value_by_player(["rb1", "rb2"], players, free_agents, WEEKS, SLOTS, ELIGIBILITY)
-    fa_values = fa_pool_value(free_agents, WEEKS)
-    result = pickups(["rb1", "rb2"], players, team_values, fa_values, free_agents, max_pickups=5)
+    result = pickups(["rb1", "rb2"], players, team_values, free_agents, WEEKS, SLOTS, ELIGIBILITY, max_pickups=5)
     assert result == []
 
 
@@ -310,13 +308,40 @@ def test_pickups_excludes_ir_players_from_the_droppable_pool():
     strong_fa = _player("fa_strong", "RB", 30.0)
     free_agents = {"RB": [strong_fa]}
     team_values = position_value_by_player(["rb1", "rb2"], players, free_agents, weeks, slots, eligibility)
-    fa_values = fa_pool_value(free_agents, weeks)
     result = pickups(
-        ["rb1", "rb2"], players, team_values, fa_values, free_agents, max_pickups=5, ir_player_ids=frozenset(["rb2"])
+        ["rb1", "rb2"], players, team_values, free_agents, weeks, slots, eligibility,
+        max_pickups=5, ir_player_ids=frozenset(["rb2"]),
     )
     # rb2 (the real drop candidate) is unavailable - rb1 must be named instead.
     assert len(result) == 1
     assert result[0]["drop"] == "rb1"
+
+
+def test_pickups_does_not_recommend_dropping_a_negative_value_starter_for_a_worse_fa():
+    # A thin-replacement position (QB) can push a real starter's cumulative
+    # starting_value negative even though he's clearly the best full-season
+    # option - here a different streamer edges him out by 1 point each week
+    # (best_available is re-picked fresh per week), leaving qb1's summed
+    # starting_value negative despite him crushing every single free agent
+    # on every OTHER week. The old direct value_delta compare would have
+    # recommended swapping qb1 for one of these streamers (fa_pool_value's
+    # leave-one-out depth_value credits a streamer's one spike week as full
+    # value_delta >= 0, beating qb1's negative number) even though actually
+    # starting that streamer full-time is a huge net loss. The before/after
+    # whole-roster total must reject every one of them.
+    slots = {"QB": 1}
+    eligibility = {"QB": {"QB"}}
+    weeks = [1, 2, 3]
+    qb1 = PlayerCtx(id="qb1", position="QB", ros_total=66.0, weekly={1: 22.0, 2: 24.0, 3: 20.0})
+    fa_x = PlayerCtx(id="fa_x", position="QB", ros_total=33.0, weekly={1: 23.0, 2: 5.0, 3: 5.0})
+    fa_y = PlayerCtx(id="fa_y", position="QB", ros_total=35.0, weekly={1: 5.0, 2: 25.0, 3: 5.0})
+    fa_z = PlayerCtx(id="fa_z", position="QB", ros_total=31.0, weekly={1: 5.0, 2: 5.0, 3: 21.0})
+    players = {"qb1": qb1}
+    free_agents = {"QB": [fa_x, fa_y, fa_z]}
+    team_values = position_value_by_player(["qb1"], players, free_agents, weeks, slots, eligibility)
+    assert team_values["qb1"]["value_delta"] < 0  # the exact bug scenario this test guards against
+    result = pickups(["qb1"], players, team_values, free_agents, weeks, slots, eligibility, max_pickups=5)
+    assert result == []
 
 
 # --- trade_targets fairness ratio: both sides > 0 alone lets through wildly

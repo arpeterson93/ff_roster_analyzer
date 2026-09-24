@@ -59,13 +59,18 @@ def _canon_pos(pos: str) -> str:
     return _ESPN_POS_TO_CANON.get(pos, pos)
 
 
-_FA_SIZE_BY_POS = {"QB": 40, "RB": 60, "WR": 60, "TE": 40, "K": 32, "DST": 32}
+# No real per-position cap - ESPN just returns everyone it has at a position
+# once the requested size exceeds the real count, so this only needs to
+# safely exceed any position's true full player count (see the conversation
+# this was built from - a small cap here used to hide legitimately-searched-
+# for deep players, like a deep WR3, from Rankings/Team Strength entirely).
+_FA_SIZE_BY_POS = {"QB": 1000, "RB": 1000, "WR": 1000, "TE": 1000, "K": 1000, "DST": 1000}
 
 # Every-position free-agent pool for get_future_espn_projections - one call
 # covering everyone (see that method), so this needs to be roughly as deep
-# as _FA_SIZE_BY_POS's per-position sizes summed (~264) rather than any one
-# position's own cap.
-_FUTURE_PROJECTIONS_FA_SIZE = 350
+# as the full multi-position pool _FA_SIZE_BY_POS now targets, not the old
+# small per-position caps summed.
+_FUTURE_PROJECTIONS_FA_SIZE = 3000
 
 
 class EspnClient:
@@ -227,10 +232,20 @@ class EspnClient:
                 continue
             time.sleep(_REQUEST_PACING_SEC)
             for box in self._league.box_scores(week=week, player_team_cache=player_team_cache):
-                for team_id, lineup in ((box.home_team, box.home_lineup), (box.away_team, box.away_lineup)):
-                    if team_id is None:
+                # box.home_team/away_team are Team OBJECTS by the time box_scores
+                # returns them (League.box_scores replaces the raw teamId int with
+                # the real Team instance from self.teams before returning) - None
+                # only for an actual bye. Team has no __eq__/__hash__ override, so
+                # keying the result dict by the object itself (as this used to do)
+                # produced a dict this method's own caller could never look anything
+                # up in: pipeline.py looks up by the plain int team_id everywhere
+                # else, and `Team_instance == some_int` is always False. Confirmed
+                # live - this silently made "actual past-week lineup" data
+                # unavailable for every team/week, not just early ones.
+                for team, lineup in ((box.home_team, box.home_lineup), (box.away_team, box.away_lineup)):
+                    if team is None:
                         continue
-                    result[(team_id, week)] = [
+                    result[(team.team_id, week)] = [
                         PastLineupEntry(
                             espn_id=bp.playerId,
                             name=bp.name,

@@ -375,32 +375,74 @@ def pickups(
     team_player_ids: list[str],
     players: dict[str, PlayerCtx],
     team_values: dict[str, dict],
-    fa_values: dict[str, dict],
     free_agents_by_pos: dict[str, list[PlayerCtx]],
+    weeks: list[int],
+    slots: dict[str, int],
+    eligibility: dict[str, set[str]],
     max_pickups: int,
+    depth_weight: float = 0.5,
     ir_player_ids: frozenset[str] = frozenset(),
 ) -> list[dict]:
-    """A pickup candidate is any free agent whose OWN value_delta (from
-    fa_pool_value) beats the weakest droppable rostered player's value_delta
-    (from position_value_by_player) at the SAME position - or the weakest
-    overall droppable player if the team has none at that position (an
+    """A pickup candidate is any free agent where swapping him in for the
+    weakest droppable rostered player at his position (or the weakest
+    overall droppable player, if the team has none at that position - an
     unrelated bench player shouldn't get cut to make room for a redundant
-    second kicker). No lineup re-optimization here at all, unlike the old
-    lineup-delta engine's pickups()/fa_values() - both value sources are
-    already computed once (per team, and once for the whole pool
-    respectively) by the caller, so this is just a cheap sort/compare."""
+    second kicker) raises the team's WHOLE-ROSTER points-above-replacement
+    total (position_value_team_total, before vs. after).
+
+    This used to compare the free agent's OWN value_delta (from
+    fa_pool_value) directly against the dropped player's value_delta - cheap,
+    but wrong: a rostered STARTER's value_delta is scored against the single
+    best free agent at his slot (position_value_by_player), which can go
+    negative at a thin-replacement position like QB even for a clearly-good
+    player, while a free agent's value_delta is only ever his BENCH-DEPTH
+    value against the rest of the free-agent pool (floored at 0) - it never
+    credits him for what he'd be worth if he actually took over the starting
+    slot. Comparing those two numbers directly meant any free agent, however
+    replacement-level, could "beat" a real starter the moment that starter's
+    cumulative value dipped negative (see the conversation this was built
+    from).
+
+    Dropping the free agent onto the ACTUAL roster and rerunning the same
+    claim loop (position_value_by_player, via position_value_team_total)
+    sidesteps the mismatch: he only gets full starting-level credit when he'd
+    genuinely start, exactly like trade_targets' own before/after scoring
+    already does for trade swaps. team_values is still used (not recomputed)
+    to pick WHICH rostered player is weakest - only the scoring of the
+    resulting swap needs the full recompute. Costlier than the old O(1)
+    compare - this reruns the claim loop once per free agent, the same
+    per-candidate cost trade_targets already pays for every trade
+    combination it considers."""
     droppable = [pid for pid in team_player_ids if pid not in ir_player_ids and pid in team_values]
     if not droppable:
         return []
 
+    before = position_value_team_total(team_player_ids, players, free_agents_by_pos, weeks, slots, eligibility, depth_weight)
+
     candidates = []
     for fas in free_agents_by_pos.values():
         for fa in fas:
-            fa_val = fa_values.get(fa.id, {}).get("value_delta", 0.0)
             same_pos_droppable = [pid for pid in droppable if players[pid].position == fa.position]
             drop_pool = same_pos_droppable or droppable
             drop_pid = min(drop_pool, key=lambda pid: team_values[pid]["value_delta"])
-            gain = fa_val - team_values[drop_pid]["value_delta"]
+            after_roster = [pid for pid in team_player_ids if pid != drop_pid] + [fa.id]
+            # players is expected to already carry every free agent (the
+            # pipeline's players_ctx does), but fall back to a one-off merge
+            # so a caller/test that only stocks it with rostered players
+            # doesn't silently drop the added FA out of the recompute.
+            after_players = players if fa.id in players else {**players, fa.id: fa}
+            # fa is no longer a free agent once he's on the hypothetical
+            # roster - leave him in the pool and he'd be his own "best
+            # available replacement" on any week he's the top FA, silently
+            # zeroing out exactly the credit he should get (the same self-
+            # comparison fa_pool_value's own leave-one-out design avoids).
+            after_free_agents = {
+                pos: [other for other in fas if other.id != fa.id] for pos, fas in free_agents_by_pos.items()
+            }
+            after = position_value_team_total(
+                after_roster, after_players, after_free_agents, weeks, slots, eligibility, depth_weight
+            )
+            gain = after - before
             if gain > 0:
                 candidates.append({"add": fa.id, "drop": drop_pid, "gain": gain})
     candidates.sort(key=lambda c: c["gain"], reverse=True)
