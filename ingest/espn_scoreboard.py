@@ -28,8 +28,6 @@ from datetime import datetime, timedelta
 
 import requests
 
-from ingest.nfl_data import normalize_team
-
 logger = logging.getLogger(__name__)
 
 _SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard"
@@ -128,6 +126,12 @@ def fetch_remaining_game_fraction() -> dict[str, float]:
     any fetch failure - callers should treat that as "no live data available
     this build" and fall back to their own existing pregame/done logic,
     never as "every game is at 0% or 100% remaining."."""
+    # Imported here, not at module level, so engine/live.py's --gate mode
+    # (fetch_scoreboard/live_game_window only) can run with just `requests`
+    # installed - ingest.nfl_data pulls in nflreadpy/polars, neither of
+    # which that minimal CI step installs (see update.yml's gate job).
+    from ingest.nfl_data import normalize_team
+
     data = _fetch_scoreboard()
     if data is None:
         return {}

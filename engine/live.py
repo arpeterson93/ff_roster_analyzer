@@ -24,11 +24,14 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from engine import standings_stage
-from ingest import ids as ids_mod
-from ingest.config import load_all_league_configs
-from ingest.espn_client import EspnClient
-from ingest.espn_scoreboard import fetch_remaining_game_fraction, fetch_scoreboard, live_game_window
+from ingest.espn_scoreboard import fetch_scoreboard, live_game_window
+
+# Everything else this module needs (engine.standings_stage, ingest.ids,
+# ingest.config, ingest.espn_client, espn_scoreboard.fetch_remaining_game_fraction)
+# is imported lazily, inside run_league()/main() below, not here - pulling
+# in numpy/polars/nflreadpy/espn_api at module level would defeat the whole
+# point of --gate being a ~20s, `requests`-only CI step (see update.yml's
+# gate job and this module's own docstring above).
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -87,6 +90,9 @@ def _slots_from_pids(pids_by_base: dict[str, list[str]]) -> dict[str, str]:
 
 
 def run_league(cfg: dict, data_root: Path, id_map: ids_mod.IdMap, remaining_frac: dict[str, float], *, force: bool) -> None:
+    from engine import standings_stage
+    from ingest.espn_client import EspnClient
+
     slug = cfg["slug"]
     out_dir = data_root / slug
     meta_path, players_path, lineups_path = out_dir / "meta.json", out_dir / "players.json", out_dir / "lineups.json"
@@ -217,6 +223,10 @@ def main() -> int:
         print(f"should_run={value}")
         _write_github_output("should_run", value)
         return 0
+
+    from ingest import ids as ids_mod
+    from ingest.config import load_all_league_configs
+    from ingest.espn_scoreboard import fetch_remaining_game_fraction
 
     data_root = Path(args.data)
     configs = load_all_league_configs()

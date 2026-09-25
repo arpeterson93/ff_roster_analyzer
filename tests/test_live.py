@@ -69,7 +69,7 @@ def test_run_league_skips_and_writes_nothing_on_week_mismatch(tmp_path):
 
     mock_client = Mock()
     mock_client.get_settings.return_value = _settings(current_week=3)  # ESPN says week 3 - rolled over
-    with patch("engine.live.EspnClient", return_value=mock_client):
+    with patch("ingest.espn_client.EspnClient", return_value=mock_client):
         run_league(CFG, data_root, _id_map(), {}, force=False)
 
     mock_client.get_teams.assert_not_called()
@@ -97,7 +97,7 @@ def test_run_league_force_proceeds_despite_week_mismatch(tmp_path):
     mock_client.get_teams.return_value = [team, _team2()]
     mock_client.get_matchups.return_value = [Matchup(week=3, home_team_id=1, away_team_id=2, home_score=None, away_score=None, played=False)]
     mock_client.get_live_week_player_status.return_value = {}
-    with patch("engine.live.EspnClient", return_value=mock_client):
+    with patch("ingest.espn_client.EspnClient", return_value=mock_client):
         run_league(CFG, data_root, _id_map(), {}, force=True)
 
     assert (out_dir / "schedule.json").exists()
@@ -126,7 +126,7 @@ def test_run_league_reconstructs_team_week_mean_sd_and_writes_outputs(tmp_path):
         Matchup(week=3, home_team_id=1, away_team_id=2, home_score=None, away_score=None, played=False),
     ]
     mock_client.get_live_week_player_status.return_value = {1: (10.0, False)}
-    with patch("engine.live.EspnClient", return_value=mock_client):
+    with patch("ingest.espn_client.EspnClient", return_value=mock_client):
         run_league(CFG, data_root, _id_map(), {"KC": 0.5}, force=False)
 
     schedule_out = json.loads((out_dir / "schedule.json").read_text(encoding="utf-8"))
@@ -159,7 +159,7 @@ def test_run_league_stubs_a_starter_missing_from_players_json(tmp_path):
         Matchup(week=3, home_team_id=1, away_team_id=2, home_score=None, away_score=None, played=False),
     ]
     mock_client.get_live_week_player_status.return_value = {}
-    with patch("engine.live.EspnClient", return_value=mock_client):
+    with patch("ingest.espn_client.EspnClient", return_value=mock_client):
         run_league(CFG, data_root, _id_map(), {}, force=False)
 
     live_out = json.loads((out_dir / "live.json").read_text(encoding="utf-8"))
