@@ -1,4 +1,4 @@
-# FF Roster Analyzer
+# Stackademics
 
 Automated fantasy football analysis for two ESPN leagues: team-strength /
 trade-equity evaluation and weekly start/sit matchup guidance. Replaces a

@@ -9,7 +9,7 @@
 // Bump CACHE_NAME on any app-shell file rename/add/remove - activate()
 // deletes every other cache name, so this is also how old shells get
 // cleaned up after a deploy.
-const CACHE_NAME = "depth-perception-shell-v1";
+const CACHE_NAME = "stackademics-shell-v1";
 
 const APP_SHELL = [
   "./",
