@@ -484,7 +484,13 @@ function renderStatsTable(wrap, container, data, filters, watched) {
   const blockEnds = blockEndIndices(blocks);
   const rows = filteredSortedRows(data, filters, watched);
 
-  const topLead = common.map(() => "<th></th>").join("");
+  // Carries each common column's own className (Player's "rankings-player-col"
+  // in particular) onto its row-1 placeholder too, not just its row-2 label
+  // cell - without this, scrolling horizontally left the group-header row's
+  // OWN content (PASSING/RUSHING/etc) sliding fully visible over the frozen
+  // Player column on mobile instead of hiding behind it, since nothing in
+  // row 1 was actually frozen there to hide it (confirmed live).
+  const topLead = common.map((c) => `<th${c.className ? ` class="${c.className}"` : ""}></th>`).join("");
   const topGroups = blocks.map(([group, cols]) => `<th colspan="${cols.length}" class="block-end">${escapeHtml(group)}</th>`).join("");
   // Snap%/Att%/Tgt% (present together, or not at all - see
   // statsTrailingColumns) get their own "Usage" group label spanning all
