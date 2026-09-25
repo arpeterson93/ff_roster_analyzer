@@ -308,6 +308,63 @@ def test_adjusted_allowed_ppg_and_pa_factor_tie_to_the_current_season_index():
     assert result.allowed_ppg["WR"]["A"] == pytest.approx(cur_season_allowed["WR"]["A"])
 
 
+def test_game_final_gate_only_advances_the_teams_whose_own_game_is_final():
+    # The TNF bug this gate fixes: week 3 has only A/B's game final (Thursday);
+    # C/D haven't played yet. Passing game_final must leave C's and D's index
+    # (and allowed_ppg) identical to the week-2-only computation - no 0.0
+    # contamination for their not-yet-played week-3 game - while A and B DO
+    # pick up their week-3 result.
+    prior_df = pl.DataFrame(_rows_for_season(OUTPUT, 2024))
+    current_df = pl.DataFrame(_rows_for(CURRENT_OUTPUT, 2025))
+    prior_points = points_by_team_week_pos(prior_df, 2024, ["WR"], REY_SCORING)
+    current_points = points_by_team_week_pos(current_df, 2025, ["WR"], REY_SCORING)
+
+    game_final = {
+        ("A", 1): True, ("B", 1): True, ("C", 1): True, ("D", 1): True,
+        ("A", 2): True, ("B", 2): True, ("C", 2): True, ("D", 2): True,
+        ("A", 3): True, ("D", 3): True,  # only A-D's week-3 game is final
+    }
+
+    result = compute_matchup_index(
+        current_points, prior_points, 2025, 2024, weeks_played=2, opponent=OPPONENT,
+        prior_opponent=OPPONENT, positions=["WR"],
+        pa_basis="season", pa_l5_weight=0.5, pa_prior_season_weeks=3,
+        index_clamp=(0.0, 10.0), game_final=game_final,
+    )
+
+    # A and D's own game is final in week 3 (they picked it up); B and C's
+    # isn't, so they're still capped at weeks 1-2 - exactly the per-team
+    # played_weeks the game_final gate should produce.
+    per_team_played_weeks = {"A": [1, 2, 3], "B": [1, 2], "C": [1, 2], "D": [1, 2, 3]}
+    expected_index, expected_allowed = _index_for_basis(current_points, OPPONENT, per_team_played_weeks, ["WR"], lambda ws: ws)
+
+    for team in ["A", "B", "C", "D"]:
+        assert result.allowed_ppg["WR"][team] == pytest.approx(expected_allowed["WR"][team])
+
+    # Sanity check the bug this guards against: capping EVERYONE at week 2
+    # (the old global weeks_played cutoff) would give C and B the same
+    # numbers but NOT A and D, who really did play a final week 3.
+    global_cutoff_weeks = {t: [w for w in ws if w <= 2] for t, ws in per_team_played_weeks.items()}
+    stale_index, stale_allowed = _index_for_basis(current_points, OPPONENT, global_cutoff_weeks, ["WR"], lambda ws: ws)
+    assert result.allowed_ppg["WR"]["A"] != pytest.approx(stale_allowed["WR"]["A"])
+
+
+def test_game_final_none_falls_back_to_the_weeks_played_cutoff():
+    # Existing int-only callers (no game_final) must be completely unaffected.
+    prior_df = pl.DataFrame(_rows_for_season(OUTPUT, 2024))
+    current_df = pl.DataFrame(_rows_for(CURRENT_OUTPUT, 2025))
+    prior_points = points_by_team_week_pos(prior_df, 2024, ["WR"], REY_SCORING)
+    current_points = points_by_team_week_pos(current_df, 2025, ["WR"], REY_SCORING)
+
+    with_game_final_none = compute_matchup_index(
+        current_points, prior_points, 2025, 2024, weeks_played=2, opponent=OPPONENT,
+        prior_opponent=OPPONENT, positions=["WR"],
+        pa_basis="season", pa_l5_weight=0.5, pa_prior_season_weeks=3,
+        index_clamp=(0.0, 10.0),
+    )
+    assert with_game_final_none.allowed_ppg["WR"]["A"] > 0
+
+
 def test_adjusted_allowed_ppg_falls_back_to_prior_season_when_no_current_weeks_played():
     prior_df = pl.DataFrame(_rows_for_season(OUTPUT, 2024))
     prior_points = points_by_team_week_pos(prior_df, 2024, ["WR"], REY_SCORING)

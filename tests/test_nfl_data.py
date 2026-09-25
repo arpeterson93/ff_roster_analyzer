@@ -2,7 +2,15 @@ from datetime import date, datetime, timezone
 
 import polars as pl
 
-from ingest.nfl_data import game_context_from_schedule, kickoff_utc_from_schedule, week_for_date, week_for_kickoff
+from ingest.nfl_data import (
+    game_context_from_schedule,
+    game_final_by_team_week,
+    kickoff_utc_from_schedule,
+    nfl_week_context,
+    week_for_date,
+    week_for_kickoff,
+    weeks_complete,
+)
 
 _WEEK_SCHEDULE = pl.DataFrame(
     [
@@ -87,6 +95,46 @@ def test_kickoff_ignores_other_seasons_and_game_types():
     )
     kickoff = kickoff_utc_from_schedule(df, 2025)
     assert kickoff == {}
+
+
+# --- game_final_by_team_week / weeks_complete: the TNF bug fix. Week 1 is
+# fully final; week 2 has 3 games (a real week's worth of byes aside) but
+# only the Thursday game (KC @ BAL) has scores yet - the other two games
+# haven't kicked off.
+_TNF_SCHEDULE = pl.DataFrame(
+    [
+        {"season": 2025, "game_type": "REG", "week": 1, "home_team": "KC", "away_team": "BAL", "home_score": 20, "away_score": 17},
+        {"season": 2025, "game_type": "REG", "week": 1, "home_team": "DAL", "away_team": "NYG", "home_score": 24, "away_score": 10},
+        {"season": 2025, "game_type": "REG", "week": 2, "home_team": "KC", "away_team": "BAL", "home_score": 27, "away_score": 20},
+        {"season": 2025, "game_type": "REG", "week": 2, "home_team": "DAL", "away_team": "NYG", "home_score": None, "away_score": None},
+        {"season": 2025, "game_type": "REG", "week": 2, "home_team": "SF", "away_team": "SEA", "home_score": None, "away_score": None},
+    ]
+)
+
+
+def test_game_final_by_team_week_is_true_only_for_the_two_teams_whose_game_is_final():
+    game_final = game_final_by_team_week(_TNF_SCHEDULE, 2025)
+    assert game_final[("KC", 2)] is True
+    assert game_final[("BAL", 2)] is True
+    assert ("DAL", 2) not in game_final
+    assert ("NYG", 2) not in game_final
+    assert ("SF", 2) not in game_final
+
+
+def test_weeks_complete_stays_at_the_prior_week_until_every_game_is_final():
+    # Week 1 is fully final; week 2 has two games still unplayed, so a whole
+    # week's worth of new data does not exist yet - unlike weeks_played
+    # (nfl_week_context), which already flips to 2 off the one TNF result.
+    assert weeks_complete(_TNF_SCHEDULE, 2025) == 1
+    weeks_played, _, _ = nfl_week_context(2025, _TNF_SCHEDULE)
+    assert weeks_played == 2
+
+
+def test_weeks_complete_is_zero_when_no_games_are_final():
+    df = pl.DataFrame(
+        [{"season": 2025, "game_type": "REG", "week": 1, "home_team": "KC", "away_team": "BAL", "home_score": None, "away_score": None}]
+    )
+    assert weeks_complete(df, 2025) == 0
 
 
 def _schedule_row(**overrides):

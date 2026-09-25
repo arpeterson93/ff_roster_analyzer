@@ -43,11 +43,23 @@ function renderActiveView() {
   if (renderFn) renderFn(panel, currentData, currentLeagueSlug);
 }
 
-function renderHeader(leagueMeta) {
+function renderHeader(data) {
+  const leagueMeta = data.meta;
   document.getElementById("header-week").textContent = `Week ${leagueMeta.current_week}`;
   const generated = new Date(leagueMeta.generated_at);
   const formatted = generated.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-  document.getElementById("header-generated").textContent = `Updated ${formatted}`;
+  let headerText = `Updated ${formatted}`;
+
+  // A gameday live tick (engine/live.py) writes live.json's own updated_at
+  // separately from meta.json's generated_at (only a full/refresh run
+  // touches that) - shown only when it's actually newer, so a stale
+  // live.json from before the week rolled over doesn't claim to be "live".
+  const liveUpdatedAt = data.live?.updated_at;
+  if (liveUpdatedAt && new Date(liveUpdatedAt) > generated) {
+    const liveFormatted = new Date(liveUpdatedAt).toLocaleString("en-US", { hour: "numeric", minute: "2-digit" });
+    headerText += ` · Live ${liveFormatted}`;
+  }
+  document.getElementById("header-generated").textContent = headerText;
 
   const banner = document.getElementById("warning-banner");
   const warnings = leagueMeta.warnings || [];
@@ -65,7 +77,7 @@ async function selectLeague(slug) {
   document.getElementById("league-select").value = slug;
 
   currentData = await loadLeagueData(slug);
-  renderHeader(currentData.meta);
+  renderHeader(currentData);
   renderActiveView();
 }
 

@@ -1,0 +1,194 @@
+name: update
+
+# Replaces build.yml (see update-scripts-implementation-plan.md). Three
+# stages dispatched by cron-job.org (GitHub's own `schedule:` trigger was
+# measured firing ~4h late on this repo - see Part 0.1 #4): `full` (today's
+# whole pipeline), `refresh` (full minus the FAAB estimator's 2.7GB
+# download), `live` (gameday score/win% ticks, ESPN-only). A `push` to main
+# always runs `full`, same as before.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "config/**"
+      - "ingest/**"
+      - "engine/**"
+      - "docs/**"
+      - "tools/faab_history/fetch_release_data.py"
+      - "tools/nflverse_freshness.py"
+      - "tools/ci/push_site_data.sh"
+      - "requirements.txt"
+      - ".github/workflows/update.yml"
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "full | refresh | live"
+        required: false
+        default: full
+        type: choice
+        options: [full, refresh, live]
+      force:
+        description: "bypass the gate (live scoreboard check / nflverse freshness wait)"
+        required: false
+        default: false
+        type: boolean
+      wait_minutes:
+        description: "refresh only: minutes to wait for fresher nflverse data before giving up"
+        required: false
+        default: "60"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  # No concurrency group here on purpose (Part 2.3) - a refresh's own wait
+  # (up to wait_minutes) must never block a gameday live tick from gating
+  # and building in parallel.
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.decide.outputs.should_run }}
+      stage: ${{ steps.resolve.outputs.stage }}
+    steps:
+      - name: Resolve stage
+        id: resolve
+        run: echo "stage=${{ github.event.inputs.stage || 'full' }}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        if: steps.resolve.outputs.stage != 'full'
+
+      - uses: actions/setup-python@v6
+        if: steps.resolve.outputs.stage != 'full'
+        with:
+          python-version: "3.11"
+
+      - name: Live gate (public scoreboard check)
+        if: steps.resolve.outputs.stage == 'live'
+        id: live_gate
+        run: |
+          pip install requests
+          python -m engine.live --gate
+
+      - name: Refresh gate (nflverse freshness wait)
+        if: steps.resolve.outputs.stage == 'refresh'
+        id: refresh_gate
+        run: |
+          pip install requests
+          python -m tools.nflverse_freshness --wait-minutes "${{ github.event.inputs.wait_minutes || '60' }}"
+
+      - name: Decide
+        id: decide
+        run: |
+          if [ "${{ steps.resolve.outputs.stage }}" = "full" ]; then
+            value=true
+          elif [ "${{ steps.resolve.outputs.stage }}" = "live" ]; then
+            value="${{ steps.live_gate.outputs.should_run }}"
+          else
+            value="${{ steps.refresh_gate.outputs.should_run }}"
+          fi
+          echo "should_run=$value" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: gate
+    if: needs.gate.outputs.should_run == 'true' || github.event.inputs.force == 'true'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    env:
+      PYTHONIOENCODING: utf-8
+      ESPN_S2_AGS: ${{ secrets.ESPN_S2_AGS }}
+      SWID_AGS: ${{ secrets.SWID_AGS }}
+      # Every stage sets this (not just refresh) - harmless for full/live,
+      # which either always re-fetch anyway (full) or never touch nflverse
+      # at all (live), and keeps this one line uniform across all three
+      # "run the stage" steps below.
+      NFLVERSE_CURRENT_SEASON_TTL: "0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout site-data baseline
+        id: site_data_checkout
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          ref: site-data
+          path: site-data
+
+      - name: Bootstrap the site-data branch (first run only)
+        if: steps.site_data_checkout.outcome == 'failure'
+        run: |
+          rm -rf site-data
+          mkdir site-data
+          git -C site-data init -q
+          git -C site-data remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          git -C site-data checkout -q --orphan site-data
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Cache nflverse history seasons
+        if: needs.gate.outputs.stage != 'live'
+        uses: actions/cache@v4
+        with:
+          path: .cache/nflverse
+          key: nflverse-${{ hashFiles('config/leagues/*.yml') }}
+
+      - run: pip install -r requirements.txt
+
+      - run: pytest -q
+        if: needs.gate.outputs.stage == 'full'
+
+      - name: Restore site-data baseline into docs/data
+        run: |
+          mkdir -p docs/data
+          if [ -n "$(find site-data -maxdepth 1 -mindepth 1 -not -name .git 2>/dev/null)" ]; then
+            cp -r site-data/. docs/data/
+          fi
+
+      - name: Fetch FAAB training data
+        if: needs.gate.outputs.stage == 'full'
+        run: python -m tools.faab_history.fetch_release_data
+
+      - name: Run pipeline (full)
+        if: needs.gate.outputs.stage == 'full'
+        run: python -m engine.pipeline
+
+      - name: Run pipeline (refresh)
+        if: needs.gate.outputs.stage == 'refresh'
+        run: python -m engine.pipeline --skip faab
+
+      - name: Run live tier
+        if: needs.gate.outputs.stage == 'live'
+        run: python -m engine.live
+
+      - name: Push this run's output to site-data
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          bash tools/ci/push_site_data.sh "${{ needs.gate.outputs.stage }}"
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs
+          include-hidden-files: true
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v5
+        id: deployment

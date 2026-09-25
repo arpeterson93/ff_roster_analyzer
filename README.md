@@ -2,8 +2,9 @@
 
 Automated fantasy football analysis for two ESPN leagues: team-strength /
 trade-equity evaluation and weekly start/sit matchup guidance. Replaces a
-hand-fed Google Sheet with a daily Python pipeline (ESPN + nflverse +
-FantasyPros) and a static site on GitHub Pages.
+hand-fed Google Sheet with a Python pipeline (ESPN + nflverse + FantasyPros)
+that runs at cadence-appropriate stages throughout the week and a static
+site on GitHub Pages.
 
 ## Architecture
 
@@ -11,7 +12,7 @@ FantasyPros) and a static site on GitHub Pages.
 config/leagues/*.yml ─┐
 ESPN (espn-api) ──────┼─► ingest/ ─► engine/ ─► docs/data/<slug>/*.json ─► docs/ static site (GitHub Pages)
 nflverse (nflreadpy) ─┤
-FantasyPros ecrData ──┘        GitHub Actions: daily cron + push + dispatch, artifact deploy
+FantasyPros ecrData ──┘        GitHub Actions: cron-job.org dispatch + push, artifact deploy
 ```
 
 - `config/leagues/*.yml` — one file per configured league (id, season,
@@ -24,12 +25,72 @@ FantasyPros ecrData ──┘        GitHub Actions: daily cron + push + dispatc
 - `engine/` — pure computation: scoring rules, the rank→points curve,
   opponent-adjusted matchup difficulty, ROS valuation, lineup optimization,
   team strength / trades / pickups, playoff simulation, and the pipeline
-  that orchestrates all of it into JSON.
+  that orchestrates all of it into JSON. `engine/live.py` is the gameday-only
+  live tier - see "Update cadence" below.
 - `docs/` — static HTML/CSS/JS frontend, no build step, no framework.
   Deployed via GitHub Pages (Actions artifact deploy — generated JSON in
-  `docs/data/` is not committed to `main`).
-- `.github/workflows/build.yml` — runs the pipeline daily (cron), on
-  relevant pushes, and on manual dispatch; publishes `docs/` to Pages.
+  `docs/data/` is not committed to `main`, though it IS committed to the
+  separate `site-data` branch - see below).
+- `.github/workflows/update.yml` — runs one of three stages (`full` /
+  `refresh` / `live`) on `workflow_dispatch`, or `full` on a relevant push;
+  publishes `docs/` to Pages. See "Update cadence" below.
+
+## Update cadence
+
+The pipeline runs as three differently-scoped stages instead of one daily
+job, dispatched by [cron-job.org](https://cron-job.org) rather than GitHub's
+own `schedule:` trigger (measured firing ~4h late on this repo - a public
+repo with low activity gets deprioritized; cron-job.org fires on time).
+
+| Stage | What it recomputes | Cadence |
+|-------|--------------------|---------|
+| `full` | Everything - the whole pipeline, including the FAAB bid estimator (its ~2.7GB nflverse release-data download/parse is the single most expensive step) | Daily 8:00am CT |
+| `refresh` | Everything except FAAB estimates (skips the 2.7GB download) | Daily 12:15am CT + Sun 4:15pm/10:45pm CT, each waiting up to an hour for nflverse to actually publish newer data |
+| `live` | Live scores/win%/playoff odds for the current week only, ESPN-only (no nflverse) | Every 30 min during game windows (Thu/Sun/Mon + holiday one-offs) |
+
+A `push` to `main` (touching `config/`, `ingest/`, `engine/`, `docs/`, etc.)
+still triggers a `full` run, same as before.
+
+**The `site-data` branch.** Since `docs/data/` isn't committed to `main`, a
+`refresh` or `live` run - which only recomputes a few of the ~14 files per
+league - needs SOME prior output to start from and overlay onto. An orphan
+branch, `site-data`, holds exactly the current contents of `docs/data/` and
+is never merged to `main`. Every run checks it out, copies it into
+`docs/data/`, runs its stage (which only overwrites the files that stage
+actually computes), copies the result back, and commits/pushes - retrying
+with a fetch+reset+reapply-only-this-run's-files dance
+(`tools/ci/push_site_data.sh`) if another run pushed in the meantime. A
+`refresh`/`live` run with no `site-data` branch yet (or missing a league's
+`meta.json`) is a no-op - a `full` run has to go first.
+
+**cron-job.org jobs** (all: timezone America/Chicago, POST to
+`https://api.github.com/repos/arpeterson93/ff_roster_analyzer/actions/workflows/update.yml/dispatches`,
+headers `Authorization: Bearer <PAT>`, `Accept: application/vnd.github+json`,
+`X-GitHub-Api-Version: 2022-11-28`; treat HTTP 204 as success):
+
+| Job | Schedule (CT) | Body |
+|-----|---------------|------|
+| nightly-full | daily 08:00 | `{"ref":"main","inputs":{"stage":"full"}}` |
+| refresh-postgame | daily 00:15 | `{"ref":"main","inputs":{"stage":"refresh","wait_minutes":"60"}}` |
+| refresh-sun-early | Sun 16:15 | same as above |
+| refresh-sun-late | Sun 22:45 | same as above |
+| live-thu | Thu 19:00–23:00, minutes 0,30 | `{"ref":"main","inputs":{"stage":"live"}}` |
+| live-sun | Sun 12:00–23:30, minutes 0,30 | same |
+| live-mon | Mon 19:00–23:00, minutes 0,30 | same |
+| live-intl-oct | Oct 4, 11, 18, 25 · 08:30–11:30, minutes 0,30 | same |
+| live-intl-nov | Nov 8, 15 · 08:30–11:30, minutes 0,30 | same |
+| live-thanksgiving | Nov 25–27 · 12:00–23:30, minutes 0,30 | same |
+| live-sat-dec19 | Dec 19 · 16:00–23:30, minutes 0,30 | same |
+| live-xmas | Dec 25 · 12:00–23:30, minutes 0,30 | same |
+
+The live windows deliberately over-cover (cheap: `engine/live.py --gate`
+exits in ~30s if nothing's live or recently finished).
+
+**The dispatch PAT.** A fine-grained GitHub PAT scoped to this repo with
+**Actions: Read and write**, stored wherever cron-job.org's job config holds
+it. It expires - put a renewal reminder on the calendar for whatever expiry
+was chosen, and point cron-job.org's own failure notifications (401s once it
+expires) at an email that gets checked.
 
 ## Methodology
 
@@ -150,8 +211,9 @@ Without step 4, the Settings tab still shows the sheet's current values
 read-only (or the YAML defaults if `settings_sheet_id` isn't set at all) -
 step 4 is only needed to edit values from the site itself rather than
 editing the sheet directly. Either way, a change takes effect on the next
-pipeline run (daily cron, or trigger the `build` workflow manually), not
-instantly - the site doesn't recompute live in the browser.
+`full` or `refresh` pipeline run (see "Update cadence" above, or trigger the
+`update` workflow manually), not instantly - the site doesn't recompute live
+in the browser.
 
 ## Watch list sheet (synced Rankings watch list)
 
@@ -211,8 +273,9 @@ The FAAB bid estimator (`engine/faab_estimate.py`, the "FAAB Bid" player-modal
 tab and the Waiver Bid Backtest artifact) trains on a pooled multi-league
 dataset that lives outside git entirely - see "FAAB training data storage"
 below. Nothing about refreshing or retraining it is scheduled or automatic:
-the daily `build` workflow only *reuses* whatever's currently published,
-never rebuilds it. Pulling ~30 leagues' worth of ESPN history is slow, has
+only the `full` stage even touches it, and only ever to *reuse* whatever's
+currently published, never to rebuild it. Pulling ~30 leagues' worth of ESPN
+history is slow, has
 real WAF/soft-block risk (see `ingest/espn_injuries.py`'s comments), and
 retraining changes what the model actually believes - all good reasons for
 this to stay a deliberate action you run by hand, not a cron job.
@@ -350,15 +413,16 @@ built from aren't committed to git - they're assets on this repo's
 outside git's own object store entirely, so they're exempt from both the
 100MB limit and git's repo-size concerns; unlike Git LFS, a public repo's
 release-asset bandwidth isn't metered the way LFS's stingy free tier is,
-which matters given the daily cron re-downloads it). `publish_release_data.py`
-gzip-compresses each file before uploading it regardless of format (a
-uniform step, not load-bearing for the Parquet file specifically - its own
-columnar compression already keeps it well under GitHub's 2GB single-asset
-cap on its own); `fetch_release_data.py` downloads the compressed asset and
-decompresses it locally, transparently to every other script that just
-expects the plain file to be there. `.github/workflows/build.yml` runs
-`python -m tools.faab_history.fetch_release_data` before the pipeline to
-pull the one file it needs; `--all` also fetches the three raw inputs, only
+which matters given the `full` stage re-downloads it every day).
+`publish_release_data.py` gzip-compresses each file before uploading it
+regardless of format (a uniform step, not load-bearing for the Parquet file
+specifically - its own columnar compression already keeps it well under
+GitHub's 2GB single-asset cap on its own); `fetch_release_data.py` downloads
+the compressed asset and decompresses it locally, transparently to every
+other script that just expects the plain file to be there.
+`.github/workflows/update.yml` runs `python -m tools.faab_history.fetch_release_data`
+before the pipeline on `full` runs only (see "Update cadence" above) to pull
+the one file it needs; `--all` also fetches the three raw inputs, only
 needed to rebuild the training table from scratch per the steps above.
 
 ## Deployment (manual steps, one-time)
@@ -366,8 +430,13 @@ needed to rebuild the training table from scratch per the steps above.
 1. Repo Settings → Pages → Source: **GitHub Actions**.
 2. Add repo secrets `ESPN_S2_AGS` and `SWID_AGS` (see `.env.example` for how
    to obtain them).
-3. Run the `build` workflow once via "Run workflow" and confirm both
-   leagues build successfully.
+3. Run the `update` workflow once via "Run workflow" (stage `full`) and
+   confirm both leagues build successfully, then confirm the `site-data`
+   branch was created with both leagues' files (see "Update cadence" above).
+4. Set up the cron-job.org jobs from the "Update cadence" table above,
+   using a fine-grained PAT scoped to this repo with **Actions: Read and
+   write**. Test each job once with "Execute now" and watch the run appear
+   under Actions with the right `stage`.
 
 ## Validation
 

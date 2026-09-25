@@ -8,6 +8,7 @@ equivalent).
 """
 from __future__ import annotations
 
+import os
 import time
 from datetime import date, datetime
 from pathlib import Path
@@ -17,7 +18,12 @@ import nflreadpy as nfl
 import polars as pl
 
 CACHE_DIR = Path(".cache/nflverse")
-CURRENT_SEASON_TTL = 12 * 3600  # seconds; past seasons never change, cached forever
+# seconds; past seasons never change, cached forever. CI's "refresh" stage
+# overrides this to 0 (NFLVERSE_CURRENT_SEASON_TTL=0) so a post-game refresh
+# never serves a <=12h-old cached current-season parquet restored from the
+# Actions cache - it always re-fetches, since the whole point of a refresh
+# run is picking up data that's newer than what's on disk.
+CURRENT_SEASON_TTL = int(os.environ.get("NFLVERSE_CURRENT_SEASON_TTL", 12 * 3600))
 
 # Canonical NFL team abbreviations (nflverse's own convention) that everything
 # in engine/ can rely on. Maps ESPN, FantasyPros, and DynastyProcess variants
@@ -341,6 +347,44 @@ def nfl_week_context(
             opponent.setdefault((team, w), None if w == bye_weeks.get(team) else opponent.get((team, w)))
 
     return weeks_played, bye_weeks, opponent
+
+
+def game_final_by_team_week(schedules_df: pl.DataFrame, season: int) -> dict[tuple[str, int], bool]:
+    """{(team, week): True} for both teams of every REG game with both scores
+    present - the per-game (not per-week) completion signal. nfl_week_context's
+    weeks_played flips the moment ANY game in a week is final, which lets a
+    single Thursday game contaminate every OTHER team's week-W numbers with a
+    same-week 0.0 (their game hasn't kicked off yet); this gives each team's
+    own game-completion state instead, so a team-week only ever counts once
+    that specific game has a final score."""
+    reg = schedules_df.filter(pl.col("season") == season, pl.col("game_type") == "REG")
+    result: dict[tuple[str, int], bool] = {}
+    for row in reg.iter_rows(named=True):
+        if row["home_score"] is None or row["away_score"] is None:
+            continue
+        result[(row["home_team"], row["week"])] = True
+        result[(row["away_team"], row["week"])] = True
+    return result
+
+
+def weeks_complete(schedules_df: pl.DataFrame, season: int) -> int:
+    """Largest W such that every REG game in weeks 1..W has a final score (0
+    if none) - unlike weeks_played (nfl_week_context), which flips as soon as
+    ANY game in a week is final, this is the "a whole week's worth of new
+    data actually exists" signal used for blend weights (curve blending,
+    matchup-index prior-season blend) so one early game doesn't get treated
+    as a full week of current-season signal."""
+    reg = schedules_df.filter(pl.col("season") == season, pl.col("game_type") == "REG")
+    if reg.height == 0:
+        return 0
+    all_weeks = sorted(reg["week"].unique().to_list())
+    result = 0
+    for w in all_weeks:
+        week_rows = reg.filter(pl.col("week") == w)
+        if week_rows.filter(pl.col("home_score").is_null() | pl.col("away_score").is_null()).height > 0:
+            break
+        result = w
+    return result
 
 
 def week_for_date(target: date, schedules_df: pl.DataFrame, season: int) -> int | None:

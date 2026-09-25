@@ -67,7 +67,7 @@ OPPONENT = {("CIN", 2): "PIT"}  # CIN played week 2; no entry at all = bye
 
 def test_active_with_no_stat_row_counts_as_a_real_zero():
     result = _actual_weekly_stats(
-        "TE", "CIN", "gesicki", 2, weeks_played_=2,
+        "TE", "CIN", "gesicki", 2, game_final={("CIN", 2): True},
         offense_lookup={}, dst_lookup={}, active_lookup={("gesicki", 2)},
         opponent=OPPONENT, player_rules=REY_SCORING,
     )
@@ -78,7 +78,7 @@ def test_active_with_no_stat_row_counts_as_a_real_zero():
 def test_a_real_stat_row_is_used_even_if_also_marked_active():
     row = {"receiving_yards": 55}
     result = _actual_weekly_stats(
-        "TE", "CIN", "gesicki", 2, weeks_played_=2,
+        "TE", "CIN", "gesicki", 2, game_final={("CIN", 2): True},
         offense_lookup={("gesicki", 2): row}, dst_lookup={}, active_lookup={("gesicki", 2)},
         opponent=OPPONENT, player_rules=REY_SCORING,
     )
@@ -89,7 +89,7 @@ def test_bye_week_stays_none_even_if_the_roster_status_says_active():
     # A player is still "ACT" on his roster during a bye - only the opponent
     # map (no game at all that week) can tell a bye apart from a real 0.
     result = _actual_weekly_stats(
-        "TE", "CIN", "gesicki", 3, weeks_played_=3,
+        "TE", "CIN", "gesicki", 3, game_final={("CIN", 3): True},
         offense_lookup={}, dst_lookup={}, active_lookup={("gesicki", 3)},
         opponent=OPPONENT, player_rules=REY_SCORING,  # no ("CIN", 3) entry = bye
     )
@@ -99,7 +99,7 @@ def test_bye_week_stays_none_even_if_the_roster_status_says_active():
 def test_not_active_and_no_stat_row_stays_none():
     # Genuinely inactive/practice-squad/not-on-the-team-yet - no fabricated 0.
     result = _actual_weekly_stats(
-        "TE", "CIN", "gesicki", 2, weeks_played_=2,
+        "TE", "CIN", "gesicki", 2, game_final={("CIN", 2): True},
         offense_lookup={}, dst_lookup={}, active_lookup=set(),
         opponent=OPPONENT, player_rules=REY_SCORING,
     )
@@ -108,9 +108,21 @@ def test_not_active_and_no_stat_row_stays_none():
 
 def test_future_week_stays_none_regardless_of_active_status():
     result = _actual_weekly_stats(
-        "TE", "CIN", "gesicki", 5, weeks_played_=2,
+        "TE", "CIN", "gesicki", 5, game_final={},
         offense_lookup={}, dst_lookup={}, active_lookup={("gesicki", 5)},
         opponent={("CIN", 5): "BAL"}, player_rules=REY_SCORING,
+    )
+    assert result is None
+
+
+def test_a_teams_own_game_not_yet_final_stays_none_even_if_another_game_that_week_is():
+    # The TNF bug this game_final gate exists to fix: another team's game
+    # being final that week must not make THIS team's own not-yet-played game
+    # look like a real, already-happened week.
+    result = _actual_weekly_stats(
+        "TE", "CIN", "gesicki", 2, game_final={("PIT", 2): True},  # CIN's own game-2 not final
+        offense_lookup={}, dst_lookup={}, active_lookup={("gesicki", 2)},
+        opponent=OPPONENT, player_rules=REY_SCORING,
     )
     assert result is None
 
@@ -119,7 +131,7 @@ def test_dst_path_is_unaffected_by_the_active_lookup():
     # DST never consults active_lookup/opponent at all - team_stats rows are
     # keyed straight off dst_lookup, same as before this change.
     result = _actual_weekly_stats(
-        "DST", "CIN", "cin-dst", 2, weeks_played_=2,
+        "DST", "CIN", "cin-dst", 2, game_final={("CIN", 2): True},
         offense_lookup={}, dst_lookup={("CIN", 2): {"_points": 7.0}}, active_lookup=set(),
         opponent=OPPONENT, player_rules=REY_SCORING,
     )

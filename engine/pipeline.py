@@ -50,16 +50,7 @@ from engine.play_log import (
 )
 from engine.points_against import dst_points_against_detail, points_against_detail
 from engine.scoring import ScoringRules
-from engine.standings import (
-    PlayedMatchup,
-    RemainingMatchup,
-    SeedConfig,
-    SeedTeamState,
-    TeamState,
-    compute_current_seeds,
-    matchup_win_probability,
-    simulate_playoffs,
-)
+from engine import standings_stage
 from engine.team_strength import (
     PlayerCtx,
     fa_pool_value,
@@ -78,11 +69,11 @@ from ingest import ids as ids_mod
 from ingest import nfl_data as nd
 from ingest import rankings as rk
 from ingest.config import load_all_league_configs
-from ingest.base import Matchup
 from ingest.espn_client import EspnClient
 from ingest.espn_scoreboard import fetch_remaining_game_fraction
-from ingest.settings_sheet import SettingsSheetError, apply_remote_settings, fetch_remote_settings, parse_seeding_config
+from ingest.settings_sheet import SettingsSheetError, apply_remote_settings, fetch_remote_settings
 from ingest.weather import fetch_game_weather
+from tools import nflverse_freshness
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -157,14 +148,17 @@ def _actual_stats_row(row: dict, fields: list[str]) -> dict:
 
 
 def _actual_weekly_stats(
-    position, nfl_team, pid, week, weeks_played_, offense_lookup, dst_lookup, active_lookup, opponent, player_rules
+    position, nfl_team, pid, week, game_final, offense_lookup, dst_lookup, active_lookup, opponent, player_rules
 ):
     """Real (not projected) stat line + points for one already-played week -
     powers both the Game Log and every FAAB "prior week"/season-average
     feature (see run_league's own weekly[] comment). None means a genuinely
-    missing week (future, bye, inactive, practice squad); a played week with
-    zero recorded production is a real 0, not None - see active_lookup."""
-    if week > weeks_played_:
+    missing week (future, bye, inactive, practice squad, or - the TNF bug
+    this per-game `game_final` check fixes - a game that just hasn't kicked
+    off yet even though another game that week is already final); a played
+    week with zero recorded production is a real 0, not None - see
+    active_lookup."""
+    if not game_final.get((nfl_team, week), False):
         return None
     if position == "DST":
         row = dst_lookup.get((nfl_team, week))
@@ -574,7 +568,7 @@ def _compute_faab_estimates(
     return estimates
 
 
-def _build_curve_for_league(cfg: dict, offense_positions: list[str], player_rules: ScoringRules, weeks_played: int, season: int) -> Curve:
+def _build_curve_for_league(cfg: dict, offense_positions: list[str], player_rules: ScoringRules, weeks_complete: int, season: int) -> Curve:
     val_cfg = cfg["valuation"]
     curve_seasons = val_cfg["curve_seasons"]
     starter_pool = val_cfg["starter_pool"]
@@ -582,19 +576,19 @@ def _build_curve_for_league(cfg: dict, offense_positions: list[str], player_rule
     hist_by_season = {s: nd.player_stats(s) for s in curve_seasons}
     hist_curve = build_curve(hist_by_season, player_rules, val_cfg["curve_min_games"], offense_positions, starter_pool)
 
-    if weeks_played <= 0:
+    if weeks_complete <= 0:
         return hist_curve
 
     current_stats = nd.player_stats(season, current_season=season)
-    cur_min_games = max(1, min(val_cfg["curve_min_games"], weeks_played // 2))
+    cur_min_games = max(1, min(val_cfg["curve_min_games"], weeks_complete // 2))
     cur_curve = build_curve({season: current_stats}, player_rules, cur_min_games, offense_positions, starter_pool)
     return blend_current(
-        hist_curve, cur_curve, weeks_played,
+        hist_curve, cur_curve, weeks_complete,
         max_weight=val_cfg["curve_current_max_weight"], full_weight_weeks=val_cfg["curve_current_full_weight_weeks"],
     )
 
 
-def _build_dst_curve_for_league(cfg: dict, dst_rules: ScoringRules, weeks_played: int, season: int) -> Curve:
+def _build_dst_curve_for_league(cfg: dict, dst_rules: ScoringRules, weeks_complete: int, season: int) -> Curve:
     val_cfg = cfg["valuation"]
     curve_seasons = val_cfg["curve_seasons"]
     starter_pool = val_cfg["starter_pool"].get("DST", 32)
@@ -603,21 +597,29 @@ def _build_dst_curve_for_league(cfg: dict, dst_rules: ScoringRules, weeks_played
     hist_schedules = {s: nd.schedules(s) for s in curve_seasons}
     hist_curve = build_dst_curve(hist_team_stats, hist_schedules, dst_rules, val_cfg["curve_min_games"], starter_pool)
 
-    if weeks_played <= 0:
+    if weeks_complete <= 0:
         return hist_curve
 
     current_team_stats = nd.team_stats(season, current_season=season)
     current_schedules = nd.schedules(season, current_season=season)
-    cur_min_games = max(1, min(val_cfg["curve_min_games"], weeks_played // 2))
+    cur_min_games = max(1, min(val_cfg["curve_min_games"], weeks_complete // 2))
     cur_curve = build_dst_curve({season: current_team_stats}, {season: current_schedules}, dst_rules, cur_min_games, starter_pool)
     return blend_current(
-        hist_curve, cur_curve, weeks_played,
+        hist_curve, cur_curve, weeks_complete,
         max_weight=val_cfg["curve_current_max_weight"], full_weight_weeks=val_cfg["curve_current_full_weight_weeks"],
     )
 
 
-def run_league(cfg: dict) -> dict:
-    """Runs the full pipeline for one league. Returns {filename: json-serializable-object}."""
+def run_league(cfg: dict, *, skip: frozenset[str] = frozenset()) -> dict:
+    """Runs the full pipeline for one league. Returns {filename: json-serializable-object}.
+
+    `skip` recognises "faab" (skip the FAAB bid estimator - avoids the
+    ~2.7 GB release-data download/parse, see engine/faab_estimate.py) and
+    "pbp" (skip the play-by-play Game Log fetch - free, useful for local
+    dev). A skipped output's file is omitted from the returned dict entirely
+    (not written as an empty placeholder), so main() simply never writes it
+    and a caller overlaying onto an existing docs/data directory (see the
+    site-data branch) leaves that file's last-written version untouched."""
     slug = cfg["slug"]
     season = cfg["season"]
     warnings: list[str] = []
@@ -690,6 +692,8 @@ def run_league(cfg: dict) -> dict:
     # --- schedule / week context ---
     schedules_current = nd.schedules(season, current_season=season)
     weeks_played, bye_weeks, opponent = nd.nfl_week_context(season, schedules_current)
+    game_final = nd.game_final_by_team_week(schedules_current, season)
+    weeks_complete = nd.weeks_complete(schedules_current, season)
     is_home = nd.home_away_from_schedule(schedules_current, season)
     kickoff = nd.kickoff_utc_from_schedule(schedules_current, season)
     current_week = settings.current_week
@@ -745,9 +749,9 @@ def run_league(cfg: dict) -> dict:
     _log_checkpoint("future_projections_done")
 
     # --- curves ---
-    curve = _build_curve_for_league(cfg, offense_positions, player_rules, weeks_played, season)
+    curve = _build_curve_for_league(cfg, offense_positions, player_rules, weeks_complete, season)
     if has_dst:
-        dst_curve = _build_dst_curve_for_league(cfg, dst_rules, weeks_played, season)
+        dst_curve = _build_dst_curve_for_league(cfg, dst_rules, weeks_complete, season)
         curve.ppg.update(dst_curve.ppg)
         curve.sd.update(dst_curve.sd)
         curve.max_rank.update(dst_curve.max_rank)
@@ -840,9 +844,10 @@ def run_league(cfg: dict) -> dict:
     _, prior_byes, prior_opponent = nd.nfl_week_context(prior_season, prior_schedules)
 
     matchup_index = compute_matchup_index(
-        current_points, prior_points, season, prior_season, weeks_played, opponent, prior_opponent, matchup_positions,
+        current_points, prior_points, season, prior_season, weeks_complete, opponent, prior_opponent, matchup_positions,
         pa_basis=val_cfg["pa_basis"], pa_l5_weight=val_cfg["pa_l5_weight"],
         pa_prior_season_weeks=val_cfg["pa_prior_season_weeks"], index_clamp=tuple(val_cfg["index_clamp"]),
+        game_final=game_final,
     )
     _log_checkpoint("matchup_index_done")
 
@@ -851,7 +856,8 @@ def run_league(cfg: dict) -> dict:
     # plus prior season for context before/early in the year.
     all_nfl_teams = sorted(set(prior_byes.keys()) | {t for (t, _) in opponent.keys()})
     current_team_weeks = {
-        t: [w for w in ws if w <= weeks_played] for t, ws in team_weeks_from_opponent(opponent, all_nfl_teams, list(range(1, final_week + 1))).items()
+        t: [w for w in ws if game_final.get((t, w), False)]
+        for t, ws in team_weeks_from_opponent(opponent, all_nfl_teams, list(range(1, final_week + 1))).items()
     }
     prior_all_weeks = sorted({w for (_, w) in prior_opponent.keys()})
     prior_team_weeks = team_weeks_from_opponent(prior_opponent, all_nfl_teams, prior_all_weeks)
@@ -917,7 +923,7 @@ def run_league(cfg: dict) -> dict:
     ir_ids: set[str] = set()
     unmapped: list[dict] = []
 
-    def _usage_stats_for_week(position, nfl_team, pid, week, weeks_played_):
+    def _usage_stats_for_week(position, nfl_team, pid, week, game_final):
         """Raw counts (not pre-divided percentages) for the Rankings Stats
         tab's Snap %/Att %/Tgt % columns - the frontend pairs these with
         their team totals to derive BOTH a single-week % and a true season
@@ -931,7 +937,7 @@ def run_league(cfg: dict) -> dict:
         for a team-week with zero real RB carries - see
         engine.faab_estimate.recent_carry_share's docstring for why that's
         a real 0/0, not a real 0% share."""
-        if week > weeks_played_ or position == "DST":
+        if not game_final.get((nfl_team, week), False) or position == "DST":
             return {"offense_snaps": None, "team_offense_snaps": None, "team_rb_carries": None, "team_targets": None}
         pfr_id = gsis_to_pfr.get(pid)
         return {
@@ -1027,11 +1033,11 @@ def run_league(cfg: dict) -> dict:
                         "kickoff": kickoff.get((p.nfl_team, w)),
                         "index": None, "rank": None, "projected": None, "sd": None,
                         "our_projected": None,
-                        "actual": _actual_weekly_stats(p.position, p.nfl_team, res.id, w, weeks_played, actual_offense_by_id_week, actual_dst_by_team_week, active_by_id_week, opponent, player_rules),
+                        "actual": _actual_weekly_stats(p.position, p.nfl_team, res.id, w, game_final, actual_offense_by_id_week, actual_dst_by_team_week, active_by_id_week, opponent, player_rules),
                         "implied_total": (game_context.get((p.nfl_team, w)) or {}).get("implied_total"),
                         "opponent_implied_total": (game_context.get((p.nfl_team, w)) or {}).get("opponent_implied_total"),
                         "weather": None,
-                        **_usage_stats_for_week(p.position, p.nfl_team, res.id, w, weeks_played),
+                        **_usage_stats_for_week(p.position, p.nfl_team, res.id, w, game_final),
                     }
                     for w in range(1, current_week)
                 ] + [
@@ -1040,7 +1046,7 @@ def run_league(cfg: dict) -> dict:
                         "kickoff": kickoff.get((p.nfl_team, wp.week)),
                         "index": wp.index, "rank": wp.rank, "projected": wp.projected, "sd": wp.sd,
                         "our_projected": wp.our_projected,
-                        "actual": _actual_weekly_stats(p.position, p.nfl_team, res.id, wp.week, weeks_played, actual_offense_by_id_week, actual_dst_by_team_week, active_by_id_week, opponent, player_rules),
+                        "actual": _actual_weekly_stats(p.position, p.nfl_team, res.id, wp.week, game_final, actual_offense_by_id_week, actual_dst_by_team_week, active_by_id_week, opponent, player_rules),
                         # implied_total is this player's OWN team; opponent_implied_total
                         # is the team they're facing that week - for a DST, the opponent's
                         # number is the one that actually matters (how many points the
@@ -1053,7 +1059,7 @@ def run_league(cfg: dict) -> dict:
                         # weather_by_team comment above for why a future week
                         # is never worth fetching.
                         "weather": weather_by_team.get(p.nfl_team) if wp.week == current_week else None,
-                        **_usage_stats_for_week(p.position, p.nfl_team, res.id, wp.week, weeks_played),
+                        **_usage_stats_for_week(p.position, p.nfl_team, res.id, wp.week, game_final),
                     }
                     for wp in proj.weekly
                 ],
@@ -1109,35 +1115,36 @@ def run_league(cfg: dict) -> dict:
     # rather than bars, so real usage (a stuffed goal-line carry, a drop)
     # stays visible on the same time axis instead of vanishing entirely.
     game_log_plays_out: dict[str, dict[str, dict[str, list[dict]]]] = {}
-    try:
-        pbp_current = nd.play_by_play(season, current_season=season)
-        for w in range(1, weeks_played + 1):
-            week_rows = list(pbp_current.filter(pl.col("season") == season, pl.col("week") == w).iter_rows(named=True))
-            if not week_rows:
-                continue
-            play_index = build_game_play_index(week_rows)
-            game_durations = game_durations_by_game_id(week_rows)
-            for p in players_out:
-                if p["position"] not in offense_positions:
+    if "pbp" not in skip:
+        try:
+            pbp_current = nd.play_by_play(season, current_season=season)
+            for w in range(1, weeks_played + 1):
+                week_rows = list(pbp_current.filter(pl.col("season") == season, pl.col("week") == w).iter_rows(named=True))
+                if not week_rows:
                     continue
-                gsis_id = gsis_by_pid.get(p["id"])
-                plays_for_player = play_index.get(gsis_id) if gsis_id else None
-                if not plays_for_player:
-                    continue
-                scoring_plays = scoring_plays_for_player(plays_for_player, gsis_id, player_rules)
-                incompletions = incomplete_targets_for_player(plays_for_player, gsis_id)
-                zero_point_plays = zero_point_plays_for_player(plays_for_player, gsis_id, player_rules)
-                if scoring_plays or incompletions or zero_point_plays:
-                    game_id = plays_for_player[0].get("game_id")
-                    duration = game_durations.get(game_id, 60.0)
-                    game_log_plays_out.setdefault(p["id"], {})[str(w)] = {
-                        "plays": scoring_plays, "incompletions": incompletions,
-                        "zero_point_plays": zero_point_plays, "game_duration_min": round(duration, 2),
-                    }
-    except Exception:
-        logger.warning("play-by-play fetch/processing failed - Game Log per-play breakdown disabled for this build", exc_info=True)
-        warnings.append("Play-by-play fetch failed; per-play Game Log breakdown unavailable this build")
-        game_log_plays_out = {}
+                play_index = build_game_play_index(week_rows)
+                game_durations = game_durations_by_game_id(week_rows)
+                for p in players_out:
+                    if p["position"] not in offense_positions:
+                        continue
+                    gsis_id = gsis_by_pid.get(p["id"])
+                    plays_for_player = play_index.get(gsis_id) if gsis_id else None
+                    if not plays_for_player:
+                        continue
+                    scoring_plays = scoring_plays_for_player(plays_for_player, gsis_id, player_rules)
+                    incompletions = incomplete_targets_for_player(plays_for_player, gsis_id)
+                    zero_point_plays = zero_point_plays_for_player(plays_for_player, gsis_id, player_rules)
+                    if scoring_plays or incompletions or zero_point_plays:
+                        game_id = plays_for_player[0].get("game_id")
+                        duration = game_durations.get(game_id, 60.0)
+                        game_log_plays_out.setdefault(p["id"], {})[str(w)] = {
+                            "plays": scoring_plays, "incompletions": incompletions,
+                            "zero_point_plays": zero_point_plays, "game_duration_min": round(duration, 2),
+                        }
+        except Exception:
+            logger.warning("play-by-play fetch/processing failed - Game Log per-play breakdown disabled for this build", exc_info=True)
+            warnings.append("Play-by-play fetch failed; per-play Game Log breakdown unavailable this build")
+            game_log_plays_out = {}
 
     # Which week (if any) each player is on bye - the trigger for
     # optimal_lineup_for_week_with_bye_fill's streaming fill-in. Covers free
@@ -1314,7 +1321,17 @@ def run_league(cfg: dict) -> dict:
                 (pid for pid in roster_ids if pid not in started),
                 key=lambda pid: players_by_id[pid]["espn_projected_week"] or 0, reverse=True,
             )
-            weeks_out[str(w)] = {"total": total, "slots": assignment, "bench": bench, "streamed": sorted(streamed)}
+            # sum of starters' weekly variance -> sqrt for the team's weekly
+            # SD - also the exact team_week_sd value used below for playoff
+            # sim/win% input, written here too so the live tier (engine/
+            # live.py) can rebuild that table straight from lineups.json
+            # without redoing any projection work.
+            sd_sq = sum(
+                (next((wp["sd"] for wp in players_by_id[pid]["weekly"] if wp["week"] == w), 0.0)) ** 2
+                for pid in assignment.values()
+            )
+            week_sd = sd_sq ** 0.5
+            weeks_out[str(w)] = {"total": total, "sd": week_sd, "slots": assignment, "bench": bench, "streamed": sorted(streamed)}
 
         # "Changes vs. your ESPN lineup" only makes sense for the current week
         # - ESPN's actual lineup submission is a live, current-state snapshot,
@@ -1412,170 +1429,48 @@ def run_league(cfg: dict) -> dict:
 
     # --- standings ---
     espn_matchups = client.get_matchups()
-    remaining = [
-        RemainingMatchup(week=m.week, home_team_id=m.home_team_id, away_team_id=m.away_team_id)
-        for m in espn_matchups if not m.played and m.week <= reg_season_count
-    ]
 
-    # Per-team, per-week projected total mean/SD - used below as the win-
-    # probability input for every not-yet-current, not-yet-played matchup
-    # (the current week gets a more precise LIVE version instead, see
-    # team_live_mean_sd just below), and again further down as
-    # simulate_playoffs' own per-week input - computed once, shared by both.
+    # Per-team, per-week projected total mean/SD - used as the win-probability
+    # input for every not-yet-current, not-yet-played matchup (the current
+    # week gets a more precise LIVE version instead, see team_live_mean_sd
+    # just below), and again as simulate_playoffs' own per-week input -
+    # computed once, shared by both. SD is read straight back from
+    # lineups.json's own per-week "sd" (computed above, in the lineups loop)
+    # so the live tier can rebuild this exact table from that file alone,
+    # without redoing any projection work.
     team_week_mean: dict[tuple[int, int], float] = {}
     team_week_sd: dict[tuple[int, int], float] = {}
     for t in espn_teams:
         for w in weeks:
-            wtotal, wassign = all_week_lineups[(t.team_id, w)]
+            wtotal, _ = all_week_lineups[(t.team_id, w)]
             team_week_mean[(t.team_id, w)] = wtotal
-            # sum of starters' weekly variance -> sqrt for the team's weekly SD
-            sd_sq = sum(
-                (next((wp["sd"] for wp in players_by_id[pid]["weekly"] if wp["week"] == w), 0.0)) ** 2
-                for pid in wassign.values()
-            )
-            team_week_sd[(t.team_id, w)] = sd_sq ** 0.5
+            team_week_sd[(t.team_id, w)] = lineups_out[str(t.team_id)]["weeks"][str(w)]["sd"]
     _log_checkpoint("standings_prep_done")
 
-    # --- live win probability (current week only) ---
-    # Each starter's (mean, sd) BLENDS toward (actual points, 0) smoothly as
-    # their real NFL game progresses, rather than snapping straight from
-    # "fully uncertain" to "fully final" the instant ESPN's fantasy API
-    # marks their game done - live-verified against the ESPN app's own
-    # displayed in-game projection for a real player (Christian Watson,
-    # week 1 2026): actual_so_far + remaining_fraction * pregame_projection
-    # matched it exactly at halftime (remaining_fraction=0.5). SD scales by
-    # sqrt(remaining_fraction), not remaining_fraction itself - variance
-    # (not SD) is the additive quantity for a process accumulating roughly
-    # uniformly over game-clock time (the same reasoning a random walk's
-    # variance grows linearly with elapsed time while its SD only grows
-    # with elapsed time's square root), so a full-game SD represents all 60
-    # minutes of variance and the REMAINING portion is pregame_sd *
-    # sqrt(remaining_fraction).
-    #
-    # remaining_fraction comes from ESPN's PUBLIC scoreboard (real
-    # quarter/clock state - the fantasy API never exposes this, only a
-    # crude done/not-done flag) via ingest.espn_scoreboard, keyed by team;
-    # a team missing from it (that fetch failed entirely, or - degenerate -
-    # a team not found on the live scoreboard for some other reason) falls
-    # back to the OLD binary rule instead of guessing every team is at some
-    # arbitrary default, so a scoreboard outage degrades to today's
-    # already-safe behavior rather than corrupting every matchup's win%.
-    #
-    # Summed per team into one Normal(mean, sd), then
-    # engine.standings.matchup_win_probability turns the two teams'
-    # distributions into a single win% for the matchup - accurate as of the
-    # last site build, not truly real-time in-game (the pipeline itself
-    # only runs on its own schedule). Every OTHER not-yet-played week (no
-    # live status to blend in yet regardless) uses the plain projected
-    # team_week_mean/team_week_sd instead - see _win_pcts below.
+    # --- live win probability (current week only) - see
+    # engine.standings_stage.live_team_mean_sd's own docstring for the exact
+    # blend derivation and its live-verification against a real in-game ESPN
+    # projection. week_started gates the live blend on whether the current
+    # week has actually kicked off (ingest.nfl_data.week_for_kickoff), so a
+    # nightly run before kickoff doesn't show a spurious 0-0 "(live)" score
+    # on the Schedule page (see standings_outputs' own docstring).
     _log_checkpoint("before_live_status_fetch")
     live_status_by_espn_id = client.get_live_week_player_status(current_week)
     _log_checkpoint("live_status_fetched")
     remaining_frac_by_team = fetch_remaining_game_fraction()
     _log_checkpoint("scoreboard_fetch_done")
-    team_live_mean_sd: dict[int, tuple[float, float]] = {}
-    for team_id, starters in espn_started_by_team.items():
-        mean_total = 0.0
-        var_total = 0.0
-        for pid in starters:
-            p = players_by_id[pid]
-            wp = next((w for w in p["weekly"] if w["week"] == current_week), None)
-            pregame_mean, pregame_sd = p["this_week"] or 0.0, wp["sd"] if wp else 0.0
-            live = live_status_by_espn_id.get(p["espn_id"])
-            points_so_far = live[0] if live is not None else 0.0
-            frac = remaining_frac_by_team.get(p["nfl_team"])
-            if frac is None:
-                frac = 0.0 if (live is not None and live[1]) else 1.0
-            mean_total += points_so_far + frac * pregame_mean
-            var_total += (pregame_sd * (frac**0.5)) ** 2
-        team_live_mean_sd[team_id] = (mean_total, var_total**0.5)
+    week_started = nd.week_for_kickoff(datetime.now(timezone.utc), schedules_current, season) == current_week
+    team_live_mean_sd, live_points_by_team = standings_stage.live_team_mean_sd(
+        players_by_id, espn_started_by_team, current_week, live_status_by_espn_id, remaining_frac_by_team,
+    )
     _log_checkpoint("live_win_pct_inputs_built")
 
-    def _win_pcts(m: Matchup) -> tuple[float | None, float | None]:
-        # Decided games don't need a win% (the real score already says who
-        # won). The current week gets the more precise LIVE version (real
-        # points for finished player-games, sd collapsed to 0 for those) -
-        # every other not-yet-played week falls back to the plain pre-game
-        # projected mean/SD (team_week_mean/team_week_sd, above) as its best
-        # available estimate, rather than showing nothing at all just
-        # because the game hasn't started yet.
-        if m.played:
-            return None, None
-        if m.week == current_week and m.home_team_id in team_live_mean_sd and m.away_team_id in team_live_mean_sd:
-            home_mean_sd, away_mean_sd = team_live_mean_sd[m.home_team_id], team_live_mean_sd[m.away_team_id]
-        elif (m.home_team_id, m.week) in team_week_mean and (m.away_team_id, m.week) in team_week_mean:
-            home_mean_sd = (team_week_mean[(m.home_team_id, m.week)], team_week_sd[(m.home_team_id, m.week)])
-            away_mean_sd = (team_week_mean[(m.away_team_id, m.week)], team_week_sd[(m.away_team_id, m.week)])
-        else:
-            return None, None
-        home_win_pct = matchup_win_probability(*home_mean_sd, *away_mean_sd)
-        return home_win_pct, 1.0 - home_win_pct
-
-    schedule_out = []
-    for m in espn_matchups:
-        home_win_pct, away_win_pct = _win_pcts(m)
-        schedule_out.append(
-            {
-                "week": m.week, "home_team_id": m.home_team_id, "away_team_id": m.away_team_id,
-                "home_score": m.home_score, "away_score": m.away_score, "played": m.played,
-                "home_win_pct": home_win_pct, "away_win_pct": away_win_pct,
-            }
-        )
-
-    team_states = [
-        TeamState(team_id=t.team_id, division_id=t.division_id, wins=t.wins, losses=t.losses, ties=t.ties, points_for=t.points_for)
-        for t in espn_teams
-    ]
-    sim_results = simulate_playoffs(
-        team_states, remaining, team_week_mean, team_week_sd,
-        iterations=sim_cfg["iterations"], seed=sim_cfg["seed"],
-        playoff_team_count=settings.playoff_team_count, division_winners_first=sim_cfg["division_winners_first"],
+    schedule_out, standings_out = standings_stage.standings_outputs(
+        espn_teams, espn_matchups, settings, sim_cfg, current_week,
+        team_week_mean, team_week_sd, team_live_mean_sd, live_points_by_team,
+        week_started=week_started,
     )
-    # --- current seed (real, not simulated) ---
-    # Uses configurable per-seed tiebreakers (see docs/js/settings.js and
-    # README's "Settings sheet" section) rather than simulate_playoffs' fixed
-    # wins->PF sim tiebreak, which stays as-is (a reasonable approximation
-    # for a 10000-iteration Monte Carlo forecast, not the real current
-    # standings). Falls back to today's behavior - division_winners_first +
-    # wins->PF for every seed - until seeding is actually configured in the
-    # settings sheet, so unconfigured leagues don't silently change.
     division_count = len(set(settings.divisions.keys()) & {t.division_id for t in espn_teams})
-    division_tiebreak_order, seed_configs = parse_seeding_config(sim_cfg.get("seeding_raw", {}))
-    if not division_tiebreak_order:
-        division_tiebreak_order = ["wins", "points_for"]
-    if not seed_configs:
-        seed_configs = {
-            n: SeedConfig(division_priority=sim_cfg["division_winners_first"] and n <= division_count, tiebreak_order=["wins", "points_for"])
-            for n in range(1, settings.playoff_team_count + 1)
-        }
-    seed_team_states = [
-        SeedTeamState(
-            team_id=t.team_id, division_id=t.division_id, wins=t.wins, losses=t.losses, ties=t.ties,
-            points_for=t.points_for, points_against=t.points_against,
-        )
-        for t in espn_teams
-    ]
-    played_matchups = [
-        PlayedMatchup(home_team_id=m.home_team_id, away_team_id=m.away_team_id, home_score=m.home_score, away_score=m.away_score)
-        for m in espn_matchups
-        if m.played and m.home_score is not None and m.away_score is not None
-    ]
-    current_seeds = compute_current_seeds(
-        seed_team_states, played_matchups, settings.playoff_team_count, division_tiebreak_order, seed_configs,
-    )
-
-    standings_out = []
-    for t in espn_teams:
-        s = sim_results[t.team_id]
-        standings_out.append(
-            {
-                "team_id": t.team_id, "wins": t.wins, "losses": t.losses, "ties": t.ties, "points_for": t.points_for,
-                "points_against": t.points_against, "seed": current_seeds.get(t.team_id),
-                "division": settings.divisions.get(t.division_id, str(t.division_id)),
-                "expected_wins": s["expected_wins"], "playoff_odds": s["playoff_odds"], "bye_odds": s["bye_odds"],
-                "division_win_odds": s["division_win_odds"], "seed_probs": s["seed_probs"], "iterations": s["iterations"],
-            }
-        )
 
     # --- meta ---
     for pid, entries in players_by_id.items():
@@ -1589,6 +1484,19 @@ def run_league(cfg: dict) -> dict:
     if unmapped:
         warnings.append(f"{len(unmapped)} players unmapped to nflverse ids")
 
+    # Mean current-week projected SD per position, across every rostered/
+    # free-agent player already in players_out - the fallback SD the live
+    # tier (engine/live.py) uses for a starter it finds on an ESPN live
+    # roster but that isn't in this build's own players.json (added/promoted
+    # after this run), which has no per-player projection of its own to read
+    # an SD from.
+    _sd_by_pos: dict[str, list[float]] = {}
+    for p in players_out:
+        wp = next((w for w in p["weekly"] if w["week"] == current_week), None)
+        if wp is not None and wp["sd"] is not None:
+            _sd_by_pos.setdefault(p["position"], []).append(wp["sd"])
+    position_week_sd = {pos: sum(vals) / len(vals) for pos, vals in _sd_by_pos.items()}
+
     meta = {
         "slug": slug,
         # The real ESPN league id behind this site league - lets client JS
@@ -1596,7 +1504,14 @@ def run_league(cfg: dict) -> dict:
         # bid_distribution dot-plot's source_league_id per bid) without
         # hardcoding any one league, generalizing beyond just The O League.
         "league_id": cfg["league_id"],
-        "season": season, "current_week": current_week, "weeks_played": weeks_played, "final_week": final_week,
+        "season": season, "current_week": current_week, "weeks_played": weeks_played,
+        "weeks_complete": weeks_complete, "final_week": final_week,
+        # "full" writes every output (including faab_estimates.json); "refresh"
+        # is run_league with faab skipped - see run_league's own docstring.
+        # The gameday "live" stage never calls run_league at all (see
+        # engine/live.py), so it's not a possible value here.
+        "stage": "refresh" if "faab" in skip else "full",
+        "position_week_sd": position_week_sd,
         "reg_season_count": reg_season_count, "generated_at": datetime.now(timezone.utc).isoformat(),
         "rankings_source": rankings_source, "curve_seasons": val_cfg["curve_seasons"],
         "positions": settings.positions,
@@ -1639,20 +1554,21 @@ def run_league(cfg: dict) -> dict:
     # from (a real prod case: FAAB showed week 3 while it was still
     # Wednesday evening Central, a full day before week 2's Thursday
     # opener).
-    faab_week_started = nd.week_for_kickoff(datetime.now(timezone.utc), schedules_current, season)
-    faab_current_week = _faab_week_override(current_week, faab_week_started)
-    _log_checkpoint("before_faab_estimates")
-    try:
-        faab_estimates_out = _compute_faab_estimates(
-            cfg, client, players_out, season, faab_current_week, team_rosters, team_specific_fa_gains,
-            snap_pct_index, gsis_to_pfr, stats_index, team_rb_carries, gsis_by_pid,
-        )
-    except Exception as exc:
-        logger.warning("faab_model: estimate computation failed, writing empty faab_estimates.json: %s", exc)
-        faab_estimates_out = {}
-    _log_checkpoint("faab_estimates_done")
+    if "faab" not in skip:
+        faab_week_started = nd.week_for_kickoff(datetime.now(timezone.utc), schedules_current, season)
+        faab_current_week = _faab_week_override(current_week, faab_week_started)
+        _log_checkpoint("before_faab_estimates")
+        try:
+            faab_estimates_out = _compute_faab_estimates(
+                cfg, client, players_out, season, faab_current_week, team_rosters, team_specific_fa_gains,
+                snap_pct_index, gsis_to_pfr, stats_index, team_rb_carries, gsis_by_pid,
+            )
+        except Exception as exc:
+            logger.warning("faab_model: estimate computation failed, writing empty faab_estimates.json: %s", exc)
+            faab_estimates_out = {}
+        _log_checkpoint("faab_estimates_done")
 
-    return {
+    result = {
         "meta.json": meta,
         "players.json": players_out,
         "teams.json": teams_out,
@@ -1664,28 +1580,35 @@ def run_league(cfg: dict) -> dict:
         "schedule.json": schedule_out,
         "fa_values.json": fa_values_out,
         "fa_values_detail.json": fa_values_detail_out,
-        "game_log_plays.json": game_log_plays_out,
         "unmapped.json": unmapped,
-        "faab_estimates.json": faab_estimates_out,
     }
+    if "pbp" not in skip:
+        result["game_log_plays.json"] = game_log_plays_out
+    if "faab" not in skip:
+        result["faab_estimates.json"] = faab_estimates_out
+    return result
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--league", default=None, help="league slug; omit to run every configured league")
     parser.add_argument("--out", default="docs/data")
+    parser.add_argument(
+        "--skip", default="", help="comma-separated outputs to skip: faab,pbp (see run_league's docstring)"
+    )
     args = parser.parse_args()
 
     out_root = Path(args.out)
     configs = load_all_league_configs()
     if args.league:
         configs = [c for c in configs if c["slug"] == args.league]
+    skip = frozenset(s.strip() for s in args.skip.split(",") if s.strip())
 
     leagues_index = []
     any_failed = False
     for cfg in configs:
         try:
-            files = run_league(cfg)
+            files = run_league(cfg, skip=skip)
         except Exception:
             logger.exception("league %s failed", cfg["slug"])
             any_failed = True
@@ -1696,6 +1619,20 @@ def main() -> int:
         for filename, data in files.items():
             with open(out_dir / filename, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False)
+        # A stale live.json (from a gameday live tick, see engine/live.py)
+        # left over from a now-past week would otherwise still get read by
+        # the frontend as if it were current - this full/refresh run just
+        # wrote a fresh meta.json/schedule.json/standings.json for the REAL
+        # current week, so any live.json for an earlier week is definitely
+        # stale and gets removed rather than left to mislead the site.
+        live_path = out_dir / "live.json"
+        if live_path.exists():
+            try:
+                live_week = json.loads(live_path.read_text(encoding="utf-8")).get("week")
+            except (json.JSONDecodeError, OSError):
+                live_week = None
+            if live_week is None or live_week < files["meta.json"]["current_week"]:
+                live_path.unlink()
         leagues_index.append(
             {
                 "slug": cfg["slug"], "name": cfg["name"], "season": cfg["season"],
@@ -1707,6 +1644,14 @@ def main() -> int:
     out_root.mkdir(parents=True, exist_ok=True)
     with open(out_root / "leagues.json", "w", encoding="utf-8") as f:
         json.dump(leagues_index, f, ensure_ascii=False)
+
+    # nflverse's own per-dataset release timestamps as of this run - lets a
+    # later "refresh" stage's gate (tools/nflverse_freshness.py) tell whether
+    # nflverse has actually published anything new since this build, rather
+    # than firing on a fixed clock offset. Best-effort: a fetch failure here
+    # just means fewer tags recorded, never worth failing the whole build.
+    with open(out_root / "sources.json", "w", encoding="utf-8") as f:
+        json.dump({"nflverse": nflverse_freshness.read_timestamps(), "ingested_at": datetime.now(timezone.utc).isoformat()}, f, ensure_ascii=False)
 
     return 1 if any_failed else 0
 

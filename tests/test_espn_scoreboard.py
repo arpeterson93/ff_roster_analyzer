@@ -1,6 +1,7 @@
+from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
-from ingest.espn_scoreboard import _remaining_fraction, fetch_remaining_game_fraction
+from ingest.espn_scoreboard import _remaining_fraction, fetch_remaining_game_fraction, live_game_window
 
 
 def test_remaining_fraction_full_at_kickoff():
@@ -83,3 +84,50 @@ def test_fetch_remaining_game_fraction_skips_a_malformed_event_without_failing_t
     with patch("ingest.espn_scoreboard.requests.get", return_value=mock_resp):
         result = fetch_remaining_game_fraction()
     assert result == {"SEA": 0.0, "NE": 0.0}
+
+
+# --- live_game_window: engine/live.py's --gate rule.
+
+_NOW = datetime(2026, 9, 21, 20, 0, tzinfo=timezone.utc)
+
+
+def _event_at(state, kickoff: datetime):
+    return {
+        "competitions": [
+            {"status": {"type": {"state": state}}, "date": kickoff.strftime("%Y-%m-%dT%H:%M:%SZ")}
+        ]
+    }
+
+
+def test_live_game_window_true_when_a_game_is_in_progress():
+    events = [_event_at("in", _NOW - timedelta(hours=1))]
+    assert live_game_window(events, _NOW) is True
+
+
+def test_live_game_window_true_for_a_game_final_3_hours_ago():
+    events = [_event_at("post", _NOW - timedelta(hours=3))]
+    assert live_game_window(events, _NOW) is True
+
+
+def test_live_game_window_false_for_a_game_final_6_hours_ago():
+    events = [_event_at("post", _NOW - timedelta(hours=6))]
+    assert live_game_window(events, _NOW) is False
+
+
+def test_live_game_window_false_when_every_game_is_still_pregame():
+    events = [_event_at("pre", _NOW + timedelta(hours=2)), _event_at("pre", _NOW + timedelta(hours=5))]
+    assert live_game_window(events, _NOW) is False
+
+
+def test_live_game_window_true_if_any_one_event_qualifies_among_several():
+    events = [_event_at("pre", _NOW + timedelta(hours=2)), _event_at("in", _NOW - timedelta(minutes=30))]
+    assert live_game_window(events, _NOW) is True
+
+
+def test_live_game_window_skips_a_malformed_event_without_failing_the_rest():
+    events = [{"competitions": [{}]}, _event_at("in", _NOW - timedelta(minutes=10))]
+    assert live_game_window(events, _NOW) is True
+
+
+def test_live_game_window_false_on_no_events():
+    assert live_game_window([], _NOW) is False

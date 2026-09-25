@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timedelta
 
 import requests
 
@@ -79,6 +80,42 @@ def _fetch_scoreboard() -> dict | None:
                 time.sleep(1.5 * (attempt + 1))
     logger.warning("espn_scoreboard: failed after %s attempts: %s - live in-game blending disabled for this build", _RETRIES, last_exc)
     return None
+
+
+def fetch_scoreboard() -> dict | None:
+    """Public wrapper over _fetch_scoreboard - engine/live.py's own gate step
+    (see live_game_window below) needs the raw scoreboard payload, not just
+    the per-team remaining-fraction summary fetch_remaining_game_fraction
+    derives from it."""
+    return _fetch_scoreboard()
+
+
+# How long after a game goes final its box score still counts as "worth a
+# gameday tick" for the gate - long enough that the tick right after a game
+# ends still runs (to catch late-arriving final stats/lineup settlement),
+# short enough that the gate stops firing well before the next slate.
+_RECENTLY_FINAL_WINDOW = timedelta(hours=4.5)
+
+
+def live_game_window(events: list[dict], now: datetime) -> bool:
+    """True if any event on the scoreboard is actually in progress, or went
+    final within the last _RECENTLY_FINAL_WINDOW - the gameday live tier's
+    gate rule (engine/live.py --gate): run only when there's something to
+    show, and exit fast otherwise rather than spending ~25 ESPN requests on
+    a dead window."""
+    for event in events:
+        try:
+            comp = event["competitions"][0]
+            state = comp["status"]["type"]["state"]
+            if state == "in":
+                return True
+            if state == "post":
+                kickoff = datetime.fromisoformat(comp["date"].replace("Z", "+00:00"))
+                if now - kickoff < _RECENTLY_FINAL_WINDOW:
+                    return True
+        except (KeyError, IndexError, TypeError, ValueError):
+            continue  # one malformed event shouldn't sink the whole gate check
+    return False
 
 
 def fetch_remaining_game_fraction() -> dict[str, float]:

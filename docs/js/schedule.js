@@ -35,7 +35,13 @@ function pointsForPlayerInLineup(p, week, lineupWeek, currentWeek) {
 // projections/ownership/etc. fields a current player has, which is fine
 // here since a past week's lineup only ever needs name/position/points.
 function resolvePlayer(pid, data) {
-  return data.playersById.get(pid) || (data.lineups._unrostered_players || {})[pid];
+  return (
+    data.playersById.get(pid) ||
+    (data.lineups._unrostered_players || {})[pid] ||
+    // A gameday live starter who wasn't in this build's own players.json
+    // (added/promoted after the last full/refresh run) - see engine/live.py.
+    (data.live?.players || {})[pid]
+  );
 }
 
 // ESPN's raw lineupSlot strings -> the same base labels engine/lineup.py's
@@ -83,14 +89,32 @@ function actualLineupWeek(teamId, data) {
   return { slots, bench };
 }
 
+// A gameday live tick (engine/live.py) writes live.json for the CURRENT
+// week only - .week lets a stale live.json (week rolled over, next full/
+// refresh run hasn't cleaned it up yet - see run_league's own stale-live.json
+// deletion) be told apart from a genuinely current one.
+function isLiveDataCurrent(data) {
+  return !!data.live && data.live.week === data.meta.current_week;
+}
+
 function lineupWeekFor(teamId, week, data) {
-  if (week === data.meta.current_week) return actualLineupWeek(teamId, data);
+  if (week === data.meta.current_week) {
+    if (isLiveDataCurrent(data)) {
+      const liveTeam = data.live.teams[String(teamId)];
+      if (liveTeam) return liveTeam;
+    }
+    return actualLineupWeek(teamId, data);
+  }
   const lineupTeam = data.lineups[String(teamId)];
   return lineupTeam ? lineupTeam.weeks[String(week)] : null;
 }
 
 function scoreOf(m, side, data) {
   if (m.played) return side === "home" ? m.home_score : m.away_score;
+  // schedule.json's own live home_score/away_score (a gameday tick's sum of
+  // real per-player points so far - see engine/standings_stage.py) beats
+  // the client-side pregame-projection fallback below.
+  if (m.live) return side === "home" ? m.home_score : m.away_score;
   const teamId = side === "home" ? m.home_team_id : m.away_team_id;
   if (m.week === data.meta.current_week) {
     return actualStarters(teamId, data).reduce((acc, p) => acc + (pointsForWeek(p, m.week, data.meta.current_week) || 0), 0);
@@ -250,7 +274,9 @@ export function renderSchedule(container, data, slug) {
       .map((w) => {
         const weekMatchups = data.schedule.filter((m) => m.week === w);
         const allProjected = weekMatchups.length > 0 && weekMatchups.every((m) => !m.played);
-        const weekHeader = `<tr class="week-divider"><td colspan="4">Week ${w}${w === data.meta.current_week ? " (current)" : ""}${allProjected ? " - Projected" : ""}</td></tr>`;
+        const anyLive = weekMatchups.some((m) => m.live);
+        const statusLabel = anyLive ? " (live)" : allProjected ? " - Projected" : "";
+        const weekHeader = `<tr class="week-divider"><td colspan="4">Week ${w}${w === data.meta.current_week ? " (current)" : ""}${statusLabel}</td></tr>`;
         const matchups = weekMatchups.map((m) => matchupRow(m, data, state.expandedKey, yourTeamId, avg, spread)).join("");
         return weekHeader + matchups;
       })

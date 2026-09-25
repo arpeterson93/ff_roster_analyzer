@@ -237,6 +237,7 @@ def compute_matchup_index(
     pa_l5_weight: float,
     pa_prior_season_weeks: int,
     index_clamp: tuple[float, float],
+    game_final: dict[tuple[str, int], bool] | None = None,
 ) -> MatchupIndex:
     """Opponent-strength-adjusted points-allowed index, generic over any
     "position" whose points-by-team-week table is supplied - offense
@@ -248,7 +249,18 @@ def compute_matchup_index(
     `opponent` and `prior_opponent` MUST be each season's own schedule - who
     a team played in a given week differs year to year, so the prior-season
     ratios have to be built from the prior season's own opponent map, not
-    reused from the current season's."""
+    reused from the current season's.
+
+    `weeks_played` is the blend-weight input (callers should pass
+    ingest.nfl_data.weeks_complete, not weeks_played, so the prior-season
+    fallback doesn't get pulled toward the current season on the strength of
+    a single Thursday game). `game_final` (from
+    ingest.nfl_data.game_final_by_team_week), when given, replaces the
+    `w <= weeks_played` cutoff for which of a team's own weeks count as
+    "played" with a real per-game completion check - a team whose game
+    hasn't kicked off yet no longer gets a same-week 0.0 just because another
+    game that week is final. Omitting it keeps the old global-cutoff
+    behavior for existing callers/tests."""
     teams = sorted({t for (t, _), o in opponent.items() if o is not None} | {o for o in opponent.values() if o})
     all_weeks = sorted({w for (_, w) in opponent.keys()})
     team_weeks = team_weeks_from_opponent(opponent, teams, all_weeks)
@@ -259,7 +271,8 @@ def compute_matchup_index(
 
     result = MatchupIndex()
 
-    if weeks_played <= 0:
+    no_current_data = not any(game_final.values()) if game_final is not None else weeks_played <= 0
+    if no_current_data:
         prior_league_avg = _league_avg_by_pos(prior_points, prior_team_weeks, positions)
         for pos in positions:
             result.index[pos] = {t: _clamp(v, index_clamp) for t, v in prior_index[pos].items()}
@@ -279,7 +292,10 @@ def compute_matchup_index(
         return result
 
     cur_points = current_points
-    played_weeks = {t: [w for w in ws if w <= weeks_played] for t, ws in team_weeks.items()}
+    if game_final is not None:
+        played_weeks = {t: [w for w in ws if game_final.get((t, w), False)] for t, ws in team_weeks.items()}
+    else:
+        played_weeks = {t: [w for w in ws if w <= weeks_played] for t, ws in team_weeks.items()}
 
     cur_season_index, cur_season_allowed = _index_for_basis(
         cur_points, opponent, played_weeks, positions, lambda ws: ws
