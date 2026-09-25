@@ -1,0 +1,52 @@
+name: faab-weekly
+
+# Pulls this week's real FAAB bids from every FAAB-eligible pooled public
+# league (tools/faab_history/pull_current_week_bids.py) and commits the
+# result straight to main. Deliberately separate from update.yml: this
+# writes tools/faab_history/current-week-bids.json directly into git, not
+# docs/data/site-data, and only needs public-league ESPN access (no
+# ESPN_S2_AGS/SWID_AGS) - see that script's own module docstring for why
+# Wednesday morning specifically (most pooled leagues' own Tuesday-night/
+# Wednesday-morning waivers have settled by then, a day before The O
+# League's own Wednesday-night run).
+#
+# Triggered by a cron-job.org job POSTing to this workflow's dispatch
+# endpoint (same PAT as the update.yml jobs - see README's "Update cadence"
+# section) - no `schedule:` trigger, for the same reason update.yml doesn't
+# use one (GitHub's own cron was measured firing hours late on this repo).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  pull-current-week-bids:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - run: pip install -r requirements.txt
+
+      - name: Pull current-week FAAB bids
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python -m tools.faab_history.pull_current_week_bids
+
+      - name: Commit current-week-bids.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add tools/faab_history/current-week-bids.json
+          if git diff --cached --quiet; then
+            echo "no changes to commit"
+            exit 0
+          fi
+          git commit -m "Update current-week-bids.json"
+          git push origin HEAD:main

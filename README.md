@@ -86,6 +86,13 @@ headers `Authorization: Bearer <PAT>`, `Accept: application/vnd.github+json`,
 The live windows deliberately over-cover (cheap: `engine/live.py --gate`
 exits in ~30s if nothing's live or recently finished).
 
+**One more cron-job.org job, on a DIFFERENT workflow** (`faab_weekly.yml`,
+not `update.yml` - see "FAAB model data refresh" below for what it does and
+why it's separate): `faab-weekly`, Wed 08:00 CT, POST to
+`https://api.github.com/repos/arpeterson93/ff_roster_analyzer/actions/workflows/faab_weekly.yml/dispatches`
+with the same headers as above and body `{"ref":"main"}` (no `inputs` - this
+workflow doesn't take any).
+
 **The dispatch PAT.** A fine-grained GitHub PAT scoped to this repo with
 **Actions: Read and write**, stored wherever cron-job.org's job config holds
 it. It expires - put a renewal reminder on the calendar for whatever expiry
@@ -267,18 +274,26 @@ pytest -q
 Run with `PYTHONIOENCODING=utf-8` on Windows if player names with accented
 characters fail to print.
 
-## FAAB model data refresh (occasional, manual - not in any workflow)
+## FAAB model data refresh (occasional, manual - not in `update.yml`)
 
 The FAAB bid estimator (`engine/faab_estimate.py`, the "FAAB Bid" player-modal
 tab and the Waiver Bid Backtest artifact) trains on a pooled multi-league
 dataset that lives outside git entirely - see "FAAB training data storage"
-below. Nothing about refreshing or retraining it is scheduled or automatic:
+below. Nothing about refreshing or RETRAINING it is scheduled or automatic:
 only the `full` stage even touches it, and only ever to *reuse* whatever's
 currently published, never to rebuild it. Pulling ~30 leagues' worth of ESPN
 history is slow, has
 real WAF/soft-block risk (see `ingest/espn_injuries.py`'s comments), and
 retraining changes what the model actually believes - all good reasons for
 this to stay a deliberate action you run by hand, not a cron job.
+
+The one exception is the same-week cross-league signal
+(`FaabModel.same_week_signal`, `tools/faab_history/pull_current_week_bids.py`)
+- unlike the pooled training dataset, this is genuinely time-sensitive (it's
+only useful for the week it's pulled) and only ever needs PUBLIC-league ESPN
+access, so it IS automated: `.github/workflows/faab_weekly.yml`, dispatched
+by cron-job.org Wednesday mornings (see "Update cadence" above), commits
+`tools/faab_history/current-week-bids.json` straight to `main`.
 
 **To expand the pooled dataset with more leagues:**
 
