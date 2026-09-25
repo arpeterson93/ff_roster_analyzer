@@ -343,15 +343,21 @@ export function renderTrade(container, data) {
     container.innerHTML = `
       <div class="card">
         <div class="select-row">
-          <label>Team A:</label>
-          <select id="trade-team-a">${teams.map((t) => `<option value="${t.team_id}" ${t.team_id === state.teamA ? "selected" : ""}>${escapeHtml(teamLabel(t))}</option>`).join("")}</select>
-          <label>Team B:</label>
-          <select id="trade-team-b">${teams.map((t) => `<option value="${t.team_id}" ${t.team_id === state.teamB ? "selected" : ""}>${escapeHtml(teamLabel(t))}</option>`).join("")}</select>
-          <label>Sort:</label>
-          <select id="trade-sort-mode">
-            <option value="position" ${state.sortMode === "position" ? "selected" : ""}>Position, then value</option>
-            <option value="value" ${state.sortMode === "value" ? "selected" : ""}>Value only</option>
-          </select>
+          <span class="trade-select-group">
+            <label>Team A:</label>
+            <select id="trade-team-a">${teams.map((t) => `<option value="${t.team_id}" ${t.team_id === state.teamA ? "selected" : ""}>${escapeHtml(teamLabel(t))}</option>`).join("")}</select>
+          </span>
+          <span class="trade-select-group">
+            <label>Team B:</label>
+            <select id="trade-team-b">${teams.map((t) => `<option value="${t.team_id}" ${t.team_id === state.teamB ? "selected" : ""}>${escapeHtml(teamLabel(t))}</option>`).join("")}</select>
+          </span>
+          <span class="trade-select-group">
+            <label>Sort:</label>
+            <select id="trade-sort-mode">
+              <option value="position" ${state.sortMode === "position" ? "selected" : ""}>Position</option>
+              <option value="value" ${state.sortMode === "value" ? "selected" : ""}>Value</option>
+            </select>
+          </span>
         </div>
         <div class="trade-result">
           <div class="trade-side">

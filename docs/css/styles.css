@@ -663,6 +663,10 @@ thead .sticky-col-first { z-index: 2; }
 
 .select-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
 .select-row select { padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--ink-900); }
+/* Trade Calculator's Team A/Team B/Sort label+select pairs - grouped into
+   one flex item each (see tradeui.js) so a pair never splits across lines
+   on its own; the mobile rule below forces one full-width group per line. */
+.trade-select-group { display: inline-flex; align-items: center; gap: 8px; }
 /* margin-left: auto pushes just this control (and nothing before it) to
    the far right of the row, leaving the position/team/checkbox filters
    left-aligned as before - the input's own text stays left-justified
@@ -877,6 +881,12 @@ details[open] summary { margin-bottom: 8px; }
   .player-picker { gap: 4px; }
   .desktop-col { display: none; }
   .mobile-col { display: table-cell; }
+
+  /* Trade Calculator: Team A / Team B / Sort each get their own full-width
+     line instead of wrapping wherever the flex line happens to break (which
+     could split a label from its own select, or land two pairs on one line
+     and the third alone). */
+  .trade-select-group { flex: 1 0 100%; }
 
   /* Start/Sit's Team/Week row: drop the label text (the selects' own values
      are self-explanatory - a manager name, a week number) and let the team
