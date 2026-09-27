@@ -86,6 +86,16 @@ def test_fetch_remaining_game_fraction_skips_a_malformed_event_without_failing_t
     assert result == {"SEA": 0.0, "NE": 0.0}
 
 
+def test_fetch_scoreboard_sends_no_user_agent_header():
+    # Live-verified 2026-09-27 against the real endpoint: adding ANY
+    # User-Agent header (browser-spoofed or not) turns a 200 into a 403 here
+    # specifically - see this module's docstring. Lock in that _HEADERS never
+    # regains one.
+    from ingest.espn_scoreboard import _HEADERS
+
+    assert "User-Agent" not in _HEADERS
+
+
 # --- live_game_window: engine/live.py's --gate rule.
 
 _NOW = datetime(2026, 9, 21, 20, 0, tzinfo=timezone.utc)

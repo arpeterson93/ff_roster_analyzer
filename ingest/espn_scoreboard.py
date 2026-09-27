@@ -9,14 +9,20 @@ this was built from - live-verified against the ESPN app's own displayed
 in-game projection for a real player: actual_so_far + remaining_fraction *
 pregame_projection matched it exactly at halftime).
 
-Same public-endpoint WAF/soft-block risk already documented in
-ingest/espn_injuries.py applies here (a live, unauthenticated site.api.espn.com
-scoreboard fetch was directly observed getting Akamai/AWS WAF challenge
-responses from one specific sandbox's IP - not a documented espn.com policy
-against automated access in general, since a plain curl from a normal
-residential IP fetched the same URL successfully, and this codebase's own
-CI already scrapes espn.com/nfl/injuries daily from GitHub Actions without
-issue). Best-effort like that scrape: any failure here just means every
+This endpoint 403s consistently (confirmed both from a real GitHub Actions
+run - site-data branch's one gameday live commit so far shipped an entirely
+empty remaining_fraction - and from a plain residential connection,
+2026-09-27) for exactly the opposite reason ingest/espn_injuries.py's own
+header set was written to avoid: live-tested 2026-09-27 against the real
+endpoint, a request with NO explicit User-Agent (requests' own honest
+"python-requests/x.y" default) gets a 200, while the EXACT same request with
+any custom User-Agent header added - browser-spoofed or not - gets a 403.
+So _HEADERS deliberately omits User-Agent here, unlike espn_injuries.py's
+www.espn.com scrape (a different host, that DOES want a browser-looking one -
+confirmed still working fine with it). If ESPN changes this behavior later
+and 403s return, re-verify with a plain `requests.get(url)` (no headers at
+all) before reaching for anything fancier - that's what exposed this in the
+first place. Best-effort regardless: any failure here just means every
 in-progress player falls back to their full pregame projection for this
 build - the existing, safe default - rather than taking anything down.
 """
@@ -31,10 +37,9 @@ import requests
 logger = logging.getLogger(__name__)
 
 _SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard"
-# Same reasoning as espn_injuries.py's own header set - a bare User-Agent
-# with nothing else is an easy automated-traffic fingerprint.
+# No User-Agent - see this module's docstring for why that's deliberate here
+# specifically (this endpoint 403s any request that sets one at all).
 _HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
     "Accept": "application/json",
     "Accept-Language": "en-US,en;q=0.9",
 }

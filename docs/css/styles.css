@@ -811,6 +811,11 @@ details[open] summary { margin-bottom: 8px; }
 .lineup-player-home { text-align: right; }
 .lineup-player-away { text-align: left; }
 .lineup-score { text-align: center; font-variant-numeric: tabular-nums; }
+/* The live-tick "so far" line under a mid-game player's projected number
+   (see schedule.js's scoreCell) - small and in the site's own live-red
+   accent so it reads as a secondary, in-progress annotation rather than
+   competing with the primary projected number above it. */
+.lineup-score-live { display: block; font-size: 10px; font-weight: 600; color: var(--red-600); line-height: 1.3; }
 /* NOT display:flex - that would pull this <td> out of the table's own
    row/column layout (a flex-ified table-cell no longer sizes/aligns via the
    table algorithm the same way its row siblings do), which is exactly what

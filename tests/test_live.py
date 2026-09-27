@@ -137,6 +137,7 @@ def test_run_league_reconstructs_team_week_mean_sd_and_writes_outputs(tmp_path):
     # points_so_far (10.0) + remaining 0.5 * pregame projection (15.0) = 17.5
     assert live_out["teams"]["1"]["mean"] == 15.0 * 0.5 + 10.0
     assert live_out["teams"]["1"]["total"] == 10.0  # points-so-far only, not the blended mean
+    assert live_out["teams"]["1"]["projected_points"]["espn:1"] == 15.0 * 0.5 + 10.0
     assert live_out["week"] == 3
     assert live_out["players"] == {}  # the one starter WAS in players.json - no stub needed
 
@@ -172,6 +173,7 @@ def test_run_league_stubs_a_starter_missing_from_players_json(tmp_path):
     # sd falls back to meta.position_week_sd["RB"] (4.5) - no live status/
     # remaining_frac, so frac defaults to 1.0 (pregame): mean = 15.0.
     assert live_out["teams"]["1"]["mean"] == 15.0
+    assert live_out["teams"]["1"]["projected_points"][stub_id] == 15.0
 
 
 def test_run_gate_true_when_scoreboard_shows_a_live_game():

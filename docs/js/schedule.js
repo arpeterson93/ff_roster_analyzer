@@ -18,18 +18,19 @@ function pointsForWeek(p, week, currentWeek) {
   return weeklyProjection(p, week, currentWeek);
 }
 
-// Prefers a real lineup's own recorded points (a past week's box-score
-// snapshot) over p.weekly, which doesn't cover weeks before current_week at
-// all. The current week is deliberately excluded from that "recorded"
-// preference even once a gameday live tick is running - a live tick's
-// per-player points are real points-so-far only (0 for anyone who hasn't
-// played yet, see engine/standings_stage.py's live_team_mean_sd), which
-// reads as a broken/incomplete score rather than a projection while a week
-// is still in progress. pointsForWeek's projection is what should show
-// instead, all the way up to the week actually being marked played.
+// Prefers a real lineup's own recorded points over p.weekly, which doesn't
+// cover weeks before current_week at all: a past week's box-score snapshot's
+// final "points", or - for the current week once a gameday live tick is
+// running - that tick's own "projected_points" (points-so-far plus the
+// player's remaining-game-fraction share of their pregame projection,
+// computed server-side by engine/standings_stage.py's live_team_mean_sd).
+// Plain live points-so-far ("points") is deliberately never used here - 0
+// for anyone who hasn't played yet reads as broken rather than projected.
+// Falls back to pointsForWeek whenever neither is available (no live tick
+// running yet this week, or a past snapshot missing this particular player).
 function pointsForPlayerInLineup(p, week, lineupWeek, currentWeek) {
-  if (week === currentWeek) return pointsForWeek(p, week, currentWeek);
-  const recorded = lineupWeek && lineupWeek.points ? lineupWeek.points[p.id] : undefined;
+  const key = week === currentWeek ? "projected_points" : "points";
+  const recorded = lineupWeek && lineupWeek[key] ? lineupWeek[key][p.id] : undefined;
   return recorded !== undefined ? recorded : pointsForWeek(p, week, currentWeek);
 }
 
@@ -104,6 +105,14 @@ function isLiveDataCurrent(data) {
   return !!data.live && data.live.week === data.meta.current_week;
 }
 
+// live.json's own remaining_fraction (see engine/live.py, sourced from
+// ingest.espn_scoreboard.fetch_remaining_game_fraction), keyed by NFL team
+// abbreviation - 1.0 before kickoff, 0.0 once final, in between mid-game.
+// Missing entirely for a bye-week team or when there's no live tick running.
+function remainingFractionFor(p, data) {
+  return isLiveDataCurrent(data) ? data.live.remaining_fraction?.[p.nfl_team] : undefined;
+}
+
 function lineupWeekFor(teamId, week, data) {
   if (week === data.meta.current_week) {
     if (isLiveDataCurrent(data)) {
@@ -121,12 +130,18 @@ function scoreOf(m, side, data) {
   const teamId = side === "home" ? m.home_team_id : m.away_team_id;
   // Deliberately ignores schedule.json's own live home_score/away_score (a
   // gameday tick's sum of real per-player points so far, 0 for anyone who
-  // hasn't played yet - see engine/standings_stage.py's live_team_mean_sd) -
-  // that reads as a broken/incomplete score early in the week rather than a
-  // projection, so the current week always shows the full projected total
-  // instead, all the way up until the week is actually marked played.
+  // hasn't played yet) in favor of summing the same per-player numbers the
+  // expanded lineup view shows (pointsForPlayerInLineup) over the same
+  // live-aware lineup composition (lineupWeekFor) - so this row's total and
+  // the expanded table's total always agree, and the current week shows a
+  // meaningful in-progress projection instead of a partial box score.
   if (m.week === data.meta.current_week) {
-    return actualStarters(teamId, data).reduce((acc, p) => acc + (pointsForWeek(p, m.week, data.meta.current_week) || 0), 0);
+    const lineupWeek = lineupWeekFor(teamId, m.week, data);
+    const pids = Object.values((lineupWeek && lineupWeek.slots) || {});
+    return pids.reduce((acc, pid) => {
+      const p = resolvePlayer(pid, data);
+      return p ? acc + (pointsForPlayerInLineup(p, m.week, lineupWeek, data.meta.current_week) || 0) : acc;
+    }, 0);
   }
   return (data.lineups[String(teamId)]?.weeks[String(m.week)] || {}).total ?? null;
 }
@@ -160,7 +175,18 @@ function symmetricLineupHtml(homeTeamId, awayTeamId, week, data) {
   };
   const scoreCell = (pid, lineupWeek) => {
     const p = pid && resolvePlayer(pid, data);
-    return p ? fmt(pointsForPlayerInLineup(p, week, lineupWeek, data.meta.current_week), 1) : "–";
+    if (!p) return "–";
+    const projected = pointsForPlayerInLineup(p, week, lineupWeek, data.meta.current_week);
+    // Actual-so-far is only worth surfacing alongside the projection while
+    // this player's own NFL game is actually mid-play (0 < frac < 1) - a
+    // player who hasn't kicked off yet still reads "0 so far" as broken
+    // rather than informative, and once their game's final the two numbers
+    // already agree (see pointsForPlayerInLineup's projected_points blend),
+    // so the second line would be pure redundant clutter.
+    const frac = remainingFractionFor(p, data);
+    const actual = frac > 0 && frac < 1 ? lineupWeek?.points?.[p.id] : undefined;
+    const liveLine = actual !== undefined ? `<span class="lineup-score-live">${fmt(actual, 1)} now</span>` : "";
+    return `${fmt(projected, 1)}${liveLine}`;
   };
   const lineupRow = (hPid, aPid, middleLabel) => {
     const rowClass = streamed.has(hPid) || streamed.has(aPid) ? "streamed-row" : "";

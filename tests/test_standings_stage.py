@@ -115,7 +115,7 @@ def test_live_team_mean_sd_blends_points_so_far_with_remaining_projection():
     live_status = {1: (12.0, False)}  # 12 pts so far, game not yet marked complete
     remaining_frac = {"KC": 0.5}
 
-    team_live_mean_sd, live_points = live_team_mean_sd(
+    team_live_mean_sd, live_points, live_projected = live_team_mean_sd(
         players_by_id, started_by_team, current_week=2, live_status=live_status, remaining_frac=remaining_frac,
     )
     # mean = points_so_far + frac * pregame_mean = 12 + 0.5*20 = 22
@@ -124,6 +124,8 @@ def test_live_team_mean_sd_blends_points_so_far_with_remaining_projection():
     assert team_live_mean_sd[10][1] == pytest.approx(6.0 * (0.5**0.5))
     # "points" is the REAL points-so-far only, not the blended mean.
     assert live_points[10]["p1"] == pytest.approx(12.0)
+    # "projected" is that same player's blended points-so-far + remaining share.
+    assert live_projected[10]["p1"] == pytest.approx(22.0)
 
 
 def test_live_team_mean_sd_falls_back_to_position_sd_when_no_weekly_entry():
@@ -133,7 +135,7 @@ def test_live_team_mean_sd_falls_back_to_position_sd_when_no_weekly_entry():
         "stub1": {"position": "RB", "nfl_team": "SF", "espn_id": 99, "this_week": 10.0, "weekly": []},
     }
     started_by_team = {20: {"stub1"}}
-    team_live_mean_sd, live_points = live_team_mean_sd(
+    team_live_mean_sd, live_points, live_projected = live_team_mean_sd(
         players_by_id, started_by_team, current_week=2, live_status={}, remaining_frac={},
         fallback_sd_by_pos={"RB": 4.0},
     )
@@ -141,3 +143,4 @@ def test_live_team_mean_sd_falls_back_to_position_sd_when_no_weekly_entry():
     assert team_live_mean_sd[20][0] == pytest.approx(10.0)
     assert team_live_mean_sd[20][1] == pytest.approx(4.0)
     assert live_points[20]["stub1"] == pytest.approx(0.0)
+    assert live_projected[20]["stub1"] == pytest.approx(10.0)

@@ -28,17 +28,24 @@ def live_team_mean_sd(
     remaining_frac: dict[str, float],
     *,
     fallback_sd_by_pos: dict[str, float] | None = None,
-) -> tuple[dict[int, tuple[float, float]], dict[int, dict[str, float]]]:
+) -> tuple[dict[int, tuple[float, float]], dict[int, dict[str, float]], dict[int, dict[str, float]]]:
     """Per-team (mean, sd) for the CURRENT week only, blending each starter's
     live box-score points so far with their remaining-game-fraction share of
     the pregame projection (see the extended comment this was moved from, in
     engine/pipeline.py's git history, for the exact blend derivation and its
     live-verification against a real in-game ESPN projection).
 
-    Returns (team_live_mean_sd, live_points_by_team) - the second dict is
-    each starter's REAL points-so-far only (not the blended projection), used
-    both for schedule.json's current-week live home_score/away_score (sum
-    over a team's starters) and live.json's per-player "points" detail.
+    Returns (team_live_mean_sd, live_points_by_team, live_projected_by_team):
+    - live_points_by_team is each starter's REAL points-so-far only (not the
+      blended projection), used both for schedule.json's current-week live
+      home_score/away_score (sum over a team's starters) and live.json's
+      per-player "points" detail.
+    - live_projected_by_team is that SAME starter's blended points-so-far +
+      remaining-fraction share of their pregame projection - the exact
+      per-player number this function sums into team_live_mean_sd's own
+      mean, exposed per player (live.json's "projected_points") so a caller
+      can show a meaningful in-progress number for a player who's mid-game
+      or hasn't kicked off yet instead of a bare, still-0 points-so-far.
 
     `players_by_id[pid]` needs `position`, `nfl_team`, `espn_id`, `this_week`
     (pregame mean) and a `weekly` list with a `{"week": current_week, "sd":
@@ -56,10 +63,12 @@ def live_team_mean_sd(
     fallback_sd_by_pos = fallback_sd_by_pos or {}
     team_live_mean_sd: dict[int, tuple[float, float]] = {}
     live_points_by_team: dict[int, dict[str, float]] = {}
+    live_projected_by_team: dict[int, dict[str, float]] = {}
     for team_id, starters in started_by_team.items():
         mean_total = 0.0
         var_total = 0.0
         player_points: dict[str, float] = {}
+        player_projected: dict[str, float] = {}
         for pid in starters:
             p = players_by_id[pid]
             wp = next((w for w in p.get("weekly", []) if w["week"] == current_week), None)
@@ -70,12 +79,15 @@ def live_team_mean_sd(
             frac = remaining_frac.get(p["nfl_team"])
             if frac is None:
                 frac = 0.0 if (live is not None and live[1]) else 1.0
+            blended = points_so_far + frac * pregame_mean
             player_points[pid] = points_so_far
-            mean_total += points_so_far + frac * pregame_mean
+            player_projected[pid] = blended
+            mean_total += blended
             var_total += (pregame_sd * (frac**0.5)) ** 2
         team_live_mean_sd[team_id] = (mean_total, var_total**0.5)
         live_points_by_team[team_id] = player_points
-    return team_live_mean_sd, live_points_by_team
+        live_projected_by_team[team_id] = player_projected
+    return team_live_mean_sd, live_points_by_team, live_projected_by_team
 
 
 def standings_outputs(

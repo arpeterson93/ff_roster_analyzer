@@ -1460,7 +1460,7 @@ def run_league(cfg: dict, *, skip: frozenset[str] = frozenset()) -> dict:
     remaining_frac_by_team = fetch_remaining_game_fraction()
     _log_checkpoint("scoreboard_fetch_done")
     week_started = nd.week_for_kickoff(datetime.now(timezone.utc), schedules_current, season) == current_week
-    team_live_mean_sd, live_points_by_team = standings_stage.live_team_mean_sd(
+    team_live_mean_sd, live_points_by_team, _live_projected_by_team = standings_stage.live_team_mean_sd(
         players_by_id, espn_started_by_team, current_week, live_status_by_espn_id, remaining_frac_by_team,
     )
     _log_checkpoint("live_win_pct_inputs_built")

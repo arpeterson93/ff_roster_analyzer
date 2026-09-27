@@ -173,7 +173,7 @@ def run_league(cfg: dict, data_root: Path, id_map: ids_mod.IdMap, remaining_frac
             team_week_mean[(team_id, w)] = week_entry["total"]
             team_week_sd[(team_id, w)] = week_entry["sd"]
 
-    team_live_mean_sd, live_points_by_team = standings_stage.live_team_mean_sd(
+    team_live_mean_sd, live_points_by_team, live_projected_by_team = standings_stage.live_team_mean_sd(
         players_by_id, started_by_team, current_week, live_status, remaining_frac,
         fallback_sd_by_pos=position_week_sd,
     )
@@ -191,6 +191,7 @@ def run_league(cfg: dict, data_root: Path, id_map: ids_mod.IdMap, remaining_frac
         live_teams_out[str(t.team_id)] = {
             **team_slots[t.team_id],
             "points": pts,
+            "projected_points": live_projected_by_team.get(t.team_id, {}),
             "total": sum(pts.values()),
             "mean": mean_sd[0] if mean_sd else None,
             "sd": mean_sd[1] if mean_sd else None,
