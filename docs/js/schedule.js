@@ -18,10 +18,17 @@ function pointsForWeek(p, week, currentWeek) {
   return weeklyProjection(p, week, currentWeek);
 }
 
-// Prefers a real lineup's own recorded points (current-week live state or a
-// past week's box-score snapshot) over p.weekly, which doesn't cover weeks
-// before current_week at all.
+// Prefers a real lineup's own recorded points (a past week's box-score
+// snapshot) over p.weekly, which doesn't cover weeks before current_week at
+// all. The current week is deliberately excluded from that "recorded"
+// preference even once a gameday live tick is running - a live tick's
+// per-player points are real points-so-far only (0 for anyone who hasn't
+// played yet, see engine/standings_stage.py's live_team_mean_sd), which
+// reads as a broken/incomplete score rather than a projection while a week
+// is still in progress. pointsForWeek's projection is what should show
+// instead, all the way up to the week actually being marked played.
 function pointsForPlayerInLineup(p, week, lineupWeek, currentWeek) {
+  if (week === currentWeek) return pointsForWeek(p, week, currentWeek);
   const recorded = lineupWeek && lineupWeek.points ? lineupWeek.points[p.id] : undefined;
   return recorded !== undefined ? recorded : pointsForWeek(p, week, currentWeek);
 }
@@ -111,11 +118,13 @@ function lineupWeekFor(teamId, week, data) {
 
 function scoreOf(m, side, data) {
   if (m.played) return side === "home" ? m.home_score : m.away_score;
-  // schedule.json's own live home_score/away_score (a gameday tick's sum of
-  // real per-player points so far - see engine/standings_stage.py) beats
-  // the client-side pregame-projection fallback below.
-  if (m.live) return side === "home" ? m.home_score : m.away_score;
   const teamId = side === "home" ? m.home_team_id : m.away_team_id;
+  // Deliberately ignores schedule.json's own live home_score/away_score (a
+  // gameday tick's sum of real per-player points so far, 0 for anyone who
+  // hasn't played yet - see engine/standings_stage.py's live_team_mean_sd) -
+  // that reads as a broken/incomplete score early in the week rather than a
+  // projection, so the current week always shows the full projected total
+  // instead, all the way up until the week is actually marked played.
   if (m.week === data.meta.current_week) {
     return actualStarters(teamId, data).reduce((acc, p) => acc + (pointsForWeek(p, m.week, data.meta.current_week) || 0), 0);
   }
@@ -178,7 +187,7 @@ function symmetricLineupHtml(homeTeamId, awayTeamId, week, data) {
 
   return `
     <table class="lineup-symmetric">
-      <colgroup><col style="width:36%"><col style="width:9%"><col style="width:10%"><col style="width:9%"><col style="width:36%"></colgroup>
+      <colgroup><col style="width:35%"><col style="width:8%"><col style="width:14%"><col style="width:8%"><col style="width:35%"></colgroup>
       <tbody>
         ${starterRows}
         ${benchRowCount ? `<tr class="week-divider"><td colspan="5">Bench</td></tr>${benchRows}` : ""}
