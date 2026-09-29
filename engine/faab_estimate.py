@@ -150,16 +150,32 @@ FEATURE_NAMES = [
     "prior_week_actual_points",
     "prior_week_had_stat_row",
     "own_injury_flag",
-    "teammate_position_injury_flag",
-    # Whether the qualifying teammate's OWN injury/reserve status is new
-    # this week (he wasn't ALSO flagged the week before) vs. an ongoing,
-    # already-priced-in absence - see build_injury_indices/enrich_player_
-    # week. Anecdotally, FAAB bids on a newly-relevant backup spike hardest
-    # the very first week a starter goes down and cool off once the market
-    # has had a week to price the backup in - see the conversation this was
-    # built from. Always 0.0 when teammate_position_injury_flag itself is
-    # false - there's no "new" reading without a real flagged teammate to
-    # begin with.
+    # Deliberately NOT teammate_position_injury_flag itself (still computed
+    # and stored on every row - see build_injury_indices/enrich_player_week
+    # - just not fed to the model). That raw flag stays true for as long as
+    # the injury does (a season-ending IR keeps it true for the rest of the
+    # year), but once ROS/weekly rank has caught up to the new reality
+    # (usually within a week or two), rank already carries whatever
+    # "durable vacancy" information the flag was adding - keeping the flag
+    # in past that point just means matching against a narrower, no-more-
+    # similar comp population instead of the full one. Confirmed via a
+    # held-out ablation (see the conversation this was built from): once
+    # settled (is_new below is false), dropping the raw flag LOWERED held-
+    # out error and cut regression bias roughly 5x (was systematically
+    # over-pricing these once-flagged-but-now-stale backups); with a fresh
+    # flag (is_new true), dropping it changed nothing, since is_new alone
+    # already covers that population.
+    #
+    # is_new itself: whether the qualifying teammate's OWN injury/reserve
+    # status is new this week (he wasn't ALSO flagged the week before) vs.
+    # an ongoing, already-priced-in absence. Anecdotally, FAAB bids on a
+    # newly-relevant backup spike hardest the very first week a starter
+    # goes down and cool off once the market has had a week to price the
+    # backup in - see the conversation this was built from. Always 0.0
+    # without a real flagged teammate to begin with (see
+    # engine.pipeline._compute_faab_estimates/build_training_table.py -
+    # both still compute the underlying flag to derive this, they just
+    # don't feed it here too).
     "teammate_position_injury_is_new",
     "snap_pct_prior_week",
     # had_X flags for the three fields above that don't already have one via
