@@ -1,6 +1,13 @@
 import pytest
 
-from engine.pipeline import _OFFENSE_STAT_FIELDS, _actual_weekly_stats, _faab_week_override, _positional_ranks_from_overall
+from engine.pipeline import (
+    _OFFENSE_STAT_FIELDS,
+    _actual_weekly_stats,
+    _faab_week_override,
+    _positional_ranks_from_overall,
+    _prior_ros_pos_rank_snapshot,
+    _resolve_ros_pos_rank_snapshot,
+)
 from engine.scoring import ScoringRules
 
 REY_SCORING = ScoringRules.from_espn([{"id": 42, "abbr": "REY", "points": 0.1}])
@@ -35,6 +42,34 @@ def test_no_players_have_an_overall_rank_leaves_everything_untouched():
     players = [{"id": "wr-a", "position": "WR", "ros_overall_rank": None, "ros_pos_rank": 12}]
     _positional_ranks_from_overall(players)
     assert players[0]["ros_pos_rank"] == 12
+
+
+def test_resolve_ros_pos_rank_snapshot_prefers_the_live_rank_when_present():
+    assert _resolve_ros_pos_rank_snapshot(12, 47) == 12
+
+
+def test_resolve_ros_pos_rank_snapshot_falls_back_when_the_live_rank_is_gone():
+    # e.g. a season-ending injury that just dropped him from FantasyPros'
+    # live ROS rankings entirely - the exact Achane/Ollie Gordon II case.
+    assert _resolve_ros_pos_rank_snapshot(None, 47) == 47
+
+
+def test_resolve_ros_pos_rank_snapshot_stays_none_with_no_history_either():
+    assert _resolve_ros_pos_rank_snapshot(None, None) is None
+
+
+def test_prior_ros_pos_rank_snapshot_reads_only_non_null_entries():
+    prior_players = [
+        {"id": "rb-a", "ros_pos_rank_snapshot": 47},
+        {"id": "rb-b", "ros_pos_rank_snapshot": None},
+        {"id": "rb-c"},
+    ]
+    assert _prior_ros_pos_rank_snapshot(prior_players) == {"rb-a": 47}
+
+
+def test_prior_ros_pos_rank_snapshot_handles_no_prior_run():
+    assert _prior_ros_pos_rank_snapshot(None) == {}
+    assert _prior_ros_pos_rank_snapshot([]) == {}
 
 
 def test_faab_week_bumps_once_current_weeks_games_have_started():

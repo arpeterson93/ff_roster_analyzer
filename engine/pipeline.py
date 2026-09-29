@@ -189,6 +189,32 @@ def _id_lookup(ranks_df, id_map: ids_mod.IdMap) -> dict[str, dict]:
     return lookup
 
 
+def _prior_ros_pos_rank_snapshot(prior_players: list[dict] | None) -> dict[str, float]:
+    """id -> ros_pos_rank_snapshot from the PREVIOUS run's own players.json
+    (already sitting in docs/data before this run overwrites it - see
+    main()), for _resolve_ros_pos_rank_snapshot below to carry forward. Only
+    non-null entries - a player who's never had a real ROS rank has nothing
+    to carry forward."""
+    if not prior_players:
+        return {}
+    return {p["id"]: p["ros_pos_rank_snapshot"] for p in prior_players if p.get("ros_pos_rank_snapshot") is not None}
+
+
+def _resolve_ros_pos_rank_snapshot(ros_pos_rank: float | None, prior_snapshot: float | None) -> float | None:
+    """This player's CURRENT ros_pos_rank if FantasyPros still ranks him,
+    else whatever the last run that DID see a real rank for him recorded -
+    sticky across runs via _prior_ros_pos_rank_snapshot above, so it survives
+    any number of consecutive runs where he's absent from the live feed, not
+    just one. Exists because FantasyPros drops a player from ROS rankings
+    entirely the moment a season-ending injury lands - exactly when
+    _compute_faab_estimates' teammate-relevance check needs to know he WAS a
+    real starter, not that he's suddenly unranked. See the conversation this
+    was built from (De'Von Achane going to IR mid-week-3, dropping him out
+    of the ROS rankings feed and silently killing Ollie Gordon II's
+    teammate_position_injury_flag)."""
+    return ros_pos_rank if ros_pos_rank is not None else prior_snapshot
+
+
 def _positional_ranks_from_overall(players: list[dict]) -> None:
     """Recomputes each player's ros_pos_rank IN PLACE, from where they land
     among same-position players within ros_overall_rank's own order - not
@@ -404,7 +430,12 @@ def _compute_faab_estimates(
             if mate["id"] == p["id"] or mate.get("injury_status") not in TEAMMATE_INJURY_FLAG_STATUSES:
                 continue
             mate_snap_pct = recent_snap_pct(gsis_to_pfr.get(mate["id"]), current_week, snap_pct_index)
-            if is_faab_relevant(None, mate_snap_pct, mate.get("ros_pos_rank"), mate["position"]):
+            # ros_pos_rank_snapshot, NOT the mate's live ros_pos_rank - a
+            # season-ending injury (the exact case this rank fallback exists
+            # for) makes FantasyPros drop him from ROS rankings entirely, so
+            # the live figure goes null right when this check needs it most.
+            # See _resolve_ros_pos_rank_snapshot.
+            if is_faab_relevant(None, mate_snap_pct, mate.get("ros_pos_rank_snapshot"), mate["position"]):
                 qualifying_mates.append(mate)
 
         # Was ANY qualifying mate ALSO flagged (by nflverse's own weekly
@@ -610,7 +641,7 @@ def _build_dst_curve_for_league(cfg: dict, dst_rules: ScoringRules, weeks_comple
     )
 
 
-def run_league(cfg: dict, *, skip: frozenset[str] = frozenset()) -> dict:
+def run_league(cfg: dict, *, skip: frozenset[str] = frozenset(), prior_players: list[dict] | None = None) -> dict:
     """Runs the full pipeline for one league. Returns {filename: json-serializable-object}.
 
     `skip` recognises "faab" (skip the FAAB bid estimator - avoids the
@@ -619,7 +650,14 @@ def run_league(cfg: dict, *, skip: frozenset[str] = frozenset()) -> dict:
     dev). A skipped output's file is omitted from the returned dict entirely
     (not written as an empty placeholder), so main() simply never writes it
     and a caller overlaying onto an existing docs/data directory (see the
-    site-data branch) leaves that file's last-written version untouched."""
+    site-data branch) leaves that file's last-written version untouched.
+
+    prior_players is the PREVIOUS run's own players.json (main() reads it
+    off disk before this run overwrites it, and only when that prior run was
+    the SAME season - see main()) - used solely to carry forward
+    ros_pos_rank_snapshot for a player FantasyPros has since dropped from
+    its ROS rankings (see _resolve_ros_pos_rank_snapshot)."""
+    ros_pos_rank_snapshot_by_id = _prior_ros_pos_rank_snapshot(prior_players)
     slug = cfg["slug"]
     season = cfg["season"]
     warnings: list[str] = []
@@ -955,6 +993,7 @@ def run_league(cfg: dict, *, skip: frozenset[str] = frozenset()) -> dict:
         ros_row = ros_lookup.get(res.id)
         weekly_row = weekly_lookup.get(res.id)
         ros_pos_rank = ros_row["ros_pos_rank"] if ros_row else None
+        ros_pos_rank_snapshot = _resolve_ros_pos_rank_snapshot(ros_pos_rank, ros_pos_rank_snapshot_by_id.get(res.id))
         week_pos_rank = weekly_row["week_pos_rank"] if weekly_row else None
         # Applies to any player with an espn.com/nfl/injuries return-date
         # estimate, not just those sitting in a fantasy roster's IR slot -
@@ -1000,7 +1039,8 @@ def run_league(cfg: dict, *, skip: frozenset[str] = frozenset()) -> dict:
                 "bye": bye_weeks.get(p.nfl_team), "fantasy_team_id": fantasy_team_id,
                 "lineup_slot": p.lineup_slot, "injury_status": p.injury_status,
                 "zeroed_this_week": proj.zeroed_this_week, "zero_reason": proj.zero_reason,
-                "ros_pos_rank": ros_pos_rank, "rank_ave": ros_row["rank_ave"] if ros_row else None,
+                "ros_pos_rank": ros_pos_rank, "ros_pos_rank_snapshot": ros_pos_rank_snapshot,
+                "rank_ave": ros_row["rank_ave"] if ros_row else None,
                 "rank_std": ros_row["rank_std"] if ros_row else None, "week_pos_rank": week_pos_rank,
                 "baseline_ppg": proj.baseline_ppg, "ros_total": proj.ros_total, "reg_total": proj.reg_total,
                 "playoff_total": proj.playoff_total, "this_week": proj.this_week,
@@ -1589,6 +1629,22 @@ def run_league(cfg: dict, *, skip: frozenset[str] = frozenset()) -> dict:
     return result
 
 
+def _load_prior_players(out_dir: Path, season: int) -> list[dict] | None:
+    """This league's own players.json from the LAST run, already sitting in
+    out_dir before this run overwrites it (see update.yml's "Restore
+    site-data baseline into docs/data" step) - or None if there isn't one
+    yet, or it's from a different (older) season, whose ROS ranks are for a
+    different player pool entirely and have nothing useful to carry
+    forward. Feeds run_league's prior_players -> ros_pos_rank_snapshot."""
+    try:
+        prior_meta = json.loads((out_dir / "meta.json").read_text(encoding="utf-8"))
+        if prior_meta.get("season") != season:
+            return None
+        return json.loads((out_dir / "players.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, KeyError):
+        return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--league", default=None, help="league slug; omit to run every configured league")
@@ -1608,7 +1664,8 @@ def main() -> int:
     any_failed = False
     for cfg in configs:
         try:
-            files = run_league(cfg, skip=skip)
+            prior_players = _load_prior_players(out_root / cfg["slug"], cfg["season"])
+            files = run_league(cfg, skip=skip, prior_players=prior_players)
         except Exception:
             logger.exception("league %s failed", cfg["slug"])
             any_failed = True
