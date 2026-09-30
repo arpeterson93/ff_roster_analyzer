@@ -98,6 +98,25 @@ def test_division_priority_falls_back_to_wildcard_pool_when_winners_exhausted():
     assert seeds == {1: 1, 2: 2}
 
 
+def test_non_playoff_teams_seeded_with_last_playoff_seed_criteria():
+    """Every team gets a seed, not just the playoff field - teams past the
+    cutoff are ranked using seed playoff_team_count's own tiebreak order
+    (here PF, not wins), the same rule test_wildcard_seed_uses_its_own_...
+    covers for the last actual playoff seed."""
+    teams = [
+        SeedTeamState(team_id=1, division_id=1, wins=8, losses=2, ties=0, points_for=1000, points_against=900),
+        SeedTeamState(team_id=2, division_id=1, wins=3, losses=7, ties=0, points_for=1200, points_against=900),
+        SeedTeamState(team_id=3, division_id=1, wins=2, losses=8, ties=0, points_for=900, points_against=900),
+    ]
+    seed_configs = {1: SeedConfig(division_priority=False, tiebreak_order=["points_for"])}
+    seeds = compute_current_seeds(
+        teams, [], playoff_team_count=1, division_tiebreak_order=["wins", "points_for"], seed_configs=seed_configs
+    )
+    assert seeds[2] == 1  # highest PF takes the only playoff seed
+    assert seeds[1] == 2  # next-highest PF, not next-most wins, takes seed 2
+    assert seeds[3] == 3
+
+
 def test_identical_means_split_odds_roughly_evenly():
     teams = [
         TeamState(team_id=1, division_id=0, wins=0, losses=0, ties=0, points_for=0.0),

@@ -126,11 +126,15 @@ def compute_current_seeds(
     seed_configs: dict[int, SeedConfig],
 ) -> dict[int, int]:
     """{team_id: seed} for the REAL current standings (not a simulation) -
-    drives the Standings page's Seed column. Two passes: first rank each
-    division's own members to find its winner, then rank the winners against
-    each other (both using division_tiebreak_order); then walk seeds 1..N,
-    each either pulling the next-best division winner or re-ranking every
-    not-yet-seeded team by that seed's own configured tiebreak chain."""
+    drives the Standings page's Seed column, for every team (not just the
+    playoff field). Two passes: first rank each division's own members to
+    find its winner, then rank the winners against each other (both using
+    division_tiebreak_order); then walk seeds 1..len(teams), each either
+    pulling the next-best division winner or re-ranking every not-yet-seeded
+    team by that seed's own configured tiebreak chain. Seeds beyond
+    playoff_team_count (i.e. the non-playoff teams) reuse the last playoff
+    seed's own configured criteria, since nothing is configured for them
+    specifically."""
     by_division: dict[int, list[SeedTeamState]] = {}
     for t in teams:
         by_division.setdefault(t.division_id, []).append(t)
@@ -144,8 +148,9 @@ def compute_current_seeds(
 
     seeds: dict[int, int] = {}
     assigned: set[int] = set()
-    for n in range(1, playoff_team_count + 1):
-        cfg = seed_configs.get(n)
+    last_cfg = seed_configs.get(playoff_team_count)
+    for n in range(1, len(teams) + 1):
+        cfg = seed_configs.get(n) if n <= playoff_team_count else last_cfg
         while dw_queue and dw_queue[0].team_id in assigned:
             dw_queue.pop(0)
         if cfg and cfg.division_priority and dw_queue:

@@ -19,17 +19,10 @@ export function renderStandings(container, data, slug) {
   const yourTeamId = getYourTeam(slug);
   const rows = data.standings
     .slice()
-    // Real current seed (see engine.standings.compute_current_seeds) first,
-    // ascending; a team outside the playoff picture has no seed at all and
-    // falls to the bottom, ordered the same way the sim tiebreak reads (wins
-    // then points_for) since there's no configured tiebreak to fall back on
-    // for a non-playoff spot.
-    .sort((a, b) => {
-      if (a.seed != null && b.seed != null) return a.seed - b.seed;
-      if (a.seed != null) return -1;
-      if (b.seed != null) return 1;
-      return b.wins - a.wins || b.points_for - a.points_for;
-    })
+    // Real current seed (see engine.standings.compute_current_seeds), which
+    // now covers every team - non-playoff teams are seeded past
+    // playoff_team_count using the last playoff seed's own criteria.
+    .sort((a, b) => a.seed - b.seed)
     .map((s) => {
       const team = teamsById.get(s.team_id);
       const isYours = s.team_id === yourTeamId;
