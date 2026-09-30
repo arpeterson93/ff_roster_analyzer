@@ -369,35 +369,77 @@ function wirePriceCompRows(scopeEl) {
   });
 }
 
-function projectionTable(player, currentWeek) {
-  // opponentCellHtml already colors/labels the Opp cell by matchup rank
-  // (see colors.js) - a separate Matchup column repeated that. Proj IS
-  // ESPN's own projection now, taken outright (see engine/valuation.py's
-  // module docstring) - weeklyProjection's current-week special case just
-  // prefers the fresher live fetch (espn_projected_week) over the batched
-  // one, same number either way. "Our proj" is the old proprietary rank ->
-  // curve -> baseline*matchup method, kept as a reference-only column where
-  // ESPN's own number used to sit - w.our_projected, no current-week
-  // special-casing needed since it's computed the same way every week. SD
-  // is only ever ours (ESPN doesn't publish one), so it stays w.sd
-  // regardless of week.
-  // !w.actual alone isn't enough to mean "still to come" - a past bye week
-  // or a past week where this player had no stat row (inactive, hadn't
-  // joined the league yet) also has no actual, but it already happened -
-  // see engine/pipeline.py's weekly-array comment. w.week >= currentWeek
-  // is what actually means "remaining".
-  const rows = (player.weekly || [])
-    .filter((w) => !w.actual && w.week >= currentWeek)
-    .map((w) => `<tr><td>${w.week}</td><td>${opponentCellHtml(w)}</td><td>${fmt(weeklyProjection(player, w.week, currentWeek), 1)}</td></tr>`)
+// {byWeek: Map<week, weeklyEntry>, totals} for the NMD (points-above-
+// replacement) breakdown behind remainingScheduleTable's own Starting/Depth/
+// Replace-by columns - null when there's genuinely nothing to show (see each
+// branch below), same "no data" cases nmdReplacementCellHtml's old caller
+// used to bail out on. One lookup, shared by a rostered player (Starting +
+// Depth, from his team's own depth chart) and a free agent (Depth only -
+// starting_value is always 0 for a free agent by definition, see
+// engine/team_strength.py's fa_pool_value).
+function nmdWeeklyForPlayer(player, data) {
+  if (player.fantasy_team_id !== null) {
+    const team = data.teamsById.get(player.fantasy_team_id);
+    const entry = (team?.depth?.[player.position] || []).find((d) => d.id === player.id);
+    if (!entry) return null;
+    return {
+      byWeek: new Map(entry.weekly.map((w) => [w.week, w])),
+      totals: { starting: entry.starting_value, depth: entry.depth_value, delta: entry.value_delta },
+    };
+  }
+  const detail = (data.faValuesDetail || {})[player.id];
+  if (!detail) return null;
+  const totalDepth = detail.weekly.reduce((acc, w) => acc + w.depth_value, 0);
+  return {
+    byWeek: new Map(detail.weekly.map((w) => [w.week, w])),
+    totals: { starting: 0, depth: totalDepth, delta: player.value_delta ?? 0 },
+  };
+}
+
+// One combined Wk/Opp/Proj/Starting/Depth/Replace-by table - "what's left on
+// his schedule" and "what's it worth" are the same per-week story, not two
+// separately-headed tables that happen to share a week column (merged per
+// the conversation this was built from). opponentCellHtml already
+// colors/labels the Opp cell by matchup rank (see colors.js) - a separate
+// Matchup column repeated that. Proj IS ESPN's own projection now, taken
+// outright (see engine/valuation.py's module docstring) - weeklyProjection's
+// current-week special case just prefers the fresher live fetch
+// (espn_projected_week) over the batched one, same number either way.
+// Starting/Depth/Replace-by come from nmdWeeklyForPlayer, keyed by the SAME
+// week number - falls back to the plain 3-column table when that lookup has
+// nothing (no depth-chart entry, no FA detail), same "nothing to show" cases
+// the old separate Value week-by-week table used to just omit entirely.
+// !w.actual alone isn't enough to mean "still to come" - a past bye week
+// or a past week where this player had no stat row (inactive, hadn't
+// joined the league yet) also has no actual, but it already happened -
+// see engine/pipeline.py's weekly-array comment. w.week >= currentWeek
+// is what actually means "remaining".
+function remainingScheduleTable(player, data) {
+  const currentWeek = data.meta.current_week;
+  const weeks = (player.weekly || []).filter((w) => !w.actual && w.week >= currentWeek);
+  const nmd = nmdWeeklyForPlayer(player, data);
+  if (!nmd) {
+    const rows = weeks
+      .map((w) => `<tr><td>${w.week}</td><td>${opponentCellHtml(w)}</td><td>${fmt(weeklyProjection(player, w.week, currentWeek), 1)}</td></tr>`)
+      .join("");
+    return `<table><thead><tr><th>Wk</th><th>Opp</th><th>Proj</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }
+  const rows = weeks
+    .map((w) => {
+      const nw = nmd.byWeek.get(w.week);
+      const starting = fmt(nw?.starting_value ?? 0, 1);
+      const depth = fmt(nw?.depth_value ?? 0, 1);
+      const replaceBy = nw ? nmdReplacementCellHtml(nw, data, currentWeek) : `<span class="muted small">&ndash;</span>`;
+      return `<tr><td>${w.week}</td><td>${opponentCellHtml(w)}</td><td>${fmt(weeklyProjection(player, w.week, currentWeek), 1)}</td><td>${starting}</td><td>${depth}</td><td>${replaceBy}</td></tr>`;
+    })
     .join("");
-  // Only a total-points projection is computed for future weeks (not a full
-  // stat line), so this can't show the grouped stat columns the game log
-  // does - just the scalar projection. SD/"Our proj" (the old proprietary
-  // rank->curve->baseline*matchup reference number) used to have their own
-  // columns here - dropped per the conversation this was built from, this
-  // table now consolidates with Game Log/Value below it and didn't need the
-  // extra reference columns competing for attention.
-  return `<table><thead><tr><th>Wk</th><th>Opp</th><th>Proj</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `
+    <table>
+      <thead><tr><th>Wk</th><th>Opp</th><th>Proj</th><th>Starting</th><th>Depth</th><th>Replace by</th></tr></thead>
+      <tbody>${rows}</tbody>
+      <tfoot><tr class="totals-row"><td colspan="3">Total</td><td>${fmt(nmd.totals.starting, 1)}</td><td>${fmt(nmd.totals.depth, 1)}</td><td><strong>${fmt(nmd.totals.delta, 1)}</strong></td></tr></tfoot>
+    </table>
+  `;
 }
 
 // JS port of engine/faab_estimate.py's weighted_percentile - same "first
@@ -962,18 +1004,16 @@ function faabEstimateSection(player, data) {
 // Tab is labeled "Game Log" (see playerModalContentHtml) - this used to be
 // two separate tabs (Weekly Projections, Week-to-Week NMD/Value), merged
 // into one per the conversation this was built from: a player's actual
-// stats, remaining schedule, and roster-value breakdown are all "what
-// happened/will happen with this guy," not three unrelated views. No
-// redundant "Game log" heading here (the tab title already says that) - each
-// remaining section still gets its own heading.
+// stats and his remaining schedule/roster-value are all "what happened/will
+// happen with this guy," not unrelated views. No redundant "Game log"
+// heading here (the tab title already says that) - the schedule/value table
+// below still gets its own.
 function overviewTabHtml(player, data) {
   const hasGameLog = (player.weekly || []).some((w) => w.actual);
-  const nmdHtml = nmdDetailSection(player, data);
   return `
     ${hasGameLog ? gameLogTable(player, data) : ""}
     <h3>${hasGameLog ? "Remaining schedule" : "Weekly projections"}</h3>
-    <div class="table-wrap">${projectionTable(player, data.meta.current_week)}</div>
-    ${nmdHtml}
+    <div class="table-wrap">${remainingScheduleTable(player, data)}</div>
   `;
 }
 
@@ -988,61 +1028,6 @@ function nmdReplacementCellHtml(w, data, currentWeek) {
   const replacement = data.playersById.get(w.replacement_id);
   if (!replacement) return `<span class="muted small">${escapeHtml(w.replacement_id)}</span>`;
   return `${escapeHtml(replacement.name)} <span class="muted small">(${fmt(weeklyProjection(replacement, w.week, currentWeek), 1)})</span>`;
-}
-
-// NMD week-by-week (see engine/team_strength.py's position_value_by_player/
-// fa_pool_value) - points above replacement, broken into Starting/Depth per
-// week (the same split the stat-grid tile's single "Value" number above
-// blends together), naming which free agent set each week's bar. Same
-// underlying shape for a rostered player (Starting nonzero the weeks he
-// started, Depth nonzero the weeks he sat, never both the same week) and a
-// free agent (Starting always 0 - he's nobody's starter by definition,
-// Depth is his own leave-one-out value against the rest of the FA pool at
-// his position) - one renderer, two data sources.
-function nmdDetailSection(player, data) {
-  const currentWeek = data.meta.current_week;
-  if (player.fantasy_team_id !== null) {
-    const team = data.teamsById.get(player.fantasy_team_id);
-    const entry = (team?.depth?.[player.position] || []).find((d) => d.id === player.id);
-    if (!entry) return "";
-    const rows = entry.weekly
-      .map(
-        (w) => `<tr>
-          <td>Wk ${w.week}</td>
-          <td>${fmt(w.starting_value, 1)}</td>
-          <td>${fmt(w.depth_value, 1)}</td>
-          <td>${nmdReplacementCellHtml(w, data, currentWeek)}</td>
-        </tr>`
-      )
-      .join("");
-    return `
-      <h3>Value week-by-week</h3>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Week</th><th>Starting</th><th>Depth</th><th>Replace by</th></tr></thead>
-          <tbody>${rows}</tbody>
-          <tfoot><tr class="totals-row"><td>Total</td><td>${fmt(entry.starting_value, 1)}</td><td>${fmt(entry.depth_value, 1)}</td><td><strong>${fmt(entry.value_delta, 1)}</strong></td></tr></tfoot>
-        </table>
-      </div>
-    `;
-  }
-
-  const detail = (data.faValuesDetail || {})[player.id];
-  if (!detail) return "";
-  const rows = detail.weekly
-    .map((w) => `<tr><td>Wk ${w.week}</td><td>${fmt(w.depth_value, 1)}</td><td>${nmdReplacementCellHtml(w, data, currentWeek)}</td></tr>`)
-    .join("");
-  const totalDepth = detail.weekly.reduce((acc, w) => acc + w.depth_value, 0);
-  return `
-    <h3>Value week-by-week</h3>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Week</th><th>Depth</th><th>Replace by</th></tr></thead>
-        <tbody>${rows}</tbody>
-        <tfoot><tr class="totals-row"><td>Total</td><td>${fmt(totalDepth, 1)}</td><td><strong>${fmt(player.value_delta ?? 0, 1)}</strong></td></tr></tfoot>
-      </table>
-    </div>
-  `;
 }
 
 // A single "best remaining schedule" rank pill (1-32, 1 = best), colored the

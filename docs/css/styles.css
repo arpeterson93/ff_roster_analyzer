@@ -197,27 +197,28 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
    compare view's own headers never get that move, so they still need this
    clearance; without it .compare-btn's own margin-left:auto would push it
    flush against the modal's right edge, directly under the X. */
-/* Frozen while the rest of the modal scrolls - .modal-overlay (not
-   .modal-box) is the real scrolling ancestor (see its own overflow-y:auto),
-   so position:sticky here sticks relative to IT, not to this header's
-   immediate parent. top:0 sticks it flush to that scrollport's own top
-   edge (which already has its own padding: 5vh 16px - see .modal-overlay -
-   so it doesn't end up flush against the real browser edge). Needs its own
-   solid background (this section sits ABOVE everything else that scrolls
-   underneath it once stuck, including .player-stat-grid/the comp tables)
-   and a z-index above ordinary content. Deliberately NO negative margins
-   to reach .modal-box's own edges here - an earlier version tried that (to
-   avoid a background "sliver" at this header's own edges) and it was
-   wrong on two counts: negative top margin on the sticky element itself is
-   a known source of sticky-position miscalculation (this is what caused
-   the "later content renders above the frozen section" bug - see the
-   conversation this was built from), AND it was solving a problem that
-   didn't exist - .modal-box's own background is the SAME var(--card) this
-   header uses, so its padding area was never going to reveal anything
-   different regardless. The bottom border reads as a deliberate divider
-   whether it's currently stuck or not (no reliable cross-browser "is this
-   sticky element actually stuck right now" CSS selector to only add it
-   once scrolled). */
+/* Frozen while the rest of the modal scrolls - .modal-box itself is the
+   real scrolling ancestor (see its own overflow-y:auto above), so
+   position:sticky here sticks relative to IT, not to this header's
+   immediate parent, and .modal-box's own clipped bounds (border-radius +
+   overflow) are what actually hide scrolled-past content behind it - a
+   plain sticky top:0 with an UNCLIPPED scrolling ancestor (the old
+   .modal-overlay-scrolls setup) let content still render above the header
+   once .modal-box's own top edge scrolled past the viewport, since nothing
+   clipped it there (confirmed live - see .modal-box's own comment). Needs
+   its own solid background (this section sits ABOVE everything else that
+   scrolls underneath it once stuck, including .player-stat-grid/the comp
+   tables) and a z-index above ordinary content. Deliberately NO negative
+   margins to reach .modal-box's own edges here - an earlier version tried
+   that (to avoid a background "sliver" at this header's own edges) and
+   negative top margin on a sticky element is a known source of sticky-
+   position miscalculation; it was also solving a problem that didn't exist
+   - .modal-box's own background is the SAME var(--card) this header uses,
+   so its padding area was never going to reveal anything different
+   regardless. The bottom border reads as a deliberate divider whether it's
+   currently stuck or not (no reliable cross-browser "is this sticky
+   element actually stuck right now" CSS selector to only add it once
+   scrolled). */
 .player-modal-header {
   display: flex; align-items: center; gap: 12px; padding-right: 36px;
   position: sticky; top: 0; z-index: 5; background: var(--card);
@@ -902,8 +903,19 @@ details[open] summary { margin-bottom: 8px; }
   justify-content: center;
   padding: 5vh 16px;
   z-index: 1000;
-  overflow-y: auto;
 }
+/* .modal-box (not .modal-overlay) is the scrolling ancestor - it needs its
+   OWN clipped bounds, not just the overlay's, so a player-modal-header's
+   position:sticky properly hides content scrolled past it. An earlier
+   version made .modal-overlay the scroller instead (overflow-y:auto there,
+   .modal-box unbounded) - once .modal-box's own top edge scrolled above the
+   viewport, its content kept rendering in normal flow (nothing clipped it),
+   spilling out above the still-visibly-stuck header instead of disappearing
+   behind it (confirmed live - Game Log/schedule rows floating above the
+   frozen Jahmyr Gibbs header). max-height matches the overlay's own 5vh top
+   +bottom padding (100vh - 10vh) so the box's rounded corners/shadow still
+   read as one contained card rather than running the full viewport height
+   on tall player content. */
 .modal-box {
   background: var(--card);
   border-radius: var(--radius);
@@ -911,6 +923,9 @@ details[open] summary { margin-bottom: 8px; }
   padding: 20px;
   max-width: 860px;
   width: 100%;
+  max-height: calc(100vh - 10vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   position: relative;
 }
 .modal-close {

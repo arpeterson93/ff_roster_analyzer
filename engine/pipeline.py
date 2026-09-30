@@ -1132,7 +1132,19 @@ def run_league(cfg: dict, *, skip: frozenset[str] = frozenset(), prior_players: 
                     {
                         "week": w, "opponent": opponent.get((p.nfl_team, w)), "home": is_home.get((p.nfl_team, w)),
                         "kickoff": kickoff.get((p.nfl_team, w)),
-                        "index": None, "rank": None, "projected": None, "sd": None,
+                        # index/rank use the SAME current-snapshot matchup_index
+                        # a future week's opponent gets looked up against below
+                        # (it's a single present-day snapshot per position/team,
+                        # not week-specific - see compute_matchup_index) - so
+                        # the Game Log's Opp cell colors a past matchup by how
+                        # tough that opponent grades out TODAY, not a null
+                        # (which the frontend was rendering as a flat neutral
+                        # amber for every played week regardless of opponent).
+                        # projected/sd/our_projected stay None - nothing to
+                        # project for a week that already happened.
+                        "index": matchup_index.index.get(p.position, {}).get(opponent.get((p.nfl_team, w))),
+                        "rank": matchup_index.rank.get(p.position, {}).get(opponent.get((p.nfl_team, w))),
+                        "projected": None, "sd": None,
                         "our_projected": None,
                         "actual": _actual_weekly_stats(p.position, p.nfl_team, res.id, w, game_final, actual_offense_by_id_week, actual_dst_by_team_week, active_by_id_week, opponent, player_rules),
                         "implied_total": (game_context.get((p.nfl_team, w)) or {}).get("implied_total"),
