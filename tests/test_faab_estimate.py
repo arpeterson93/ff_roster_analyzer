@@ -16,6 +16,7 @@ from engine.faab_estimate import (
     _position_distance_cutoffs,
     _price_comp_bid_distribution,
     _price_comp_dicts,
+    _same_week_availability_from_counts,
     _same_week_signal_from_rows,
     _shrunk_interest_fractions,
     _weighted_median,
@@ -949,3 +950,31 @@ def test_same_week_signal_no_winner_yet_still_reports_activity():
     assert out["conditional_price"] is None
     assert out["leagues_with_activity"] == 2
     assert out["bid_distribution"] == []
+
+
+# --- FaabModel.same_week_availability (via _same_week_availability_from_
+# counts, its testable core - see that function's own docstring) - the
+# REAL leagues_with_bid/leagues_eligible fraction pull_current_week_bids.py's
+# roster pull makes possible, shown on the Rankings table's INT column in
+# place of the comp-based P(anyone bids) model whenever it's available.
+def test_same_week_availability_counts_won_leagues_against_free_agent_denominator():
+    rows = [
+        _bid_row(1, signal="won"),
+        _bid_row(2, signal="outbid"),  # real activity, but not a WIN - doesn't count toward leagues_with_bid
+    ]
+    out = _same_week_availability_from_counts(rows, rostered_in={"9", "10"}, total_roster_leagues=12)
+    assert out["leagues_with_bid"] == 1
+    assert out["leagues_eligible"] == 10  # 12 leagues pulled, 2 had him rostered already
+
+
+def test_same_week_availability_zero_bid_activity_is_still_a_real_fraction():
+    # No rows at all (never bid on anywhere this week) is still a real,
+    # informative 0/N - not "no signal" the way same_week_signal treats an
+    # empty rows list (see that function's own None-on-empty handling).
+    out = _same_week_availability_from_counts([], rostered_in=set(), total_roster_leagues=400)
+    assert out == {"leagues_with_bid": 0, "leagues_eligible": 400}
+
+
+def test_same_week_availability_rostered_everywhere_is_zero_eligible():
+    out = _same_week_availability_from_counts([], rostered_in={"1", "2"}, total_roster_leagues=2)
+    assert out["leagues_eligible"] == 0

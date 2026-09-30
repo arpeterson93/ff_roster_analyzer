@@ -208,14 +208,34 @@ function overviewColumns(data) {
       },
     },
     {
-      key: "_faab_interest", label: "INT", title: "P(anyone bids) - comp-based method, not multiplied into FAAB Est.",
+      key: "_faab_interest", label: "INT",
+      title: "Leagues with a real winning bid this week / leagues where he was a confirmed free agent this week, across ~500 pooled leagues - falls back to the comp-based P(anyone bids) model when this week's roster snapshot isn't in yet",
       fmt: (_v, p) => {
         const est = (data.faabEstimates || {})[p.id];
         if (!est) return "–";
-        // Only the confirmed-zero case overrides INT - real activity with
-        // no known "eligible leagues" denominator can't produce a real
+        // Real leagues_with_bid/leagues_eligible beats the historical model
+        // outright, same reasoning as FAAB Est.'s same_week override above -
+        // an observed fact, not an extrapolation, and NOT gated by
+        // below_relevance_threshold/unranked either (see
+        // engine.pipeline._compute_faab_estimates's same_week_availability
+        // comment): a player too quiet for the k-NN search can still have a
+        // real, confirmed availability count elsewhere. leagues_eligible
+        // can be 0 in principle (rostered in every single pooled league) -
+        // guarded against here rather than showing a divide-by-zero NaN.
+        const avail = est.same_week_availability;
+        if (avail && avail.leagues_eligible > 0) {
+          const pct = avail.leagues_with_bid / avail.leagues_eligible;
+          const title = `${avail.leagues_with_bid} of ${avail.leagues_eligible} pooled leagues where he was a free agent this week had a real winning bid on him`;
+          return `<span class="faab-live" title="${escapeHtml(title)}">${fmt(pct * 100, 0)}%</span>`;
+        }
+        // Only the confirmed-zero case overrides INT below - real activity
+        // with no known "eligible leagues" denominator can't produce a real
         // rate (see same_week_signal's own docstring), so INT stays on the
-        // historical model whenever there WAS activity this week.
+        // historical model whenever there WAS activity this week. In
+        // practice this branch is now mostly a defensive fallback for a
+        // stale cached run from before same_week_availability existed -
+        // both same_week_data_available and same_week_availability_data_
+        // available come from the same weekly puller run going forward.
         if (sameWeekAvailable && !est.same_week) {
           return `<span class="faab-live" title="No other pooled league had any activity on this player this week">0%</span>`;
         }
@@ -339,6 +359,9 @@ function sortValue(p, key, data, filters) {
     const est = (data.faabEstimates || {})[p.id];
     // Mirror the fmt() override in overviewColumns exactly, so sort order
     // always matches what the column actually displays.
+    if (key === "_faab_interest" && est?.same_week_availability && est.same_week_availability.leagues_eligible > 0) {
+      return est.same_week_availability.leagues_with_bid / est.same_week_availability.leagues_eligible;
+    }
     const sameWeekAvailable = !!(data.faabEstimates || {})._meta?.same_week_data_available;
     if (sameWeekAvailable && est) {
       if (key === "_faab_est" && est.same_week?.conditional_price) return est.same_week.conditional_price.median;

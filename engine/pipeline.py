@@ -559,6 +559,12 @@ def _compute_faab_estimates(
         # this same relevance threshold at all.
         team_interest = team_interest_for(p, info["qualifying_mates"])
         same_week = model.same_week_signal(gsis_by_pid.get(pid), current_week)
+        # Independent of same_week above (see that call's own comment on why
+        # roster-fit/same-week context isn't gated by is_relevant) - a real
+        # leagues_with_bid/leagues_eligible fraction is observed fact same as
+        # same_week is, not a model extrapolation, so it's computed and
+        # attached to every branch below the same way.
+        same_week_availability = model.same_week_availability(gsis_by_pid.get(pid), current_week)
 
         if not info["is_relevant"]:
             estimates[pid] = {
@@ -568,6 +574,7 @@ def _compute_faab_estimates(
                 "below_relevance_threshold": True,
                 "team_interest": team_interest,
                 "same_week": same_week,
+                "same_week_availability": same_week_availability,
                 "inputs": {
                     "position": p["position"], "week": current_week,
                     "prior_week_actual_points": prior_points, "prior_week_had_stat_row": prior_actual is not None,
@@ -607,6 +614,7 @@ def _compute_faab_estimates(
                 "unranked": True,
                 "team_interest": team_interest,
                 "same_week": same_week,
+                "same_week_availability": same_week_availability,
                 "inputs": {
                     "position": p["position"], "week": current_week,
                     "prior_week_actual_points": prior_points, "prior_week_had_stat_row": prior_actual is not None,
@@ -641,7 +649,9 @@ def _compute_faab_estimates(
         # threshold branch) - independent of everything estimate() computes,
         # see same_week_signal's own docstring on why it's never blended
         # into the k-NN comp/regression numbers, just shown alongside them.
-        estimates[pid] = model.estimate(query) | {"team_interest": team_interest, "same_week": same_week}
+        estimates[pid] = model.estimate(query) | {
+            "team_interest": team_interest, "same_week": same_week, "same_week_availability": same_week_availability,
+        }
         # See _price_comps_are_single_observation - a price estimate whose
         # ENTIRE comp set (however many rows are shown) still traces back
         # to just one real (league, player, week) bid is a single anecdote
@@ -657,7 +667,16 @@ def _compute_faab_estimates(
     # them) rather than silently falling back to the historical model only
     # because no one happened to notice. See docs/js/rankings.js's Rankings
     # table override for how this gets used.
-    estimates["_meta"] = {"same_week_data_available": current_week in model.same_week_weeks_with_data}
+    estimates["_meta"] = {
+        "same_week_data_available": current_week in model.same_week_weeks_with_data,
+        # Same idea, for the roster snapshot pull_current_week_bids.py now
+        # also does each run - lets rankings.js's INT column tell "we have a
+        # real leagues_eligible denominator this week" apart from "the
+        # puller hasn't produced one yet" (e.g. an older cached run from
+        # before this was added), same distinction same_week_data_available
+        # already draws for the FAAB Est. column.
+        "same_week_availability_data_available": current_week in model.same_week_total_roster_leagues,
+    }
     return estimates
 
 

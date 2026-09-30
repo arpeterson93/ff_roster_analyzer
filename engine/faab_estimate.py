@@ -142,6 +142,14 @@ CURRENT_WEEK_BIDS_PATH = Path(__file__).resolve().parent.parent / "tools" / "faa
 # below). Optional: a week this hasn't run yet, or found nothing, just
 # means same_week_signal always returns None, not a crash - see
 # FaabModel.__init__'s own handling.
+CURRENT_WEEK_ROSTERS_PATH = Path(__file__).resolve().parent.parent / "tools" / "faab_history" / "current-week-rosters.json"
+# The same script's other output - one rostered-gsis-id snapshot per pooled
+# league for THE CURRENT WEEK ONLY, same "not accumulating, may not exist
+# yet" handling as CURRENT_WEEK_BIDS_PATH above. This is what lets
+# FaabModel.same_week_availability compute a real leagues_eligible
+# denominator (confirmed free agent, i.e. NOT on this snapshot's rostered
+# list) instead of same_week_signal's plain leagues_with_activity count -
+# see that method's own docstring on why it couldn't before.
 O_LEAGUE_ID = 355398  # duplicated from tools/faab_history/build_training_table.py's own constant - engine/ doesn't import from tools/, wrong dependency direction
 TRAINABLE_SIGNALS = {"won", "outbid", "no_bid", "other_failure"}  # "other_failure" (roster-limit/contingency logistics, e.g. a manager's OTHER simultaneous claim consumed the roster slot - see pull_o_league_bids.py's classify()) is real "someone placed a bid" evidence for the INTEREST stage even though, like outbid, it never carries price signal - see dedupe_events_for_interest and module docstring
 POSITIONS = ["QB", "RB", "WR", "TE", "K"]  # QB is the OLS reference category (no dummy)
@@ -2117,6 +2125,39 @@ def _same_week_signal_from_rows(rows: list[dict]) -> dict | None:
     }
 
 
+def _same_week_availability_from_counts(rows: list[dict], rostered_in: set[str], total_roster_leagues: int) -> dict:
+    """The actual computation behind FaabModel.same_week_availability -
+    factored out the same way _same_week_signal_from_rows is (see that
+    function) so it's testable without a real current-week-rosters.json on
+    disk. rows may be empty (unlike _same_week_signal_from_rows, which is
+    never called with an empty list - see same_week_signal) since a real
+    leagues_eligible denominator exists independent of whether anyone
+    actually bid: a player with zero cross-league bid activity this week
+    who was still a confirmed free agent in 400 pooled leagues is a real,
+    informative 0/400, not "no signal".
+
+    leagues_with_bid: distinct leagues with a real WON row here - a losing
+    outbid/other_failure row is still real market evidence (see
+    dedupe_events_for_interest), but the Rankings-table INT column this
+    feeds was asked for specifically "leagues that had a winning bid", and
+    unlike the historical interest stage there's no dedupe/consolidation
+    step here to fold those weaker signals into one representative row
+    first - counting them directly here would double-count a single
+    contested auction's own outbid rows as if they were separate leagues'
+    worth of interest.
+
+    leagues_eligible: total_roster_leagues (every pooled league THIS WEEK's
+    roster pull actually succeeded for - see FaabModel.__init__) minus how
+    many of those had gsis_id on a roster already - i.e. confirmed NOT a
+    free agent there, so not a real chance to bid on him at all. Same
+    "eligible" definition tools/faab_history/build_training_table.py's
+    build_no_bid_rows uses for the historical, backfilled population."""
+    return {
+        "leagues_with_bid": len({r["source_league_id"] for r in rows if r["signal"] == "won"}),
+        "leagues_eligible": total_roster_leagues - len(rostered_in),
+    }
+
+
 # ---------------------------------------------------------------------------
 class FaabModel:
     """Fit once per pipeline run, reused for every candidate player."""
@@ -2200,6 +2241,27 @@ class FaabModel:
                 if r.get("gsis_id"):
                     self.same_week_by_gsis[(r["gsis_id"], r["week"])].append(r)
 
+        # Real leagues_with_bid/leagues_eligible denominator for
+        # same_week_availability below - see CURRENT_WEEK_ROSTERS_PATH's own
+        # comment and pull_current_week_bids.py's module docstring for where
+        # this comes from. Keyed by week (not just a single "this week"
+        # scalar) purely so a stale rosters file left over from a prior
+        # week's run - the bids file gets overwritten every run too, but a
+        # crash between the two writes could leave one ahead of the other -
+        # can't be silently mistaken for the CURRENT week's own data;
+        # same_week_availability only ever gets a real total for the
+        # specific week key this dict actually has.
+        self.same_week_rostered_leagues: dict[tuple[str, int], set[str]] = defaultdict(set)
+        self.same_week_total_roster_leagues: dict[int, int] = {}
+        if CURRENT_WEEK_ROSTERS_PATH.exists():
+            rosters_doc = json.loads(CURRENT_WEEK_ROSTERS_PATH.read_text())
+            rosters_week = rosters_doc["week"]
+            leagues = rosters_doc["leagues"]
+            self.same_week_total_roster_leagues[rosters_week] = len(leagues)
+            for lid, gsis_ids in leagues.items():
+                for gsis_id in gsis_ids:
+                    self.same_week_rostered_leagues[(gsis_id, rosters_week)].add(lid)
+
     def same_week_signal(self, gsis_id: str | None, week: int) -> dict | None:
         """None when there's nothing to show (the common case - most
         players draw zero cross-league activity most weeks, and this file
@@ -2228,6 +2290,30 @@ class FaabModel:
         see that script's _annotate_budget_remaining)."""
         rows = self.same_week_by_gsis.get((gsis_id, week)) if gsis_id else None
         return _same_week_signal_from_rows(rows) if rows else None
+
+    def same_week_availability(self, gsis_id: str | None, week: int) -> dict | None:
+        """{leagues_with_bid, leagues_eligible} - the real fraction
+        same_week_signal's own docstring said this pipeline couldn't
+        produce ("that ratio needs a real 'eligible' denominator ... which
+        this script never pulls"). It's real now: pull_current_week_bids.py
+        also pulls a rostered-ids snapshot per pooled league every week (see
+        CURRENT_WEEK_ROSTERS_PATH), so "was gsis_id a free agent in league
+        L this week" is a real, confirmed fact rather than an inference.
+
+        None when no roster snapshot exists for THIS week at all (the
+        puller hasn't run yet this week, or every league's roster fetch
+        failed) - a genuine "we don't know" the caller should fall back to
+        the historical comp/regression model for, not a misleading 0/0.
+        Never None purely because gsis_id drew zero bid activity - see
+        _same_week_availability_from_counts's own docstring on why that's
+        still a real, informative fraction (e.g. 0/400) rather than
+        "no signal"."""
+        total = self.same_week_total_roster_leagues.get(week)
+        if not total or gsis_id is None:
+            return None
+        rows = self.same_week_by_gsis.get((gsis_id, week), [])
+        rostered_in = self.same_week_rostered_leagues.get((gsis_id, week), set())
+        return _same_week_availability_from_counts(rows, rostered_in, total)
 
     def estimate(self, query: dict) -> dict:
         comp = comp_based_estimate(

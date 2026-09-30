@@ -3,6 +3,21 @@ pooled public league, for the same-week cross-league signal shown in the
 FAAB Lab modal tab (engine/faab_estimate.py's FaabModel.same_week_signal) -
 see the conversation this was built from.
 
+ALSO pulls one rostered-player-ids snapshot per league for this same week
+(tools/faab_history/pull_weekly_rosters.py's own rostered_ids_for_week,
+reusing the SAME already-open EspnLeague object the bid fetch below just
+used - one more paced request per league, not a second full pass over the
+league list), written to current-week-rosters.json. This is what makes a
+REAL leagues_with_bid/leagues_eligible fraction possible live (see
+FaabModel.same_week_availability) instead of only same_week_signal's plain
+leagues_with_activity count - "eligible" here means "confirmed a free
+agent in that league this week" (not rostered), the same denominator
+tools/faab_history/build_training_table.py's build_no_bid_rows already
+uses for the historical, backfilled training data. Run once a week, so the
+roughly 2x request volume this adds (one settings check + one bid fetch +
+one roster fetch per league, instead of settings + bid fetch) was judged
+worth the runtime - see the conversation this was built from.
+
 Deliberately NOT a scaled-down repeat of pull_public_league_bids.py's
 historical backfill: that pulls up to 17 weeks x however many seasons, for
 every league ever compatible. This pulls ONE week (the current one) for
@@ -20,10 +35,12 @@ one's. The SAME settings fetch also returns the real current acquisition_
 budget needed for %-of-budget normalization, so this isn't a separate cost
 on top of the eligibility check.
 
-Writes tools/faab_history/current-week-bids.json - a full overwrite every
-run (no resumability/append bookkeeping, unlike the historical puller: this
-is small - a few hundred to low thousands of rows - and cheap enough to
-just rebuild from scratch each time, and is deliberately CURRENT-WEEK-ONLY,
+Writes tools/faab_history/current-week-bids.json AND
+tools/faab_history/current-week-rosters.json - both full overwrites every
+run (no resumability/append bookkeeping, unlike the historical puller:
+these are small - a few hundred to low thousands of bid rows, and one
+rostered-gsis-id list per league for the rosters file - and cheap enough to
+just rebuild from scratch each time, and are deliberately CURRENT-WEEK-ONLY,
 not an accumulating dataset - see FaabModel's own docstring on why. Small
 enough to commit straight into git rather than needing the release-asset +
 gzip dance combined-training-table.parquet requires.
@@ -63,9 +80,11 @@ from tools.faab_history.build_training_table import (
 )
 from tools.faab_history.league_profile import fetch_settings, load_baseline_scoring_items, profile_settings
 from tools.faab_history.pull_o_league_bids import classify, collapse_contingent_bids, fetch_week
+from tools.faab_history.pull_weekly_rosters import rostered_ids_for_week
 
 VETTED_PATH = Path(__file__).parent / "vetted_candidates.json"
 OUT_PATH = Path(__file__).parent / "current-week-bids.json"
+ROSTERS_OUT_PATH = Path(__file__).parent / "current-week-rosters.json"
 SEASON = 2026
 
 SETTINGS_DELAY_RANGE = (0.3, 0.9)
@@ -183,11 +202,34 @@ def main() -> int:
     print(f"{len(budgets)}/{len(candidates)} still FAAB-eligible for {SEASON}")
     if not budgets:
         write_json(OUT_PATH, [], indent=2)
-        print(f"no eligible leagues - wrote empty {OUT_PATH}")
+        write_json(ROSTERS_OUT_PATH, {"week": week, "leagues": {}}, indent=2)
+        print(f"no eligible leagues - wrote empty {OUT_PATH} and {ROSTERS_OUT_PATH}")
         return 0
 
+    requests_made = 0
+
+    def _pace() -> None:
+        # Shared by the bid-fetch and roster-fetch requests below - each
+        # league now makes two requests off the same already-open League
+        # object instead of one, so this fires roughly twice as often per
+        # league as before (still "roughly every LONG_PAUSE_EVERY requests",
+        # same meaning the constant always had - see module docstring on
+        # why the resulting ~2x runtime was judged worth it).
+        nonlocal requests_made
+        requests_made += 1
+        if requests_made % LONG_PAUSE_EVERY == 0:
+            pause = random.uniform(*LONG_PAUSE_RANGE)
+            print(f"  taking a longer break ({pause:.0f}s)", file=sys.stderr)
+            time.sleep(pause)
+        else:
+            time.sleep(random.uniform(*FETCH_DELAY_RANGE))
+
     raw_rows: list[dict] = []
-    weeks_requested = 0
+    # league_id -> this week's rostered ESPN player ids, one entry per
+    # league whose roster fetch succeeded (a league that fails here keeps
+    # its bid data - see the except below - it just can't contribute an
+    # "eligible" denominator for FaabModel.same_week_availability).
+    raw_rosters: dict[int, list[int]] = {}
     for i, (lid, provenance) in enumerate(budgets.items()):
         try:
             league = EspnLeague(league_id=lid, year=SEASON)
@@ -199,16 +241,16 @@ def main() -> int:
             r["source_league_id"] = lid
         raw_rows.extend(week_rows)
         print(f"  [{i + 1}/{len(budgets)}] league {lid} ({provenance['name']!r}): {len(week_rows)} raw transaction rows")
+        _pace()
 
-        weeks_requested += 1
-        if weeks_requested % LONG_PAUSE_EVERY == 0:
-            pause = random.uniform(*LONG_PAUSE_RANGE)
-            print(f"  taking a longer break ({pause:.0f}s)", file=sys.stderr)
-            time.sleep(pause)
-        else:
-            time.sleep(random.uniform(*FETCH_DELAY_RANGE))
+        try:
+            raw_rosters[lid] = rostered_ids_for_week(league, week)
+        except Exception as exc:
+            print(f"  [{i + 1}/{len(budgets)}] league {lid} ({provenance['name']!r}): roster fetch failed ({exc}), skipping availability for this league", file=sys.stderr)
+        _pace()
 
     print(f"\n{len(raw_rows)} total raw transaction rows across {len({r['source_league_id'] for r in raw_rows})} leagues")
+    print(f"roster snapshots pulled for {len(raw_rosters)}/{len(budgets)} leagues")
 
     deduped = collapse_contingent_bids(raw_rows)
     classified = classify(deduped, freeagent_flat_cost_dollars=0.0)
@@ -262,15 +304,44 @@ def main() -> int:
         # an uncontested FREEAGENT add, not a known-bad transaction id) -
         # see engine/faab_estimate.py's load_trainable_rows. signal is
         # always won/outbid/other_failure here (this script never
-        # synthesizes no_bid rows - no roster pull, see module docstring),
-        # so that part is a no-op; the type != FREEAGENT and position
-        # checks are the ones that actually matter.
+        # synthesizes no_bid ROWS the way build_no_bid_rows does - the
+        # roster pull above feeds a separate leagues_eligible DENOMINATOR
+        # instead, written to ROSTERS_OUT_PATH below, not individual no_bid
+        # training rows), so that part is a no-op; the type != FREEAGENT and
+        # position checks are the ones that actually matter.
         all_out_rows.extend(load_trainable_rows(rows))
         if unresolved:
             print(f"  league {lid}: {len(unresolved)} unresolved ESPN player ids", file=sys.stderr)
 
     write_json(OUT_PATH, all_out_rows, indent=2)
     print(f"\nwrote {len(all_out_rows)} rows to {OUT_PATH}")
+
+    # Resolve this week's rostered ESPN ids to gsis ids using the SAME idmap
+    # the bid rows above just resolved add_player_id through, so a player's
+    # rostered-elsewhere status and his own bid rows agree on one id system
+    # (FaabModel.same_week_by_gsis is gsis-keyed - see that class). A
+    # rostered id idmap can't resolve at all (pre-2020 kickers, obscure IDP,
+    # etc.) is dropped rather than left as a raw ESPN id - it can never
+    # match a query anyway, since same_week_availability's own caller
+    # (engine/pipeline.py) only ever queries with a gsis id too, and the
+    # SAME idmap.by_espn lookup would fail identically for that query.
+    rosters_out: dict[str, list[str]] = {}
+    unresolved_roster_ids: set[int] = set()
+    for lid, espn_ids in raw_rosters.items():
+        gsis_ids = set()
+        for eid in espn_ids:
+            record = idmap.by_espn.get(eid)
+            gsis_id = record["gsis_id"] if record else None
+            if gsis_id:
+                gsis_ids.add(gsis_id)
+            else:
+                unresolved_roster_ids.add(eid)
+        rosters_out[str(lid)] = sorted(gsis_ids)
+    if unresolved_roster_ids:
+        print(f"{len(unresolved_roster_ids)} rostered ESPN ids had no gsis match, dropped from every league's rostered set", file=sys.stderr)
+
+    write_json(ROSTERS_OUT_PATH, {"week": week, "leagues": rosters_out}, indent=2)
+    print(f"wrote roster snapshots for {len(rosters_out)} leagues to {ROSTERS_OUT_PATH}")
     return 0
 
 
