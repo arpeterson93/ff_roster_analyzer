@@ -805,6 +805,23 @@ thead .sticky-col-first { z-index: 2; }
 .your-team-row { background: color-mix(in srgb, var(--blue-500) 16%, transparent); }
 .your-team-row:hover { background: color-mix(in srgb, var(--blue-500) 24%, transparent); }
 
+/* A frozen/sticky column (Standings' Seed+Team, Team Strength's leading
+   team column, Rankings' mobile Player column) paints its OWN opaque
+   `background: var(--card)` so the scrolling columns behind it don't show
+   through - which also blocks .your-team-row's tint above from showing on
+   that cell, since it's the same declaration order (a td's own background
+   always wins over its tr's). Every such sticky-cell selector needs this
+   same tint reapplied explicitly, composited onto --card instead of
+   transparent since these cells are always opaque. */
+.your-team-row .sticky-seed, .your-team-row .sticky-team, .your-team-row .sticky-col-first,
+#rankings-table-wrap tr.your-team-row td.rankings-player-col {
+  background: color-mix(in srgb, var(--blue-500) 16%, var(--card));
+}
+.your-team-row:hover .sticky-seed, .your-team-row:hover .sticky-team, .your-team-row:hover .sticky-col-first,
+#rankings-table-wrap tr.your-team-row:hover td.rankings-player-col {
+  background: color-mix(in srgb, var(--blue-500) 24%, var(--card));
+}
+
 .selected-row { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 
 .sparkline { display: flex; align-items: flex-end; gap: 1px; height: 20px; width: 90px; }
