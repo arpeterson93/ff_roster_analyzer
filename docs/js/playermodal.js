@@ -1,6 +1,6 @@
 import { fmt, escapeHtml } from "./state.js";
 import { POSITION_COLOR, opponentCellHtml, teamLabel, playerPhotoHtml, weeklyProjection, colorForRatio, ratioForRank, snapPct, attPct, tgtPct } from "./colors.js";
-import { openModal } from "./modal.js";
+import { openModal, closeModal } from "./modal.js";
 import { groupedHeaderHtml, statCellsHtml } from "./statcolumns.js";
 
 // Bar-per-play chart (x = elapsed game time, y = points scored on THAT
@@ -1069,6 +1069,14 @@ function scheduleRankPillHtml(rank, avgIndex, timeframeLabel) {
 // doesn't get a second tab, rather than an empty one. Factored out of
 // openPlayerModal so openComparePlayerModal can render the exact same
 // content twice, side by side, rather than reimplementing it.
+// showCompareTrigger also gates the embedded .modal-close button below -
+// both are single-player-view-only. Rendering our OWN close button inside
+// the sticky .player-modal-header (rather than relying on the shared modal
+// shell's external one - see modal.js) is what lets openPlayerModal keep a
+// real, clickable X inside the frozen section instead of it sitting hidden
+// behind the header's own solid background (see styles.css's .player-
+// modal-header > .modal-close). The compare view keeps using the shared
+// external button, untouched - see openPlayerModal vs openComparePlayerModal.
 function playerModalContentHtml(player, data, { showCompareTrigger = true } = {}) {
   const color = POSITION_COLOR[player.position] || "#888";
   const team = player.fantasy_team_id !== null ? data.teamsById.get(player.fantasy_team_id) : null;
@@ -1082,6 +1090,7 @@ function playerModalContentHtml(player, data, { showCompareTrigger = true } = {}
         <p class="muted small">${team ? escapeHtml(teamLabel(team)) : "Free agent"} · Bye ${player.bye ?? "–"}</p>
       </div>
       ${showCompareTrigger ? `<button class="compare-btn" type="button" data-compare-trigger title="Compare"><span aria-hidden="true">+</span><span class="compare-btn-label"> Compare</span></button>` : ""}
+      ${showCompareTrigger ? `<button class="modal-close" type="button" aria-label="Close">&times;</button>` : ""}
     </div>
     ${showCompareTrigger ? compareSearchHtml() : ""}
     <div class="player-stat-grid">
@@ -1222,6 +1231,16 @@ function wireFaabConfidenceSlider(scopeEl, player, data) {
 export function openPlayerModal(player, data) {
   openModal(playerModalContentHtml(player, data));
   const scope = document.querySelector(".modal-content");
+  // Hide the shared modal shell's own external close button (a DIRECT
+  // child of .modal-box, never touched by .modal-content's innerHTML
+  // replacement on the next open - moving THAT node instead of hiding it
+  // would get it destroyed the next time any modal opens, since it'd then
+  // be nested inside the very content .innerHTML overwrites) and wire the
+  // embedded one this content just rendered instead - see playerModal
+  // ContentHtml's own header comment.
+  const externalClose = document.querySelector(".modal-box > .modal-close");
+  if (externalClose) externalClose.hidden = true;
+  scope.querySelector(".player-modal-header > .modal-close")?.addEventListener("click", closeModal);
   wirePlayerModalTabs(scope);
   wireFaabConfidenceSlider(scope, player, data);
   wireGameLogRows(scope);

@@ -30,4 +30,13 @@ export function openModal(html, { wide = false } = {}) {
   modal.classList.toggle("modal-overlay-wide", wide);
   modal.querySelector(".modal-content").innerHTML = html;
   modal.hidden = false;
+  // Reset to visible on every open, not just once - openPlayerModal hides
+  // this shared external close button (it renders its own, embedded inside
+  // its sticky header instead - see playermodal.js) for AS LONG AS that
+  // specific content stays open, but every other caller of this function
+  // (openComparePlayerModal, the points-against modal, and any future one)
+  // still needs it, so the default has to be reasserted centrally here
+  // rather than trusted to whichever caller happens to run next.
+  const closeBtn = modal.querySelector(".modal-box > .modal-close");
+  if (closeBtn) closeBtn.hidden = false;
 }

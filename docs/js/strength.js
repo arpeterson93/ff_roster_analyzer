@@ -88,17 +88,31 @@ function trendSparkline(weekly) {
   return `<div class="sparkline">${bars}</div>`;
 }
 
+// Rank column is FantasyPros' real ROS positional rank (same "posN" shown
+// in parens on Rankings' own RK column - e.g. "RB4"), NOT a roster-slot
+// index - so within each position group, rows sort by that real rank
+// (ascending, unranked last) rather than by this team's own starting/
+// depth value order the way the old Slot column implicitly did.
 function depthTable(depth, playersById) {
   const positions = Object.keys(depth);
   return positions
-    .map((pos) =>
-      depth[pos]
-        .map(
-          (d, i) =>
-            `<tr data-player-id="${d.id}" class="clickable-row"><td>${pos}${i + 1}</td><td>${escapeHtml((playersById.get(d.id) || {}).name || d.id)}</td><td>${fmt(d.starting_value, 1)}</td><td>${fmt(d.depth_value, 1)}</td><td>${fmt(d.value_delta, 1)}</td><td>${trendSparkline(d.weekly)}</td></tr>`
-        )
-        .join("")
-    )
+    .map((pos) => {
+      const sorted = [...depth[pos]].sort((a, b) => {
+        const ra = (playersById.get(a.id) || {}).ros_pos_rank;
+        const rb = (playersById.get(b.id) || {}).ros_pos_rank;
+        if (ra == null && rb == null) return 0;
+        if (ra == null) return 1;
+        if (rb == null) return -1;
+        return ra - rb;
+      });
+      return sorted
+        .map((d) => {
+          const player = playersById.get(d.id) || {};
+          const rank = player.ros_pos_rank != null ? `${pos}${player.ros_pos_rank}` : "–";
+          return `<tr data-player-id="${d.id}" class="clickable-row"><td>${rank}</td><td>${escapeHtml(player.name || d.id)}</td><td>${fmt(d.starting_value, 1)}</td><td>${fmt(d.depth_value, 1)}</td><td>${fmt(d.value_delta, 1)}</td><td>${trendSparkline(d.weekly)}</td></tr>`;
+        })
+        .join("");
+    })
     .join("");
 }
 
@@ -308,7 +322,7 @@ export function renderStrength(container, data, slug) {
       <h2>Starting Lineup vs. League Avg</h2>
       ${positionBars(team.slot_strength, computeTotalStrength(data, team))}
       <h3>Value (Points Above Replacement)</h3>
-      <div class="table-wrap"><table><thead><tr><th>Slot</th><th>Player</th><th title="Points above the best available free agent for his slot, in weeks he started.">Starting</th><th title="Points above the best available free agent at his position, in weeks he sat (discounted 50% into Total).">Depth</th><th title="Starting + Depth (Depth discounted 50%). See his player card's own Value week-by-week tab for the full split.">Total</th><th title="Starting value only, week by week - 0 in a week he sat, not a modeling gap.">Weekly trend</th></tr></thead><tbody>${depthTable(team.depth, data.playersById)}</tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>Rank</th><th>Player</th><th title="Points above the best available free agent for his slot, in weeks he started.">Starting</th><th title="Points above the best available free agent at his position, in weeks he sat (discounted 50% into Total).">Depth</th><th title="Starting + Depth (Depth discounted 50%). See his player card's own Value week-by-week tab for the full split.">Total</th><th title="Starting value only, week by week - 0 in a week he sat, not a modeling gap.">Weekly trend</th></tr></thead><tbody>${depthTable(team.depth, data.playersById)}</tbody></table></div>
       <h3>Suggested pickups</h3>
       <div class="table-wrap">${pickupsTable(team.pickups, data.playersById)}</div>
       <h3>Trade targets</h3>

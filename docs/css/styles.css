@@ -191,30 +191,55 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 
 /* Player modal header: the same photo, a little bigger, next to the
    name/rank line instead of inline within it. */
-/* padding-right clears the modal's own absolutely-positioned close button
-   (top:10px/right:12px, ~30px wide) - without it .compare-btn's own
-   margin-left:auto pushes it flush against the modal's right edge, directly
-   under the X. */
+/* padding-right clears the modal's own close button (top:10px/right:12px,
+   ~30px wide) when it's NOT been moved into this header (see
+   playermodal.js's openPlayerModal, and the :has() rule below) - the
+   compare view's own headers never get that move, so they still need this
+   clearance; without it .compare-btn's own margin-left:auto would push it
+   flush against the modal's right edge, directly under the X. */
 /* Frozen while the rest of the modal scrolls - .modal-overlay (not
    .modal-box) is the real scrolling ancestor (see its own overflow-y:auto),
    so position:sticky here sticks relative to IT, not to this header's
-   immediate parent. top:0 (not a small offset) sticks it flush to that
-   scrollport's own top edge (which already has its own padding: 5vh 16px -
-   see .modal-overlay - so it doesn't end up flush against the real browser
-   edge). Needs its own solid background (this section sits ABOVE
-   everything else that scrolls underneath it once stuck, including
-   .player-stat-grid/the comp tables) and a z-index above ordinary content;
-   negative left/right/top margins + matching padding pull it out to
-   .modal-box's own edges so the background doesn't leave a sliver of
-   scrolled content visible around its sides, and the bottom border reads
-   as a deliberate divider whether it's currently stuck or not (no reliable
-   cross-browser "is this sticky element actually stuck right now" CSS
-   selector to only add it once scrolled). */
+   immediate parent. top:0 sticks it flush to that scrollport's own top
+   edge (which already has its own padding: 5vh 16px - see .modal-overlay -
+   so it doesn't end up flush against the real browser edge). Needs its own
+   solid background (this section sits ABOVE everything else that scrolls
+   underneath it once stuck, including .player-stat-grid/the comp tables)
+   and a z-index above ordinary content. Deliberately NO negative margins
+   to reach .modal-box's own edges here - an earlier version tried that (to
+   avoid a background "sliver" at this header's own edges) and it was
+   wrong on two counts: negative top margin on the sticky element itself is
+   a known source of sticky-position miscalculation (this is what caused
+   the "later content renders above the frozen section" bug - see the
+   conversation this was built from), AND it was solving a problem that
+   didn't exist - .modal-box's own background is the SAME var(--card) this
+   header uses, so its padding area was never going to reveal anything
+   different regardless. The bottom border reads as a deliberate divider
+   whether it's currently stuck or not (no reliable cross-browser "is this
+   sticky element actually stuck right now" CSS selector to only add it
+   once scrolled). */
 .player-modal-header {
   display: flex; align-items: center; gap: 12px; padding-right: 36px;
   position: sticky; top: 0; z-index: 5; background: var(--card);
-  margin: -20px -20px 4px; padding: 20px 36px 10px 20px; border-bottom: 1px solid var(--border);
+  margin-bottom: 4px; padding-bottom: 10px; border-bottom: 1px solid var(--border);
 }
+/* The close button, moved into this header (see openPlayerModal) so it's
+   genuinely part of the frozen section instead of a separate absolutely-
+   positioned sibling that the header's own solid background then hid -
+   :has() scopes this to ONLY that case (a direct-child .modal-close),
+   leaving the compare view's own headers (which never get this move)
+   on the base .modal-close rule/this header's own padding-right above. */
+.player-modal-header:has(> .modal-close) { padding-right: 4px; }
+/* margin-left:auto (not a fixed value) so this stays flush at the row's
+   right edge whether or not .compare-btn is also present/in-flow next to
+   it. align-self:flex-start (not the row's own default align-items:
+   center, which both buttons used to inherit) pulls both it and
+   .compare-btn up to the row's own top edge - closer to the modal's real
+   top-right corner, the way the close button used to sit before it moved
+   into this header, rather than vertically centered against the (taller)
+   photo next to them. */
+.player-modal-header > .modal-close { position: static; margin-left: auto; align-self: flex-start; }
+.player-modal-header > .compare-btn { align-self: flex-start; }
 .player-modal-header h2 { margin: 0; }
 .player-modal-header p { margin: 2px 0 0; }
 .player-photo-lg { width: 56px; height: 56px; min-width: 56px; border-radius: 50%; object-fit: cover; background: color-mix(in srgb, var(--ink-500) 12%, transparent); }
@@ -1062,13 +1087,16 @@ details[open] summary { margin-bottom: 8px; }
 
 /* Compact stat summary at the top of the player modal - a grid of tiles
    instead of a narrow label/value column, so it uses the modal's full width.
-   max-content (not 1fr) so the tiles size to their own short contents rather
-   than stretching to split the modal's full width between them on a wide
-   screen - see the conversation this was built from (only 2 tiles here, so
-   1fr made each one absurdly wide with a couple of short lines in it). */
+   Exactly 3 equal columns (Ranks/Schedule/Value - always this same count,
+   see playermodal.js), not auto-fit, so all 3 stay on one line even on a
+   narrow phone instead of wrapping to 2+1 - see the conversation this was
+   built from. minmax(0, 1fr), not plain 1fr, so a column can still shrink
+   below its own content's min-content width rather than forcing the whole
+   grid (and the modal) wider than the viewport - same reasoning as
+   .compare-grid's own minmax(0, 1fr). */
 .player-stat-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, max-content));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin: 12px 0;
 }
@@ -1076,9 +1104,15 @@ details[open] summary { margin-bottom: 8px; }
   background: color-mix(in srgb, var(--ink-500) 8%, transparent);
   border-radius: 8px;
   padding: 8px 12px;
+  text-align: center;
 }
 .stat-tile .stat-label { font-size: 11px; color: var(--ink-500); text-transform: uppercase; letter-spacing: 0.03em; }
 .stat-tile .stat-value { font-size: 17px; font-weight: 600; margin-top: 2px; }
+/* Ranks/Schedule tiles' own two-value rows (see .faab-method-values) -
+   centered here specifically, not on that class itself, so FAAB Lab's own
+   Comp-based/Regression cards (which reuse the same class) stay left-
+   aligned, unaffected. */
+.stat-tile .faab-method-values { justify-content: center; }
 
 /* FAAB Lab's per-method cards (Comp-based / Regression) - same tile look as
    .stat-tile above. Comp-based carries THREE numbers (MED/AVG price + one
@@ -1194,22 +1228,17 @@ details[open] summary { margin-bottom: 8px; }
 @media (max-width: 700px) {
   .modal-tab-btn { padding: 8px 10px; font-size: 12px; }
   .modal-overlay-wide .modal-box { max-width: 100%; padding: 14px; }
-  /* +Compare stays in its original top-right corner position (unlike an
-     earlier version of this rule, which moved it below the header entirely
-     - see the conversation this was built from) - shrinking the label down
-     to just "+" (.compare-btn-label hidden below) is enough on its own to
-     stop it colliding with the player name/owner/rank/bye line, without
-     needing to relocate it. padding-right on the header goes back to 0 -
-     nothing left in the flex row needs clearance from the corner. */
-  /* The sticky header's own margin/padding (see the base rule) hardcodes
-     -20px/20px to match .modal-box's DESKTOP padding exactly, so its
-     background reaches the box's real edges with no gap - .modal-box's own
-     padding drops to 14px on mobile (see its own max-width:700px rule
-     above), so this has to follow it down to the same value or the
-     header's background would overshoot the box on the left/right and
-     undershoot (leave a sliver) on top. */
-  .player-modal-header { padding-right: 0; margin: -14px -14px 4px; padding-top: 14px; padding-left: 14px; }
-  .compare-btn { position: absolute; top: 40px; right: 12px; margin-left: 0; }
+  /* +Compare stays a normal in-flow flex item here too (no more position:
+     absolute + a guessed top offset - an earlier version of this rule did
+     that and its own bottom edge ended up intersecting the frozen header's
+     own border-bottom, since the guessed offset didn't account for the
+     header's real height on every screen - see the conversation this was
+     built from). Shrinking the label down to just "+" (.compare-btn-label
+     hidden below) is what actually makes this safe to leave in-flow next
+     to the close button - two icon-sized buttons comfortably fit beside
+     the player name even on a narrow phone, which "+ Compare"'s full text
+     never did. */
+  .player-modal-header { padding-right: 0; }
   .compare-btn-label { display: none; }
   .compare-toggle { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
   .compare-side-btn {
