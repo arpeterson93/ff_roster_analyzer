@@ -211,6 +211,31 @@ FEATURE_NAMES = [
     "had_target_share_prior_week",
 ]
 
+# Deliberately NOT the 3 share features (+ their had_ flags) above - kept
+# for the REGRESSION path (FEATURE_NAMES, unchanged) and for display (every
+# comp still shows its own real snap/carry/target share), but dropped from
+# the k-NN's OWN distance metric. In high-dimensional standardized-distance
+# space, three more real-valued dimensions on top of trailing_2_3_avg_
+# points/season_avg_points/weekly_rank/ros_rank (which already capture most
+# of the same "how used is this guy" signal) mostly just spread every
+# distance out further, shrinking the adaptive per-position cutoff's real
+# candidate pool - confirmed via a held-out ablation AND a live case (see
+# the conversation this was built from): Ollie Gordon II's actual 2026 wk4
+# query against the real pooled table found ZERO real price comps within
+# cutoff on the full feature set (forced back to a single 1.575-distance
+# fallback neighbor) vs. 4 real comps within a MUCH tighter 0.593 nearest
+# distance once these 3 were dropped from the distance metric alone.
+KNN_FEATURE_NAMES = [
+    f
+    for f in FEATURE_NAMES
+    if f
+    not in {
+        "snap_pct_prior_week", "had_snap_pct_prior_week",
+        "carry_share_prior_week", "had_carry_share_prior_week",
+        "target_share_prior_week", "had_target_share_prior_week",
+    }
+]
+
 # Missing-rank sentinel (see feature_vector) - a real FantasyPros ECR rank
 # NUMBER (see tools/faab_history/build_training_table.py's forward_rank_
 # features for why NOT a percentile: the ranked population depth varies up
@@ -1218,14 +1243,22 @@ def target_pct(r: dict) -> float:
 # ---------------------------------------------------------------------------
 # Shared: standardized-distance helpers
 # ---------------------------------------------------------------------------
-def _feature_stats(rows: list[dict]) -> dict[str, tuple[float, float]]:
+def _feature_stats(rows: list[dict], feature_names: list[str] = KNN_FEATURE_NAMES) -> dict[str, tuple[float, float]]:
     """mean/std per feature, POOLED across positions - only used to scale
     distances so no one feature dominates just from bigger raw units. Fit
     on interest_rows (the larger, full pool) so both stages' k-NN searches
     share one standardized space, even though the price search draws its
-    actual neighbors from the smaller won-only pool."""
+    actual neighbors from the smaller won-only pool.
+
+    feature_names defaults to KNN_FEATURE_NAMES (this function's usual
+    callers are the k-NN distance/cutoff machinery below) - fit_interest_
+    regression is the one exception, passing FEATURE_NAMES explicitly
+    since the regression path keeps the share features. _knn/_position_
+    distance_cutoffs never need to know which list produced their `stats`
+    dict - they iterate its own keys (see below), so whichever list was
+    passed here is what they search in."""
     stats = {}
-    for f in FEATURE_NAMES:
+    for f in feature_names:
         vals = np.array([feature_vector(r)[f] for r in rows])
         stats[f] = (vals.mean(), vals.std() or 1.0)
     return stats
@@ -1265,8 +1298,11 @@ def _knn(
     same_pos = [r for r in pool if r["position"] == query["position"]]
 
     def vec(r):
+        # Iterates stats' OWN keys, not the module-level FEATURE_NAMES - so
+        # this naturally searches in whichever feature space `stats` was
+        # actually fit in (see _feature_stats).
         fv = feature_vector(r)
-        return np.array([(fv[f] - stats[f][0]) / stats[f][1] for f in FEATURE_NAMES])
+        return np.array([(fv[f] - stats[f][0]) / stats[f][1] for f in stats])
 
     qv = vec(query)
     all_dists = [float(np.linalg.norm(vec(r) - qv)) for r in same_pos]
@@ -1340,8 +1376,9 @@ def _position_distance_cutoffs(
         by_pos[r["position"]].append(r)
 
     def vec(r):
+        # Same "iterate stats' own keys" reasoning as _knn's own vec.
         fv = feature_vector(r)
-        return np.array([(fv[f] - stats[f][0]) / stats[f][1] for f in FEATURE_NAMES])
+        return np.array([(fv[f] - stats[f][0]) / stats[f][1] for f in stats])
 
     rng = np.random.RandomState(seed)
     cutoffs = {}
@@ -1988,17 +2025,19 @@ def fit_interest_regression(interest_rows: list[dict], max_iter: int = 25, l2: f
     contested auction doesn't outweigh a lightly-contested one just by row
     count.
 
-    Standardized (same mean/std _feature_stats the k-NN searches use) and
-    L2-ridge-penalized (lambda=1, intercept excluded) - plain unpenalized
-    Newton-Raphson on RAW-scale features diverged here (coefficients like
-    -23.87 on a single binary flag), a classic (quasi-)separation symptom
-    given this pool's ~9% positive rate. Standardizing first makes one
-    ridge strength meaningful across differently-scaled features; the
-    ridge itself keeps the fit well-behaved without materially changing
-    what it predicts. Returns (coefs in STANDARDIZED-feature units, the
-    feature stats needed to standardize a query the same way at predict
-    time - see regression_estimate)."""
-    stats = _feature_stats(interest_rows)
+    Standardized (own mean/std via _feature_stats, same helper the k-NN
+    searches use but over FEATURE_NAMES - the full set, shares included -
+    not the k-NN's own reduced KNN_FEATURE_NAMES default; see that
+    function) and L2-ridge-penalized (lambda=1, intercept excluded) - plain
+    unpenalized Newton-Raphson on RAW-scale features diverged here
+    (coefficients like -23.87 on a single binary flag), a classic
+    (quasi-)separation symptom given this pool's ~9% positive rate.
+    Standardizing first makes one ridge strength meaningful across
+    differently-scaled features; the ridge itself keeps the fit well-
+    behaved without materially changing what it predicts. Returns (coefs
+    in STANDARDIZED-feature units, the feature stats needed to standardize
+    a query the same way at predict time - see regression_estimate)."""
+    stats = _feature_stats(interest_rows, FEATURE_NAMES)
 
     def std_row(r):
         fv = feature_vector(r)

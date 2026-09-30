@@ -53,6 +53,7 @@ import numpy as np
 
 from engine.faab_estimate import (
     FEATURE_NAMES,
+    KNN_FEATURE_NAMES,
     POSITIONS,
     TRAINING_TABLE_PATH,
     add_synthetic_price_wins,
@@ -145,8 +146,10 @@ def stratified_split(
 
 def build_position_matrix(rows: list[dict]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """(standardized feature matrix, mean, std) for one position's pool rows,
-    in the same row order as `rows`."""
-    raw = np.array([[feature_vector(r)[f] for f in FEATURE_NAMES] for r in rows])
+    in the same row order as `rows`. KNN_FEATURE_NAMES (not the full
+    FEATURE_NAMES the regression fits use below) - matches production's own
+    k-NN/regression split, see engine.faab_estimate.KNN_FEATURE_NAMES."""
+    raw = np.array([[feature_vector(r)[f] for f in KNN_FEATURE_NAMES] for r in rows])
     mean = raw.mean(axis=0)
     std = raw.std(axis=0)
     std[std == 0] = 1.0
@@ -299,7 +302,7 @@ def main():
         mat, mean, std, targets = pool["matrix"].get(pos), pool["mean"].get(pos), pool["std"].get(pos), pool["targets"].get(pos)
         if mat is None or len(mat) == 0:
             return 0.0
-        qv = (np.array([q_fv[f] for f in FEATURE_NAMES]) - mean) / std
+        qv = (np.array([q_fv[f] for f in KNN_FEATURE_NAMES]) - mean) / std
         dists = np.linalg.norm(mat - qv, axis=1)
         nearest_idx = np.argsort(dists)[:K]
         weights = 1.0 / (dists[nearest_idx] + 0.05)
