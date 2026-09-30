@@ -211,20 +211,39 @@ FEATURE_NAMES = [
     "had_target_share_prior_week",
 ]
 
-# Deliberately NOT the 3 share features (+ their had_ flags) above - kept
-# for the REGRESSION path (FEATURE_NAMES, unchanged) and for display (every
-# comp still shows its own real snap/carry/target share), but dropped from
-# the k-NN's OWN distance metric. In high-dimensional standardized-distance
-# space, three more real-valued dimensions on top of trailing_2_3_avg_
-# points/season_avg_points/weekly_rank/ros_rank (which already capture most
-# of the same "how used is this guy" signal) mostly just spread every
-# distance out further, shrinking the adaptive per-position cutoff's real
-# candidate pool - confirmed via a held-out ablation AND a live case (see
-# the conversation this was built from): Ollie Gordon II's actual 2026 wk4
-# query against the real pooled table found ZERO real price comps within
-# cutoff on the full feature set (forced back to a single 1.575-distance
-# fallback neighbor) vs. 4 real comps within a MUCH tighter 0.593 nearest
-# distance once these 3 were dropped from the distance metric alone.
+# Deliberately NOT the 3 share features (+ their had_ flags) above, or
+# trailing_2_3_avg_points (+ its had_ flag) - all kept for the REGRESSION
+# path (FEATURE_NAMES, unchanged) and for display (every comp still shows
+# its own real snap/carry/target share), but dropped from the k-NN's OWN
+# distance metric:
+#
+# - snap/carry/target share: in high-dimensional standardized-distance
+#   space, three more real-valued dimensions on top of trailing_2_3_avg_
+#   points/season_avg_points/weekly_rank/ros_rank (which already capture
+#   most of the same "how used is this guy" signal) mostly just spread
+#   every distance out further, shrinking the adaptive per-position
+#   cutoff's real candidate pool - confirmed via a held-out ablation AND a
+#   live case (see the conversation this was built from): Ollie Gordon
+#   II's actual 2026 wk4 query against the real pooled table found ZERO
+#   real price comps within cutoff on the full feature set (forced back to
+#   a single 1.575-distance fallback neighbor) vs. 4 real comps within a
+#   MUCH tighter 0.593 nearest distance once these 3 were dropped from the
+#   distance metric alone. A weighted-distance middle ground (these 3 back
+#   in at a partial 0.35 weight rather than a binary in/out) was ALSO
+#   tested and made things worse on every measure - not "too strong at
+#   full weight," just not adding real signal at any weight once
+#   season_avg_points/prior_week_actual_points/rank are already in the mix.
+#
+# - trailing_2_3_avg_points: redundant with season_avg_points and
+#   prior_week_actual_points (three different "how much has he scored
+#   recently" windows all in the k-NN at once) - a held-out ablation
+#   against the real pooled table showed dropping it improves held-out
+#   comp-based MAE/bias in EVERY bucket tested (all rows, won, no_bid, RB,
+#   WR, TE), never worse anywhere, even though a same-position-only
+#   neighbor-spacing diagnostic alone had given a genuinely mixed read
+#   (broadly tighter typical spacing, but fewer real comps for Ollie
+#   Gordon II's own specific query) - the real held-out accuracy test is
+#   what settled it.
 KNN_FEATURE_NAMES = [
     f
     for f in FEATURE_NAMES
@@ -233,6 +252,7 @@ KNN_FEATURE_NAMES = [
         "snap_pct_prior_week", "had_snap_pct_prior_week",
         "carry_share_prior_week", "had_carry_share_prior_week",
         "target_share_prior_week", "had_target_share_prior_week",
+        "trailing_2_3_avg_points", "had_trailing_2_3_avg_points",
     }
 ]
 
