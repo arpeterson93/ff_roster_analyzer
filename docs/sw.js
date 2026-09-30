@@ -6,10 +6,16 @@
 // network first and only fall back to whatever's cached if that fails
 // (offline), which degrades to "last known good" instead of a blank page.
 //
-// Bump CACHE_NAME on any app-shell file rename/add/remove - activate()
-// deletes every other cache name, so this is also how old shells get
-// cleaned up after a deploy.
-const CACHE_NAME = "stackademics-shell-v3";
+// Bump CACHE_NAME on ANY app-shell change - a rename/add/remove, but
+// ALSO a plain content edit to an existing file (the fetch handler below
+// is cache-first with no revalidation, so an already-cached file is
+// served forever otherwise, even after a fresh deploy - confirmed live:
+// two real player-modal fixes shipped and built successfully but never
+// reached an already-visited phone because this wasn't bumped again after
+// the last v2->v3 bump, which predated those edits - see the conversation
+// this was built from). activate() deletes every other cache name, so
+// this is also how old shells get cleaned up after a deploy.
+const CACHE_NAME = "stackademics-shell-v4";
 
 const APP_SHELL = [
   "./",
