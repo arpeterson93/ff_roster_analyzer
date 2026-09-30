@@ -191,6 +191,15 @@ function overviewColumns(data) {
         // search for this player (see engine/pipeline.py's is_relevant) -
         // its 0.0 is a hard gate, not a computed estimate.
         if (est.below_relevance_threshold) return `<span class="muted" title="Not enough recent usage to model - see FAAB Lab tab">–</span>`;
+        // unranked: FantasyPros ranks him at NEITHER horizon (weekly nor
+        // ROS) - no real expert read to model against at all.
+        if (est.unranked) return `<span class="muted" title="Not ranked weekly or rest-of-season - no real expert read to model against">–</span>`;
+        // single_backing_flag: the WHOLE comp set behind this estimate,
+        // however many rows, still traces back to just one real (league,
+        // player, week) bid (see engine.pipeline._price_comps_are_single_
+        // observation) - one anecdote wearing a k-NN's clothes, not real
+        // precedent, so it's masked rather than shown as if it were.
+        if (est.single_backing_flag) return `<span class="muted" title="Estimate rests on a single real historical bid - too thin to trust, see FAAB Lab tab">–</span>`;
         // % of effective starting budget IF contested (comp-based MEDIAN
         // method) - not blended with P(bid) (that's the separate INT
         // column below), and not a $ amount.
@@ -211,6 +220,12 @@ function overviewColumns(data) {
           return `<span class="faab-live" title="No other pooled league had any activity on this player this week">0%</span>`;
         }
         if (est.below_relevance_threshold) return `<span class="muted" title="Not enough recent usage to model - see FAAB Lab tab">–</span>`;
+        if (est.unranked) return `<span class="muted" title="Not ranked weekly or rest-of-season - no real expert read to model against">–</span>`;
+        // single_backing_flag is specifically about the PRICE comps (see
+        // engine.pipeline._price_comps_are_single_observation) - INT draws
+        // from the separate, much larger interest-comp pool, which can be
+        // perfectly well-backed even when the price side is this thin, so
+        // it's deliberately NOT masked here too (see FAAB Est. above).
         const pct = (est.bid_probability || {}).comp_based_median;
         return `${fmt(pct * 100, 0)}%`;
       },

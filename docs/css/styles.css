@@ -195,7 +195,26 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
    (top:10px/right:12px, ~30px wide) - without it .compare-btn's own
    margin-left:auto pushes it flush against the modal's right edge, directly
    under the X. */
-.player-modal-header { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; padding-right: 36px; }
+/* Frozen while the rest of the modal scrolls - .modal-overlay (not
+   .modal-box) is the real scrolling ancestor (see its own overflow-y:auto),
+   so position:sticky here sticks relative to IT, not to this header's
+   immediate parent. top:0 (not a small offset) sticks it flush to that
+   scrollport's own top edge (which already has its own padding: 5vh 16px -
+   see .modal-overlay - so it doesn't end up flush against the real browser
+   edge). Needs its own solid background (this section sits ABOVE
+   everything else that scrolls underneath it once stuck, including
+   .player-stat-grid/the comp tables) and a z-index above ordinary content;
+   negative left/right/top margins + matching padding pull it out to
+   .modal-box's own edges so the background doesn't leave a sliver of
+   scrolled content visible around its sides, and the bottom border reads
+   as a deliberate divider whether it's currently stuck or not (no reliable
+   cross-browser "is this sticky element actually stuck right now" CSS
+   selector to only add it once scrolled). */
+.player-modal-header {
+  display: flex; align-items: center; gap: 12px; padding-right: 36px;
+  position: sticky; top: 0; z-index: 5; background: var(--card);
+  margin: -20px -20px 4px; padding: 20px 36px 10px 20px; border-bottom: 1px solid var(--border);
+}
 .player-modal-header h2 { margin: 0; }
 .player-modal-header p { margin: 2px 0 0; }
 .player-photo-lg { width: 56px; height: 56px; min-width: 56px; border-radius: 50%; object-fit: cover; background: color-mix(in srgb, var(--ink-500) 12%, transparent); }
@@ -1175,15 +1194,23 @@ details[open] summary { margin-bottom: 8px; }
 @media (max-width: 700px) {
   .modal-tab-btn { padding: 8px 10px; font-size: 12px; }
   .modal-overlay-wide .modal-box { max-width: 100%; padding: 14px; }
-  /* +Compare pulled out of the header's flex row and stacked under the
-     close X instead - inline (with margin-left:auto competing against the
-     photo+name for the same row) forced the player's name to wrap on a
-     narrow screen, which it never used to do before this button existed.
-     Absolute, not a flex child, so it no longer takes width away from the
-     name at all; padding-right on the header goes back to 0 for the same
-     reason (nothing left in the flex row needs clearance from the corner). */
-  .player-modal-header { padding-right: 0; }
+  /* +Compare stays in its original top-right corner position (unlike an
+     earlier version of this rule, which moved it below the header entirely
+     - see the conversation this was built from) - shrinking the label down
+     to just "+" (.compare-btn-label hidden below) is enough on its own to
+     stop it colliding with the player name/owner/rank/bye line, without
+     needing to relocate it. padding-right on the header goes back to 0 -
+     nothing left in the flex row needs clearance from the corner. */
+  /* The sticky header's own margin/padding (see the base rule) hardcodes
+     -20px/20px to match .modal-box's DESKTOP padding exactly, so its
+     background reaches the box's real edges with no gap - .modal-box's own
+     padding drops to 14px on mobile (see its own max-width:700px rule
+     above), so this has to follow it down to the same value or the
+     header's background would overshoot the box on the left/right and
+     undershoot (leave a sliver) on top. */
+  .player-modal-header { padding-right: 0; margin: -14px -14px 4px; padding-top: 14px; padding-left: 14px; }
   .compare-btn { position: absolute; top: 40px; right: 12px; margin-left: 0; }
+  .compare-btn-label { display: none; }
   .compare-toggle { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
   .compare-side-btn {
     flex: 1; border: none; background: transparent; color: var(--ink-500); padding: 8px 6px; font-size: 12.5px;

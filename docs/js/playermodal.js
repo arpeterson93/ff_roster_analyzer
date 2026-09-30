@@ -573,6 +573,15 @@ function faabEstimateSection(player, data) {
       ${teamInterestSection(est.team_interest, data)}
     `;
   }
+  // unranked: FantasyPros ranks him at neither horizon (weekly nor ROS) -
+  // see engine/pipeline.py's own gate, right next to is_relevant's.
+  if (est.unranked) {
+    return `
+      <div class="bar-row"><div class="bar-label">Estimate</div><div class="bar-value">–</div></div>
+      <p class="muted small">Not ranked weekly OR rest-of-season by FantasyPros - no real expert read at any horizon to model against, so this is left blank rather than extrapolated from recent stats alone.</p>
+      ${teamInterestSection(est.team_interest, data)}
+    `;
+  }
   // o_league_detail is only set when this comp is a cross-league
   // consolidated event (see engine/faab_estimate.py's
   // consolidate_cross_league_events) that The O League itself was also
@@ -832,12 +841,22 @@ function faabEstimateSection(player, data) {
   // of the three separate cards this used to be) is also what makes room
   // for Regression to sit on the same line as Comp-based on a narrow/mobile
   // viewport.
+  // single_backing_flag (see engine.pipeline._price_comps_are_single_
+  // observation): the comp-based PRICE read, however many comp rows are
+  // shown below, still traces back to just one real (league, player,
+  // week) bid - one anecdote, not real precedent - so MED/AVG are masked
+  // here specifically. INT is untouched: it draws from the separate,
+  // much larger interest-comp pool and can be well-backed regardless.
+  // Regression is untouched too - it never depended on this comp set at
+  // all. The comps table below still renders normally either way, so a
+  // reader can see exactly which single bid this would have rested on.
+  const priceThin = !!est.single_backing_flag;
   const compBasedCard = `
     <div class="faab-method-card">
       <div class="faab-method-label">Comp-based</div>
       <div class="faab-method-values faab-method-values-triple">
-        <div class="faab-method-value"><span class="faab-method-num">${pctOrDash(condPriceByMethod.comp_based_median, 1)}</span><span class="faab-method-sub">MED</span></div>
-        <div class="faab-method-value"><span class="faab-method-num">${pctOrDash(condPriceByMethod.comp_based_mean, 1)}</span><span class="faab-method-sub">AVG</span></div>
+        <div class="faab-method-value"><span class="faab-method-num" ${priceThin ? 'title="Rests on a single real historical bid - too thin to trust"' : ""}>${priceThin ? "–" : pctOrDash(condPriceByMethod.comp_based_median, 1)}</span><span class="faab-method-sub">MED</span></div>
+        <div class="faab-method-value"><span class="faab-method-num" ${priceThin ? 'title="Rests on a single real historical bid - too thin to trust"' : ""}>${priceThin ? "–" : pctOrDash(condPriceByMethod.comp_based_mean, 1)}</span><span class="faab-method-sub">AVG</span></div>
         <div class="faab-method-value"><span class="faab-method-num">${pctOrDash(bidProb.comp_based_median, 0)}</span><span class="faab-method-sub">INT</span></div>
       </div>
     </div>
@@ -926,8 +945,6 @@ function faabEstimateSection(player, data) {
     <div class="faab-method-grid">${methodCards}</div>
     ${distHtml}
 
-    ${teamInterestSection(est.team_interest, data)}
-
     ${thisPlayerSection}
 
     ${sameWeekDistHtml}
@@ -937,6 +954,8 @@ function faabEstimateSection(player, data) {
 
     <h3>Interest comps</h3>
     <div class="table-wrap"><table><thead><tr><th title="This comp's share of the total weight behind the weighted-average bid_probability above - every comp's weight sums to 100%. Derived from 1/(distance+0.05), so a closer comp counts for more. Comps are already listed highest-weight-first.">Weight</th><th>Player</th><th title="Of the leagues we have real data for this exact player/week (a real bid, or roster data confirming he was a genuine free agent there), how many actually saw a bid - not weighted, one binary count per league.">Leagues bid</th><th>Recent pts</th><th>USAGE %</th><th>Rank</th><th>Flags</th></tr></thead><tbody>${interestComps || `<tr><td colspan="7" class="muted small">No comparable situations found.</td></tr>`}</tbody></table></div>
+
+    ${teamInterestSection(est.team_interest, data)}
   `;
 }
 
@@ -1060,15 +1079,25 @@ function playerModalContentHtml(player, data, { showCompareTrigger = true } = {}
       ${playerPhotoHtml(player, "player-photo-lg")}
       <div>
         <h2><span class="pos-tag" style="background:${color}">${player.position}</span> ${escapeHtml(player.name)} <span class="muted small">${escapeHtml(player.nfl_team || "")}</span></h2>
-        <p class="muted small">${team ? escapeHtml(teamLabel(team)) : "Free agent"} · ROS rank ${player.ros_pos_rank ?? "–"} · Bye ${player.bye ?? "–"}</p>
+        <p class="muted small">${team ? escapeHtml(teamLabel(team)) : "Free agent"} · Bye ${player.bye ?? "–"}</p>
       </div>
-      ${showCompareTrigger ? `<button class="compare-btn" type="button" data-compare-trigger>+ Compare</button>` : ""}
+      ${showCompareTrigger ? `<button class="compare-btn" type="button" data-compare-trigger title="Compare"><span aria-hidden="true">+</span><span class="compare-btn-label"> Compare</span></button>` : ""}
     </div>
     ${showCompareTrigger ? compareSearchHtml() : ""}
     <div class="player-stat-grid">
       <div class="stat-tile">
-        <div class="stat-label">Reg / Playoff sched</div>
-        <div class="stat-value">${scheduleRankPillHtml(player.reg_schedule_rank, player.reg_schedule_index, "Regular season")} / ${scheduleRankPillHtml(player.playoff_schedule_rank, player.playoff_schedule_index, "Fantasy playoff")}</div>
+        <div class="stat-label">Ranks</div>
+        <div class="faab-method-values">
+          <div class="faab-method-value"><span class="faab-method-num">${player.ros_pos_rank ?? "–"}</span><span class="faab-method-sub">ROS</span></div>
+          <div class="faab-method-value"><span class="faab-method-num">${player.week_pos_rank ?? "–"}</span><span class="faab-method-sub">Weekly</span></div>
+        </div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-label">Schedule</div>
+        <div class="faab-method-values">
+          <div class="faab-method-value"><span class="faab-method-num">${scheduleRankPillHtml(player.reg_schedule_rank, player.reg_schedule_index, "Regular season")}</span><span class="faab-method-sub">Reg</span></div>
+          <div class="faab-method-value"><span class="faab-method-num">${scheduleRankPillHtml(player.playoff_schedule_rank, player.playoff_schedule_index, "Fantasy playoff")}</span><span class="faab-method-sub">Playoff</span></div>
+        </div>
       </div>
       <div class="stat-tile"><div class="stat-label">Value</div><div class="stat-value">${player.value_delta === undefined || player.value_delta === null ? "–" : fmt(player.value_delta, 1)}</div></div>
     </div>
