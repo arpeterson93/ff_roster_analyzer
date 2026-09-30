@@ -222,11 +222,21 @@ function symmetricLineupHtml(homeTeamId, awayTeamId, week, data) {
   `;
 }
 
-function matchupRow(m, data, expandedKey, yourTeamId, avg, spread) {
+// showWeek: the single-team filtered view (see renderSchedule) has exactly
+// one row per week for that team, so a per-week "Week N" divider row (the
+// all-teams view's own grouping - see draw()) would be redundant scaffolding
+// around a single row; a leading WK cell on the row itself carries the same
+// information without the extra row, matching how a real season schedule
+// table reads for one team.
+function matchupRow(m, data, expandedKey, yourTeamId, avg, spread, showWeek) {
   const home = data.teamsById.get(m.home_team_id);
   const away = data.teamsById.get(m.away_team_id);
   const key = `${m.week}-${m.home_team_id}-${m.away_team_id}`;
   const isYours = m.home_team_id === yourTeamId || m.away_team_id === yourTeamId;
+  const colspan = showWeek ? 5 : 4;
+  const weekCell = showWeek
+    ? `<td class="schedule-cell small muted">${m.week}${m.week === data.meta.current_week ? " (current)" : ""}${m.live ? " (live)" : ""}</td>`
+    : "";
 
   const homeScore = scoreOf(m, "home", data);
   const awayScore = scoreOf(m, "away", data);
@@ -266,14 +276,15 @@ function matchupRow(m, data, expandedKey, yourTeamId, avg, spread) {
   const expanded = expandedKey === key;
   return `
     <tr class="clickable-row schedule-row ${isYours ? "your-team-row" : ""}" data-key="${key}">
+      ${weekCell}
       <td class="schedule-cell">${escapeHtml(teamLabel(home) || m.home_team_id)}${winPct(m.home_win_pct)}</td>
       <td class="schedule-cell small">${scoreCell(homeScore)}</td>
       <td class="schedule-cell small">${scoreCell(awayScore)}</td>
       <td class="schedule-cell">${escapeHtml(teamLabel(away) || m.away_team_id)}${winPct(m.away_win_pct)}</td>
     </tr>
-    ${m.home_win_pct !== null && m.home_win_pct !== undefined ? `<tr class="winprob-row"><td colspan="4">${winProbBar(m.home_win_pct, m.away_win_pct)}</td></tr>` : ""}
+    ${m.home_win_pct !== null && m.home_win_pct !== undefined ? `<tr class="winprob-row"><td colspan="${colspan}">${winProbBar(m.home_win_pct, m.away_win_pct)}</td></tr>` : ""}
     ${expanded
-      ? `<tr><td colspan="4">
+      ? `<tr><td colspan="${colspan}">
           <div class="lineup-symmetric-heading">
             <h3 class="small">${escapeHtml(teamLabel(home))}</h3>
             <h3 class="small">${escapeHtml(teamLabel(away))}</h3>
@@ -285,7 +296,7 @@ function matchupRow(m, data, expandedKey, yourTeamId, avg, spread) {
 }
 
 export function renderSchedule(container, data, slug) {
-  const state = { expandedKey: null };
+  const state = { expandedKey: null, teamFilter: "ALL" };
   const weeks = [...new Set((data.schedule || []).map((m) => m.week))].sort((a, b) => a - b);
   const yourTeamId = getYourTeam(slug);
 
@@ -302,33 +313,63 @@ export function renderSchedule(container, data, slug) {
   const spread = allScores.length ? Math.max(...allScores.map((v) => Math.abs(v - avg)), 1) : 1;
 
   function draw() {
-    // One shared table for every week (not a separate table per week) with
-    // fixed column widths, so the home/score/away columns land in the same
-    // horizontal position throughout - team-name length can't stagger them.
-    const rows = weeks
-      .map((w) => {
-        const weekMatchups = data.schedule.filter((m) => m.week === w);
-        const allProjected = weekMatchups.length > 0 && weekMatchups.every((m) => !m.played);
-        const anyLive = weekMatchups.some((m) => m.live);
-        const statusLabel = anyLive ? " (live)" : allProjected ? " - Projected" : "";
-        const weekHeader = `<tr class="week-divider"><td colspan="4">Week ${w}${w === data.meta.current_week ? " (current)" : ""}${statusLabel}</td></tr>`;
-        const matchups = weekMatchups.map((m) => matchupRow(m, data, state.expandedKey, yourTeamId, avg, spread)).join("");
-        return weekHeader + matchups;
-      })
+    const teamFilter = state.teamFilter && state.teamFilter !== "ALL" ? Number(state.teamFilter) : null;
+
+    // Filtered to one team: every week has exactly one matchup for them, so
+    // a per-week divider row would just be scaffolding around a single row -
+    // one flat table instead, a leading WK cell per row (see matchupRow's
+    // showWeek) standing in for the divider's own week label.
+    const rows = teamFilter
+      ? data.schedule
+          .filter((m) => m.home_team_id === teamFilter || m.away_team_id === teamFilter)
+          .slice()
+          .sort((a, b) => a.week - b.week)
+          .map((m) => matchupRow(m, data, state.expandedKey, yourTeamId, avg, spread, true))
+          .join("")
+      : // One shared table for every week (not a separate table per week) with
+        // fixed column widths, so the home/score/away columns land in the same
+        // horizontal position throughout - team-name length can't stagger them.
+        weeks
+          .map((w) => {
+            const weekMatchups = data.schedule.filter((m) => m.week === w);
+            const allProjected = weekMatchups.length > 0 && weekMatchups.every((m) => !m.played);
+            const anyLive = weekMatchups.some((m) => m.live);
+            const statusLabel = anyLive ? " (live)" : allProjected ? " - Projected" : "";
+            const weekHeader = `<tr class="week-divider"><td colspan="4">Week ${w}${w === data.meta.current_week ? " (current)" : ""}${statusLabel}</td></tr>`;
+            const matchups = weekMatchups.map((m) => matchupRow(m, data, state.expandedKey, yourTeamId, avg, spread, false)).join("");
+            return weekHeader + matchups;
+          })
+          .join("");
+
+    const teamOptions = data.teams
+      .slice()
+      .sort((a, b) => teamLabel(a).localeCompare(teamLabel(b)))
+      .map((t) => `<option value="${t.team_id}" ${teamFilter === t.team_id ? "selected" : ""}>${escapeHtml(teamLabel(t))}</option>`)
       .join("");
 
     container.innerHTML = `
       <div class="card">
         <h2>Schedule</h2>
         <p class="muted small">Click a matchup to see each team's lineup that week - the actual ESPN-set starters for played weeks, optimal projected lineups for the current/future weeks.</p>
+        <div class="select-row">
+          <label>Team:</label>
+          <select id="schedule-team-filter"><option value="ALL">All teams</option>${teamOptions}</select>
+        </div>
         <div class="table-wrap">
           <table class="schedule-table">
-            <colgroup><col style="width:32%"><col style="width:18%"><col style="width:18%"><col style="width:32%"></colgroup>
+            ${teamFilter
+              ? `<colgroup><col style="width:10%"><col style="width:27%"><col style="width:17%"><col style="width:17%"><col style="width:27%"></colgroup>`
+              : `<colgroup><col style="width:32%"><col style="width:18%"><col style="width:18%"><col style="width:32%"></colgroup>`}
             <tbody>${rows}</tbody>
           </table>
         </div>
       </div>
     `;
+
+    container.querySelector("#schedule-team-filter").addEventListener("change", (e) => {
+      state.teamFilter = e.target.value;
+      draw();
+    });
 
     container.querySelectorAll("tr.schedule-row").forEach((row) => {
       row.addEventListener("click", () => {

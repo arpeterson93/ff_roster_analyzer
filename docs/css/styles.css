@@ -64,6 +64,14 @@ body {
   z-index: 100;
 }
 
+/* Plain end-of-page flow (not fixed/sticky) - it reads as the page's own
+   footer, not a floating bar permanently covering content underneath every
+   tab. Centered per-update-type shorthand (Full/Refresh/Live/FAAB - see
+   app.js's renderHeader), replacing the single "Updated ..." line that used
+   to live in the header next to Week #. */
+.app-footer { padding: 16px; text-align: center; }
+.footer-updates { color: var(--ink-500); font-size: 12px; }
+
 .app-brand { display: flex; align-items: center; gap: 8px; }
 .app-logo { width: 24px; height: 24px; border-radius: 6px; }
 .app-name { font-weight: 700; font-size: 15px; color: var(--ink-900); white-space: nowrap; }
@@ -76,13 +84,6 @@ header.app-header {
   padding: 12px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--card);
-}
-
-.header-meta {
-  color: var(--ink-500);
-  font-size: 12px;
-  margin-left: auto;
-  text-align: right;
 }
 
 select#league-select {
@@ -901,7 +902,23 @@ details[open] summary { margin-bottom: 8px; }
   display: flex;
   align-items: flex-start;
   justify-content: center;
+  /* dvh (dynamic viewport height) after the vh fallback - on a phone, vh is
+     pinned to the viewport size with the browser's own address-bar chrome
+     COLLAPSED (its largest possible value), so as soon as that chrome
+     re-expands on scroll (the ordinary mobile behavior), the real visible
+     viewport is shorter than 100vh said it'd be - .modal-box's own
+     max-height below (sized off this same padding) then no longer matches
+     what's actually visible, letting its content scroll past its stuck
+     header into the sliver that opens up above it (confirmed live on a
+     phone - stat-grid numbers bleeding above the frozen player name/photo
+     row, overlapping the page's own header). dvh tracks the browser
+     chrome's REAL current state instead of assuming it's gone, so the two
+     stay in sync regardless of scroll position. Kept as a second
+     declaration (not a replacement) since dvh support is what actually
+     varies, not general vh - an unsupported value invalidates only this
+     one declaration, leaving the vh line above it as the fallback. */
   padding: 5vh 16px;
+  padding: 5dvh 16px;
   z-index: 1000;
 }
 /* .modal-box (not .modal-overlay) is the scrolling ancestor - it needs its
@@ -923,7 +940,12 @@ details[open] summary { margin-bottom: 8px; }
   padding: 20px;
   max-width: 860px;
   width: 100%;
+  /* dvh after vh for the same phone address-bar-chrome reason as
+     .modal-overlay's own padding above - the two must stay matched
+     (10vh/10dvh here mirrors that padding's 5+5) or the box can end up
+     taller than what's actually visible once the two units disagree. */
   max-height: calc(100vh - 10vh);
+  max-height: calc(100dvh - 10dvh);
   overflow-y: auto;
   overscroll-behavior: contain;
   position: relative;
@@ -943,20 +965,11 @@ details[open] summary { margin-bottom: 8px; }
 
 @media (max-width: 700px) {
   .tabpanel { padding: 10px; }
-  /* Two compact rows instead of stacking everything (or overlaying Week X/
-     Updated in a corner) - row 1 is brand (left) / league select (right),
-     row 2 is Week X (left) / Updated ... (right). justify-content applies
-     PER LINE on a wrapped flex container, so this falls out of flex-wrap
-     alone: .header-meta's own flex:1 0 100% forces it, alone, onto its own
-     second line (it can't fit next to brand+select on line 1), leaving
-     brand+select as line 1's only two items. */
+  /* Brand (left) / league select (right) - the only two things left in the
+     header now that Week/Updated moved down to the page footer (see
+     .app-footer below). */
   header.app-header { flex-direction: row; flex-wrap: wrap; justify-content: space-between; position: static; padding-right: 16px; }
   header.app-header select#league-select { max-width: 55%; overflow: hidden; text-overflow: ellipsis; }
-  .header-meta {
-    position: static; flex: 1 0 100%; display: flex; justify-content: space-between;
-    margin-left: 0; text-align: left;
-  }
-  #header-generated { text-align: right; }
   th, td { padding: 5px 6px; font-size: 12px; }
   select, input, button { font-size: 16px; } /* prevents iOS auto-zoom on focus */
   nav.tabs button { padding: 8px 10px; font-size: 12px; }

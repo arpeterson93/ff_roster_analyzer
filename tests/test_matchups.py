@@ -10,6 +10,7 @@ from engine.matchups import (
     compute_matchup_index,
     compute_schedule_strength,
     dst_points_by_team_week_pos,
+    opponent_avg_excl_by_team,
     points_by_team_week_pos,
     team_weeks_from_opponent,
 )
@@ -67,6 +68,18 @@ def test_index_for_basis_matches_hand_computation():
     assert index["WR"]["D"] == pytest.approx((20 / 17 + 6 / 9 + 8 / 11) / 3)
 
     assert allowed["WR"]["A"] == pytest.approx((8 + 16 + 12) / 3)
+
+
+def test_opponent_avg_excl_by_team_matches_index_for_basis_own_denominators():
+    # Matchups tab's "Opp Avg" column - same leave-one-out denominators
+    # test_index_for_basis_matches_hand_computation already verified by hand
+    # (A's three weekly ratios there used denominators 8, 19, 10), just
+    # averaged directly in points instead of folded into an index ratio.
+    df = pl.DataFrame(_rows())
+    points = points_by_team_week_pos(df, 2025, ["WR"], REY_SCORING)
+    opp_avg = opponent_avg_excl_by_team(points, OPPONENT, TEAM_WEEKS, ["WR"])
+    assert opp_avg["WR"]["A"] == pytest.approx((8 + 19 + 10) / 3)
+    assert opp_avg["WR"]["B"] == pytest.approx((10 + 9 + 18) / 3)
 
 
 def test_index_for_basis_excludes_the_defenses_own_game_from_the_opponents_average():

@@ -33,28 +33,31 @@ function sortRows(rows, sortState, valueFor) {
   });
 }
 
-// All positions at once (see the conversation this was built from - this
-// used to require picking one position first): one row per team, one column
-// per position, each cell stacking that position's points-allowed figure
-// over its rank - same visual language as strength.js's positionValueLeagueTable
-// (total + a dimmer sub-line via .heat-sub). No separate Raw/Adjusted toggle
-// here - always the raw points-allowed number (same convention the grid view
-// already uses), NOT the strength-of-schedule-adjusted one: pa_factor can
-// swing wildly on a small early-season sample (confirmed live - one real
-// team's adjusted TE number came back over 10x its raw one), which would
-// make this quick-glance view actively misleading by default. "Blended
-// index" itself is dropped from this view entirely - it doesn't change with
-// Basis (see the old help text this view used to show), and clicking any
-// cell still opens the full points-against detail (including the real
-// blended index, and the adjusted number for anyone who wants it) via
+// All positions at once: one row per team, one column per position, each
+// cell stacking that position's points-allowed figure over its rank - same
+// visual language as strength.js's positionValueLeagueTable (total + a
+// dimmer sub-line via .heat-sub). Basis (season/last-5) and Type
+// (raw/opp-adjusted) both recompute the value AND its rank/color together -
+// rank is never the site-wide precomputed blended-index rank, always
+// recomputed HERE from whichever value is currently showing, so the numbers
+// on screen and the rank/color next to them always agree with each other.
+// "Opp-Adjusted" reuses the same season-long pa_factor recentResultsTable's
+// own Avg Adjusted column multiplies by (raw * pa_factor) - there's no
+// separate last-5-scoped factor computed server-side, so Last 5 + Opp-
+// Adjusted applies that same season factor to the l5 raw number, same
+// "single season-long factor, whichever average it's scaling" convention
+// the rest of the tab already uses. Clicking any cell still opens the full
+// points-against detail (including the real blended index) via
 // openPointsAgainstModal.
-function forwardLookingAllPositionsTable(matchups, positions, basis, sortState) {
+function paByPositionTable(matchups, positions, basis, type, sortState) {
   const teams = new Set();
   positions.forEach((pos) => Object.keys(matchups[pos] || {}).forEach((t) => teams.add(t)));
   const fptsFor = (pos, team) => {
     const m = (matchups[pos] || {})[team];
     if (!m) return null;
-    return basis === "l5" ? m.l5_allowed_ppg : m.allowed_ppg;
+    const raw = basis === "l5" ? m.l5_allowed_ppg : m.allowed_ppg;
+    if (raw === null || raw === undefined) return null;
+    return type === "adj" ? raw * (m.pa_factor ?? 1.0) : raw;
   };
   const rankByPos = {};
   positions.forEach((pos) => {
@@ -91,7 +94,7 @@ function forwardLookingAllPositionsTable(matchups, positions, basis, sortState) 
   return `<table><thead>${header}</thead><tbody>${rows}</tbody></table>`;
 }
 
-function recentResultsTable(byPositionForPos, season, priorSeason, sortState) {
+function paByWeekTable(byPositionForPos, season, priorSeason, sortState) {
   const teams = Object.keys(byPositionForPos).sort();
   const anyCurrent = teams.some((t) => Object.keys(byPositionForPos[t].current).length > 0);
   const seasonUsed = anyCurrent ? season : priorSeason;
@@ -104,9 +107,10 @@ function recentResultsTable(byPositionForPos, season, priorSeason, sortState) {
     return `<p class="muted small">No weekly results available yet.</p>`;
   }
 
-  // Weekly cells always show raw actuals; Raw/Adjusted are both shown as
-  // their own trailing columns instead of a toggle - the factor is a single
-  // season-long number, not recomputed per week.
+  // Weekly cells always show raw actuals; Raw/Opp/Adjusted are all shown as
+  // their own leading columns instead of a toggle - Opp Avg and the factor
+  // behind Avg Adjusted are both single season-long numbers, not recomputed
+  // per week.
   const rawAvgByTeam = {};
   const adjAvgByTeam = {};
   teams.forEach((t) => {
@@ -120,13 +124,14 @@ function recentResultsTable(byPositionForPos, season, priorSeason, sortState) {
   const valueFor = (t, k) => {
     if (k === "team") return t;
     if (k === "avg_raw") return rawAvgByTeam[t];
+    if (k === "opp_avg") return byPositionForPos[t].opp_avg_excl ?? 0;
     if (k === "avg_adj") return adjAvgByTeam[t];
     return byPositionForPos[t][key][String(k)];
   };
   const defaultOrder = teams.slice().sort((a, b) => adjAvgByTeam[b] - adjAvgByTeam[a]);
   const sortedTeams = sortState.key ? sortRows(defaultOrder, sortState, valueFor) : defaultOrder;
 
-  const header = `<tr>${sortTh("Team", "team", sortState)}${weeks.map((w) => sortTh(`Wk ${w}`, w, sortState)).join("")}${sortTh("Avg (raw)", "avg_raw", sortState)}${sortTh("Avg (adjusted)", "avg_adj", sortState)}</tr>`;
+  const header = `<tr>${sortTh("Team", "team", sortState)}${sortTh("Raw Avg", "avg_raw", sortState)}${sortTh("Opp Avg", "opp_avg", sortState, ` title="What this defense's actual opponents scored on average against everyone ELSE, excluding their own game against this defense - how tough/weak the offenses it actually faced were."`)}${sortTh("Avg Adjusted", "avg_adj", sortState)}${weeks.map((w) => sortTh(`Wk ${w}`, w, sortState)).join("")}</tr>`;
   const rows = sortedTeams
     .map((t) => {
       const cells = weeks
@@ -138,43 +143,10 @@ function recentResultsTable(byPositionForPos, season, priorSeason, sortState) {
         })
         .join("");
       const factorNote = ` <span class="muted small">(&times;${fmt(byPositionForPos[t].pa_factor ?? 1.0, 2)})</span>`;
-      return `<tr data-team="${escapeHtml(t)}" class="clickable-row"><td>${escapeHtml(t)}</td>${cells}<td class="cell-center">${fmt(rawAvgByTeam[t], 1)}</td><td class="cell-center"><strong>${fmt(adjAvgByTeam[t], 1)}</strong>${factorNote}</td></tr>`;
+      return `<tr data-team="${escapeHtml(t)}" class="clickable-row"><td>${escapeHtml(t)}</td><td class="cell-center">${fmt(rawAvgByTeam[t], 1)}</td><td class="cell-center">${fmt(byPositionForPos[t].opp_avg_excl ?? 0, 1)}</td><td class="cell-center"><strong>${fmt(adjAvgByTeam[t], 1)}</strong>${factorNote}</td>${cells}</tr>`;
     })
     .join("");
   return `<p class="muted small">${seasonUsed} season, actual points allowed per week (not projected).</p><table>${header}<tbody>${rows}</tbody></table>`;
-}
-
-function gridTable(matchups, positions, sortState) {
-  const teams = new Set();
-  positions.forEach((pos) => Object.keys(matchups[pos] || {}).forEach((t) => teams.add(t)));
-
-  const totalAllowed = {};
-  teams.forEach((t) => {
-    totalAllowed[t] = positions.reduce((acc, pos) => acc + ((matchups[pos] || {})[t]?.allowed_ppg || 0), 0);
-  });
-  const valueFor = (t, key) => {
-    if (key === "team") return t;
-    if (key === "total") return totalAllowed[t];
-    return (matchups[key] || {})[t]?.rank;
-  };
-  const defaultOrder = [...teams].sort((a, b) => totalAllowed[b] - totalAllowed[a]);
-  const sortedTeams = sortState.key ? sortRows(defaultOrder, sortState, valueFor) : defaultOrder;
-
-  const header = `<tr>${sortTh("Team", "team", sortState)}${positions.map((p) => sortTh(p, p, sortState)).join("")}${sortTh("AVG FPTS", "total", sortState)}</tr>`;
-  const rows = sortedTeams
-    .map((t) => {
-      const cells = positions
-        .map((pos) => {
-          const m = (matchups[pos] || {})[t];
-          if (!m) return `<td class="muted">-</td>`;
-          const ratio = Math.max(0, Math.min(1, (33 - m.rank) / 32));
-          return `<td data-team="${escapeHtml(t)}" data-pos="${pos}" class="heat-cell clickable-row" style="background:${colorForRatio(ratio)}">${m.rank}</td>`;
-        })
-        .join("");
-      return `<tr>${`<td>${escapeHtml(t)}</td>`}${cells}<td class="cell-center">${fmt(totalAllowed[t], 1)}</td></tr>`;
-    })
-    .join("");
-  return `<table><thead>${header}</thead><tbody>${rows}</tbody></table>`;
 }
 
 export function renderMatchups(container, data) {
@@ -184,9 +156,8 @@ export function renderMatchups(container, data) {
       <div class="select-row">
         <label>View:</label>
         <select id="matchups-view-select">
-          <option value="grid">All positions grid</option>
-          <option value="forward">Forward-looking index (all positions)</option>
-          <option value="recent">Recent results by week</option>
+          <option value="position">PA by Position</option>
+          <option value="week">PA by Week</option>
         </select>
         <span id="matchups-pos-wrap"><label>Position:</label>
           <select id="matchups-pos-select">${positions.map((p) => `<option value="${p}">${p}</option>`).join("")}</select>
@@ -195,6 +166,12 @@ export function renderMatchups(container, data) {
           <select id="matchups-basis-select">
             <option value="season">Season</option>
             <option value="l5">Last 5 weeks</option>
+          </select>
+        </span>
+        <span id="matchups-type-wrap"><label>Type:</label>
+          <select id="matchups-type-select">
+            <option value="raw">Raw</option>
+            <option value="adj">Opp-Adjusted</option>
           </select>
         </span>
       </div>
@@ -209,10 +186,12 @@ export function renderMatchups(container, data) {
   const viewSelect = container.querySelector("#matchups-view-select");
   const basisSelect = container.querySelector("#matchups-basis-select");
   const basisWrap = container.querySelector("#matchups-basis-wrap");
+  const typeSelect = container.querySelector("#matchups-type-select");
+  const typeWrap = container.querySelector("#matchups-type-wrap");
 
-  // One sort state per view - switching views/position/basis resets it
-  // (a "Wk 4" sort key from Recent Results means nothing on the Grid table),
-  // but re-clicking within the same view keeps toggling as expected.
+  // One sort state per view - switching views/position/basis/type resets it
+  // (a "Wk 4" sort key from PA by Week means nothing on PA by Position), but
+  // re-clicking within the same view keeps toggling as expected.
   let sortState = { key: null, dir: 1, lastKey: null };
   let lastView = viewSelect.value;
 
@@ -223,18 +202,17 @@ export function renderMatchups(container, data) {
       sortState = { key: null, dir: 1, lastKey: null };
       lastView = view;
     }
-    posWrap.hidden = view !== "recent";
-    basisWrap.hidden = view !== "forward";
+    posWrap.hidden = view !== "week";
+    basisWrap.hidden = view !== "position";
+    typeWrap.hidden = view !== "position";
 
-    if (view === "grid") {
-      help.textContent = "Rank per position (1 = best matchup for that position). Sorted by total fantasy points allowed across all positions - click any column header to sort by it instead.";
-      wrap.innerHTML = gridTable(data.matchups, positions, sortState);
-    } else if (view === "recent") {
-      help.textContent = 'Actual points allowed by position, per week - the historical record behind the forward-looking index. "Adjusted" scales the season Avg by a single season-long factor for the strength of offenses that defense has faced (excluding its own game against them); weekly cells always stay raw. Click any column header to sort by it.';
-      wrap.innerHTML = recentResultsTable((data.recentResults || { by_position: {} }).by_position[pos] || {}, data.recentResults?.current_season, data.recentResults?.prior_season, sortState);
+    if (view === "week") {
+      help.textContent = 'Actual points allowed by position, per week. "Opp Avg" is what this defense\'s actual opponents scored on average against everyone ELSE (excluding their own game against this defense) - "Adjusted" scales Raw Avg by that same strength-of-opponent factor; weekly cells always stay raw. Click any column header to sort by it.';
+      wrap.innerHTML = paByWeekTable((data.recentResults || { by_position: {} }).by_position[pos] || {}, data.recentResults?.current_season, data.recentResults?.prior_season, sortState);
     } else {
-      help.textContent = "Every position at once - each cell stacks raw points allowed over rank (1 = best/easiest matchup, higher = tougher). Click a cell for that position's full detail, including its blended index and strength-of-schedule-adjusted number; click a column header to sort by it.";
-      wrap.innerHTML = forwardLookingAllPositionsTable(data.matchups, positions, basisSelect.value, sortState);
+      const typeLabel = typeSelect.value === "adj" ? "opponent-strength-adjusted" : "raw";
+      help.textContent = `Every position at once - each cell stacks ${typeLabel} points allowed over its rank within that position (1 = best/easiest matchup, higher = tougher), recomputed for whichever Basis/Type is picked. Click a cell for that position's full detail, including its blended index; click a column header to sort by it.`;
+      wrap.innerHTML = paByPositionTable(data.matchups, positions, basisSelect.value, typeSelect.value, sortState);
     }
 
     wrap.querySelectorAll("tr[data-team], td[data-team]").forEach((el) => {
@@ -254,5 +232,6 @@ export function renderMatchups(container, data) {
   posSelect.addEventListener("change", draw);
   viewSelect.addEventListener("change", draw);
   basisSelect.addEventListener("change", draw);
+  typeSelect.addEventListener("change", draw);
   draw();
 }

@@ -97,6 +97,47 @@ def allowed_by_team_week_pos(
     return result
 
 
+def opponent_avg_excl_by_team(
+    points_by_team_week_pos: dict[tuple[str, int, str], float],
+    opponent: dict[tuple[str, int], str | None],
+    team_weeks: dict[str, list[int]],
+    positions: list[str],
+) -> dict[str, dict[str, float]]:
+    """{position: {defense: average}} - for each defense's own played weeks,
+    the mean of what THAT WEEK'S OPPONENT scored at this position across
+    their own other games, excluding the very week they played this defense
+    (leave-one-out, same protection _index_for_basis's own offense_avg_excl
+    needs - a defense's own result against an opponent can't count toward
+    how tough/weak that opponent "normally" is). Answers "were the offenses
+    this defense actually faced good or bad on average" independent of how
+    well this defense specifically played against them - the Matchups tab's
+    "Opp Avg" column, a standalone twin of _index_for_basis's own internal
+    offense_avg_excl (recomputed here rather than threaded out of that
+    season/l5-scoped function, since this always wants the SAME full-season
+    offense_avg_excl regardless of which basis a caller's index/allowed_ppg
+    happens to be scoped to)."""
+    offense_avg_excl: dict[tuple[str, str, int], float] = {}
+    for team, weeks in team_weeks.items():
+        for pos in positions:
+            vals = {w: points_by_team_week_pos.get((team, w, pos), 0.0) for w in weeks}
+            total = sum(vals.values())
+            n = len(vals)
+            for w in weeks:
+                offense_avg_excl[(team, pos, w)] = (total - vals[w]) / (n - 1) if n > 1 else 0.0
+
+    result: dict[str, dict[str, float]] = {pos: {} for pos in positions}
+    for defense, weeks in team_weeks.items():
+        for pos in positions:
+            vals = []
+            for w in weeks:
+                opp = opponent.get((defense, w))
+                if opp is None:
+                    continue
+                vals.append(offense_avg_excl.get((opp, pos, w), 0.0))
+            result[pos][defense] = float(np.mean(vals)) if vals else 0.0
+    return result
+
+
 def _index_for_basis(
     team_week_pos_points: dict[tuple[str, int, str], float],
     opponent: dict[tuple[str, int], str | None],

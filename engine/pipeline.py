@@ -41,6 +41,7 @@ from engine.matchups import (
     compute_matchup_index,
     compute_schedule_strength,
     dst_points_by_team_week_pos,
+    opponent_avg_excl_by_team,
     points_by_team_week_pos,
     team_weeks_from_opponent,
 )
@@ -702,7 +703,13 @@ def _build_dst_curve_for_league(cfg: dict, dst_rules: ScoringRules, weeks_comple
     )
 
 
-def run_league(cfg: dict, *, skip: frozenset[str] = frozenset(), prior_players: list[dict] | None = None) -> dict:
+def run_league(
+    cfg: dict,
+    *,
+    skip: frozenset[str] = frozenset(),
+    prior_players: list[dict] | None = None,
+    prior_last_updates: dict[str, str] | None = None,
+) -> dict:
     """Runs the full pipeline for one league. Returns {filename: json-serializable-object}.
 
     `skip` recognises "faab" (skip the FAAB bid estimator - avoids the
@@ -717,7 +724,21 @@ def run_league(cfg: dict, *, skip: frozenset[str] = frozenset(), prior_players: 
     off disk before this run overwrites it, and only when that prior run was
     the SAME season - see main()) - used solely to carry forward
     ros_pos_rank_snapshot for a player FantasyPros has since dropped from
-    its ROS rankings (see _resolve_ros_pos_rank_snapshot)."""
+    its ROS rankings (see _resolve_ros_pos_rank_snapshot).
+
+    prior_last_updates is the previous run's own meta.json["last_updates"]
+    (same "read off disk before this run overwrites it" pattern as
+    prior_players) - {"full"/"refresh"/"faab": ISO timestamp}, each entry
+    the last time THAT stage actually ran, carried forward and merged with
+    this run's own stage below so the site footer (app.js) can show all
+    three independently even though only one of them just ran. "faab"
+    always tracks the same run as "full" (a refresh always skips it, see
+    `skip` above - there's no separate FAAB-only stage today), kept as its
+    own key rather than reusing "full" so the footer reads naturally and
+    this doesn't need to change if FAAB ever gets its own cadence later.
+    "live" isn't tracked here at all - the gameday live tier writes its own
+    updated_at straight into live.json (see engine/live.py), which the
+    frontend already reads directly."""
     ros_pos_rank_snapshot_by_id = _prior_ros_pos_rank_snapshot(prior_players)
     slug = cfg["slug"]
     season = cfg["season"]
@@ -977,6 +998,10 @@ def run_league(cfg: dict, *, skip: frozenset[str] = frozenset(), prior_players: 
 
     current_allowed = allowed_by_team_week_pos(current_points, opponent, current_team_weeks, matchup_positions)
     prior_allowed = allowed_by_team_week_pos(prior_points, prior_opponent, prior_team_weeks, matchup_positions)
+    # Matchups tab's "Opp Avg" column - current season only, same as pa_factor
+    # below (never prior-season, which has no live "Opp-Adjusted" toggle to
+    # feed).
+    opp_avg_excl = opponent_avg_excl_by_team(current_points, opponent, current_team_weeks, matchup_positions)
 
     recent_results = {"current_season": season, "prior_season": prior_season, "by_position": {}}
     for pos in matchup_positions:
@@ -985,6 +1010,7 @@ def run_league(cfg: dict, *, skip: frozenset[str] = frozenset(), prior_players: 
                 "current": {str(w): current_allowed.get((team, w, pos), 0.0) for w in current_team_weeks.get(team, [])},
                 "prior": {str(w): prior_allowed.get((team, w, pos), 0.0) for w in prior_team_weeks.get(team, [])},
                 "pa_factor": matchup_index.pa_factor.get(pos, {}).get(team, 1.0),
+                "opp_avg_excl": opp_avg_excl.get(pos, {}).get(team, 0.0),
             }
             for team in all_nfl_teams
         }
@@ -1610,6 +1636,16 @@ def run_league(cfg: dict, *, skip: frozenset[str] = frozenset(), prior_players: 
             _sd_by_pos.setdefault(p["position"], []).append(wp["sd"])
     position_week_sd = {pos: sum(vals) / len(vals) for pos, vals in _sd_by_pos.items()}
 
+    generated_at = datetime.now(timezone.utc).isoformat()
+    stage = "refresh" if "faab" in skip else "full"
+    # Carry forward every stage NOT touched by this run (see run_league's own
+    # docstring) - a refresh run must not erase the last real "full"/"faab"
+    # timestamp just because it didn't touch either this time.
+    last_updates = dict(prior_last_updates or {})
+    last_updates[stage] = generated_at
+    if stage == "full":
+        last_updates["faab"] = generated_at
+
     meta = {
         "slug": slug,
         # The real ESPN league id behind this site league - lets client JS
@@ -1623,9 +1659,10 @@ def run_league(cfg: dict, *, skip: frozenset[str] = frozenset(), prior_players: 
         # is run_league with faab skipped - see run_league's own docstring.
         # The gameday "live" stage never calls run_league at all (see
         # engine/live.py), so it's not a possible value here.
-        "stage": "refresh" if "faab" in skip else "full",
+        "stage": stage,
+        "last_updates": last_updates,
         "position_week_sd": position_week_sd,
-        "reg_season_count": reg_season_count, "generated_at": datetime.now(timezone.utc).isoformat(),
+        "reg_season_count": reg_season_count, "generated_at": generated_at,
         "rankings_source": rankings_source, "curve_seasons": val_cfg["curve_seasons"],
         "positions": settings.positions,
         "slots": settings.slots, "slot_eligibility": {k: sorted(v) for k, v in settings.slot_eligibility.items()},
@@ -1718,6 +1755,18 @@ def _load_prior_players(out_dir: Path, season: int) -> list[dict] | None:
         return None
 
 
+def _load_prior_last_updates(out_dir: Path) -> dict[str, str] | None:
+    """Same "read off disk before this run overwrites it" pattern as
+    _load_prior_players, for meta.json's own last_updates dict - unlike
+    prior_players, a season rollover doesn't invalidate this (a timestamp is
+    a timestamp regardless of which season it was for), so there's no
+    season check here."""
+    try:
+        return json.loads((out_dir / "meta.json").read_text(encoding="utf-8")).get("last_updates")
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--league", default=None, help="league slug; omit to run every configured league")
@@ -1738,7 +1787,8 @@ def main() -> int:
     for cfg in configs:
         try:
             prior_players = _load_prior_players(out_root / cfg["slug"], cfg["season"])
-            files = run_league(cfg, skip=skip, prior_players=prior_players)
+            prior_last_updates = _load_prior_last_updates(out_root / cfg["slug"])
+            files = run_league(cfg, skip=skip, prior_players=prior_players, prior_last_updates=prior_last_updates)
         except Exception:
             logger.exception("league %s failed", cfg["slug"])
             any_failed = True
