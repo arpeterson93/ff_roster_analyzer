@@ -1,4 +1,5 @@
 import { escapeHtml, getTheme, setTheme } from "./state.js";
+import { teamLabel } from "./colors.js";
 import { SETTINGS_WEBAPP_URL } from "./settingsConfig.js";
 
 const FIELDS = [
@@ -82,10 +83,37 @@ function renderSeedingSection(seeding, playoffTeamCount, editable) {
   return `${divisionRow}${seedRows}<p class="muted small settings-help">Each seed's tiebreak chain (Wins/PF/PA/Head-to-Head) only applies when "Next division winner" is unchecked, or once the division-winner queue runs dry.</p>`;
 }
 
+// Every team's real ESPN name -> what the site actually shows for them
+// everywhere else (teamLabel's own manager-first convention, see colors.js)
+// - a lookup for whoever's looking at the real ESPN app/site and needs to
+// match a name there back to this site's "Tim"/"chris"/etc labels. Sorted by
+// the ESPN name itself, not the site label, since that's the name someone's
+// starting from when they reach for this table. "Shown on site as" is
+// editable (same team_<id>_display_name settings-sheet key engine/pipeline.py
+// applies onto that team's own .manager - see ingest/settings_sheet.py's own
+// comment) - so this doubles as both the reference table AND the one place
+// to override it, rather than two separate UIs for the same underlying value.
+function teamsSectionHtml(teams, editable) {
+  if (!teams || !teams.length) return `<p class="muted small">No team data yet.</p>`;
+  const rows = teams
+    .slice()
+    .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+    .map(
+      (t) => `<tr>
+        <td>${escapeHtml(t.name || "")}</td>
+        <td><input type="text" data-key="team_${t.team_id}_display_name" data-type="text" value="${escapeHtml(teamLabel(t))}" ${editable ? "" : "disabled"} /></td>
+        <td class="muted small">${escapeHtml(t.abbrev || "")}</td>
+      </tr>`
+    )
+    .join("");
+  return `<div class="table-wrap"><table><thead><tr><th>ESPN team name</th><th>Shown on site as</th><th>Abbrev</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
 export function renderSettings(container, data) {
   const settings = data.meta.settings || {};
   const sheetConfigured = !!data.meta.settings_sheet_id;
   const writeConfigured = !!SETTINGS_WEBAPP_URL;
+  const editable = writeConfigured && sheetConfigured;
 
   container.innerHTML = `
     <div class="card">
@@ -98,6 +126,11 @@ export function renderSettings(container, data) {
           <option value="dark">Dark</option>
         </select>
       </div>
+    </div>
+    <div class="card">
+      <h2>Teams</h2>
+      <p class="muted small">This site shows each manager's first name (or their ESPN team name, if no manager is set) instead of their real ESPN team name - override "Shown on site as" to change it.${editable ? " Changes save with the settings below." : ""}</p>
+      ${teamsSectionHtml(data.meta.teams, editable)}
     </div>
     <div class="card">
       <h2>League settings</h2>
@@ -127,13 +160,23 @@ export function renderSettings(container, data) {
   themeSelect.value = getTheme();
   themeSelect.addEventListener("change", (e) => setTheme(e.target.value));
 
-  const fieldsEl = container.querySelector("#settings-fields");
   const pending = {};
+
+  // Teams table's own "Shown on site as" overrides feed the SAME pending/
+  // save mechanism as every other settings field below, just wired directly
+  // here since teamsSectionHtml already rendered its inputs as part of the
+  // page's one big innerHTML above.
+  container.querySelectorAll("input[data-key^='team_']").forEach((el) => {
+    el.addEventListener("input", () => {
+      pending[el.dataset.key] = el.value;
+    });
+  });
+
+  const fieldsEl = container.querySelector("#settings-fields");
   fieldsEl.innerHTML = FIELDS.map(
     (f) => `<div class="bar-row settings-row"><div class="bar-label settings-label">${f.label}</div>${fieldControl(f, settings[f.key])}</div><p class="muted small settings-help">${f.help}</p>`
   ).join("");
 
-  const editable = writeConfigured && sheetConfigured;
   fieldsEl.querySelectorAll("[data-key]").forEach((el) => {
     el.disabled = !editable;
     el.addEventListener("input", () => {

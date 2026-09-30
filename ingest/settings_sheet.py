@@ -38,6 +38,16 @@ _TRUE_STRINGS = ("true", "1", "yes")
 _SEED_KEY_RE = re.compile(r"^seed_(\d+)_(division_priority|tiebreak_[1-4])$")
 _DIVISION_TIEBREAK_KEY_RE = re.compile(r"^division_tiebreak_[1-4]$")
 
+# Per-team "shown on site as" override (docs/js/settings.js's Teams table) -
+# same per-entity flat-key pattern as the seed_<n>_* keys above, keyed by
+# ESPN's own numeric team_id rather than a seed number. Collected into
+# cfg["team_display_names"] ({team_id_str: name}) - applied directly onto
+# each FantasyTeam's own .manager (see engine/pipeline.py's run_league,
+# right after espn_teams is fetched) since that's the ONE field teamLabel()
+# already prefers everywhere on the site, so nothing downstream needs to
+# know an override even exists.
+_TEAM_DISPLAY_NAME_KEY_RE = re.compile(r"^team_(\d+)_display_name$")
+
 
 class SettingsSheetError(Exception):
     pass
@@ -88,6 +98,19 @@ def apply_remote_settings(cfg: dict, remote_for_league: dict[str, str]) -> list[
             if old_value != raw_value:
                 changes.append(f"{key}: {old_value} -> {raw_value} (from settings sheet)")
             seeding_raw[key] = raw_value
+            continue
+
+        team_match = _TEAM_DISPLAY_NAME_KEY_RE.match(key)
+        if team_match:
+            team_id = team_match.group(1)
+            overrides = cfg.setdefault("team_display_names", {})
+            old_value = overrides.get(team_id)
+            if old_value != raw_value:
+                changes.append(f"{key}: {old_value} -> {raw_value} (from settings sheet)")
+            if raw_value:
+                overrides[team_id] = raw_value
+            else:
+                overrides.pop(team_id, None)
             continue
 
         schema_entry = _SETTINGS_SCHEMA.get(key)

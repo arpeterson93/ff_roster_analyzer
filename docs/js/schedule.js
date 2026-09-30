@@ -125,7 +125,12 @@ function lineupWeekFor(teamId, week, data) {
   return lineupTeam ? lineupTeam.weeks[String(week)] : null;
 }
 
-function scoreOf(m, side, data) {
+// Exported for standings.js's own ROS PF/PA columns, which need this exact
+// same "real score if played, live-aware in-progress sum for the current
+// week, optimal-lineup projection for every other remaining week" number -
+// not a simpler re-derivation that could silently drift from what the
+// Schedule tab itself shows for the same matchup.
+export function scoreOf(m, side, data) {
   if (m.played) return side === "home" ? m.home_score : m.away_score;
   const teamId = side === "home" ? m.home_team_id : m.away_team_id;
   // Deliberately ignores schedule.json's own live home_score/away_score (a
@@ -222,24 +227,35 @@ function symmetricLineupHtml(homeTeamId, awayTeamId, week, data) {
   `;
 }
 
-// showWeek: the single-team filtered view (see renderSchedule) has exactly
-// one row per week for that team, so a per-week "Week N" divider row (the
-// all-teams view's own grouping - see draw()) would be redundant scaffolding
-// around a single row; a leading WK cell on the row itself carries the same
-// information without the extra row, matching how a real season schedule
-// table reads for one team.
-function matchupRow(m, data, expandedKey, yourTeamId, avg, spread, showWeek) {
-  const home = data.teamsById.get(m.home_team_id);
-  const away = data.teamsById.get(m.away_team_id);
+// filterTeamId: the single-team filtered view (see renderSchedule) has
+// exactly one row per week for that team, so a per-week "Week N" divider row
+// (the all-teams view's own grouping - see draw()) would be redundant
+// scaffolding around a single row; a leading WK cell on the row itself
+// carries the same information without the extra row, matching how a real
+// season schedule table reads for one team. Also flips home/away so the
+// filtered team always renders on the LEFT (readability - the team you
+// picked shouldn't jump sides week to week depending on who hosted), and
+// skips the your-team-row highlight entirely - every row already IS that
+// team's own game, so highlighting all of them (or none, for someone else's
+// team) adds nothing a plain "you're looking at his schedule" view doesn't
+// already make obvious.
+function matchupRow(m, data, expandedKey, yourTeamId, avg, spread, filterTeamId) {
+  const flip = !!filterTeamId && m.away_team_id === filterTeamId;
+  const leftId = flip ? m.away_team_id : m.home_team_id;
+  const rightId = flip ? m.home_team_id : m.away_team_id;
+  const left = data.teamsById.get(leftId);
+  const right = data.teamsById.get(rightId);
   const key = `${m.week}-${m.home_team_id}-${m.away_team_id}`;
-  const isYours = m.home_team_id === yourTeamId || m.away_team_id === yourTeamId;
-  const colspan = showWeek ? 5 : 4;
-  const weekCell = showWeek
+  const isYours = !filterTeamId && (m.home_team_id === yourTeamId || m.away_team_id === yourTeamId);
+  const colspan = filterTeamId ? 5 : 4;
+  const weekCell = filterTeamId
     ? `<td class="schedule-cell small muted">${m.week}${m.week === data.meta.current_week ? " (current)" : ""}${m.live ? " (live)" : ""}</td>`
     : "";
 
-  const homeScore = scoreOf(m, "home", data);
-  const awayScore = scoreOf(m, "away", data);
+  const leftScore = scoreOf(m, flip ? "away" : "home", data);
+  const rightScore = scoreOf(m, flip ? "home" : "away", data);
+  const leftWinPct = flip ? m.away_win_pct : m.home_win_pct;
+  const rightWinPct = flip ? m.home_win_pct : m.away_win_pct;
   const scoreCell = (v) => {
     if (v === null || v === undefined) return `<span class="muted">–</span>`;
     const ratio = spread > 0 ? Math.max(0, Math.min(1, 0.5 + (v - avg) / spread)) : 0.5;
@@ -257,19 +273,22 @@ function matchupRow(m, data, expandedKey, yourTeamId, avg, spread, showWeek) {
   // colored bar is ALWAYS exactly half the track's width - at 50/50 it
   // sits centered on the track's midpoint (25%-75%); the more lopsided the
   // matchup, the further it slides toward the favored side (fully flush
-  // left at 100% home, fully flush right at 100% away), while staying the
-  // same length throughout. Each half is colored by THAT team's own win
-  // probability (winProbColor - red below 25%, green above 75%, blended
-  // between) rather than a fixed home/away color pair, so the bar itself
-  // reads as "how good are this team's real chances" at a glance.
-  const winProbBar = (homePct, awayPct) =>
-    homePct === null || homePct === undefined
+  // left at 100% leftPct, fully flush right at 100% rightPct), while
+  // staying the same length throughout. Each half is colored by THAT team's
+  // own win probability (winProbColor - red below 25%, green above 75%,
+  // blended between) rather than a fixed left/right color pair, so the bar
+  // itself reads as "how good are this team's real chances" at a glance.
+  // Purely positional (left side first) - works the same whether "left" is
+  // the real home team or, in the filtered view, whichever side got flipped
+  // there to keep the picked team on the left.
+  const winProbBar = (leftPct, rightPct) =>
+    leftPct === null || leftPct === undefined
       ? ""
-      : `<div class="winprob-bar" title="${fmt(homePct * 100, 0)}% / ${fmt(awayPct * 100, 0)}%">
+      : `<div class="winprob-bar" title="${fmt(leftPct * 100, 0)}% / ${fmt(rightPct * 100, 0)}%">
           <div class="winprob-center-line"></div>
-          <div class="winprob-slider" style="left:${50 - 50 * homePct}%;">
-            <div class="winprob-seg" style="width:${homePct * 100}%; background:${winProbColor(homePct)}"></div>
-            <div class="winprob-seg" style="width:${awayPct * 100}%; background:${winProbColor(awayPct)}"></div>
+          <div class="winprob-slider" style="left:${50 - 50 * leftPct}%;">
+            <div class="winprob-seg" style="width:${leftPct * 100}%; background:${winProbColor(leftPct)}"></div>
+            <div class="winprob-seg" style="width:${rightPct * 100}%; background:${winProbColor(rightPct)}"></div>
           </div>
         </div>`;
 
@@ -277,19 +296,19 @@ function matchupRow(m, data, expandedKey, yourTeamId, avg, spread, showWeek) {
   return `
     <tr class="clickable-row schedule-row ${isYours ? "your-team-row" : ""}" data-key="${key}">
       ${weekCell}
-      <td class="schedule-cell">${escapeHtml(teamLabel(home) || m.home_team_id)}${winPct(m.home_win_pct)}</td>
-      <td class="schedule-cell small">${scoreCell(homeScore)}</td>
-      <td class="schedule-cell small">${scoreCell(awayScore)}</td>
-      <td class="schedule-cell">${escapeHtml(teamLabel(away) || m.away_team_id)}${winPct(m.away_win_pct)}</td>
+      <td class="schedule-cell">${escapeHtml(teamLabel(left) || leftId)}${winPct(leftWinPct)}</td>
+      <td class="schedule-cell small">${scoreCell(leftScore)}</td>
+      <td class="schedule-cell small">${scoreCell(rightScore)}</td>
+      <td class="schedule-cell">${escapeHtml(teamLabel(right) || rightId)}${winPct(rightWinPct)}</td>
     </tr>
-    ${m.home_win_pct !== null && m.home_win_pct !== undefined ? `<tr class="winprob-row"><td colspan="${colspan}">${winProbBar(m.home_win_pct, m.away_win_pct)}</td></tr>` : ""}
+    ${leftWinPct !== null && leftWinPct !== undefined ? `<tr class="winprob-row"><td colspan="${colspan}">${winProbBar(leftWinPct, rightWinPct)}</td></tr>` : ""}
     ${expanded
       ? `<tr><td colspan="${colspan}">
           <div class="lineup-symmetric-heading">
-            <h3 class="small">${escapeHtml(teamLabel(home))}</h3>
-            <h3 class="small">${escapeHtml(teamLabel(away))}</h3>
+            <h3 class="small">${escapeHtml(teamLabel(left))}</h3>
+            <h3 class="small">${escapeHtml(teamLabel(right))}</h3>
           </div>
-          ${symmetricLineupHtml(m.home_team_id, m.away_team_id, m.week, data)}
+          ${symmetricLineupHtml(leftId, rightId, m.week, data)}
         </td></tr>`
       : ""}
   `;
@@ -318,13 +337,13 @@ export function renderSchedule(container, data, slug) {
     // Filtered to one team: every week has exactly one matchup for them, so
     // a per-week divider row would just be scaffolding around a single row -
     // one flat table instead, a leading WK cell per row (see matchupRow's
-    // showWeek) standing in for the divider's own week label.
+    // filterTeamId) standing in for the divider's own week label.
     const rows = teamFilter
       ? data.schedule
           .filter((m) => m.home_team_id === teamFilter || m.away_team_id === teamFilter)
           .slice()
           .sort((a, b) => a.week - b.week)
-          .map((m) => matchupRow(m, data, state.expandedKey, yourTeamId, avg, spread, true))
+          .map((m) => matchupRow(m, data, state.expandedKey, yourTeamId, avg, spread, teamFilter))
           .join("")
       : // One shared table for every week (not a separate table per week) with
         // fixed column widths, so the home/score/away columns land in the same
@@ -336,7 +355,7 @@ export function renderSchedule(container, data, slug) {
             const anyLive = weekMatchups.some((m) => m.live);
             const statusLabel = anyLive ? " (live)" : allProjected ? " - Projected" : "";
             const weekHeader = `<tr class="week-divider"><td colspan="4">Week ${w}${w === data.meta.current_week ? " (current)" : ""}${statusLabel}</td></tr>`;
-            const matchups = weekMatchups.map((m) => matchupRow(m, data, state.expandedKey, yourTeamId, avg, spread, false)).join("");
+            const matchups = weekMatchups.map((m) => matchupRow(m, data, state.expandedKey, yourTeamId, avg, spread, null)).join("");
             return weekHeader + matchups;
           })
           .join("");

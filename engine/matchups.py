@@ -315,18 +315,22 @@ def compute_matchup_index(
     no_current_data = not any(game_final.values()) if game_final is not None else weeks_played <= 0
     if no_current_data:
         prior_league_avg = _league_avg_by_pos(prior_points, prior_team_weeks, positions)
+        prior_opp_avg_excl = opponent_avg_excl_by_team(prior_points, prior_opponent, prior_team_weeks, positions)
         for pos in positions:
             result.index[pos] = {t: _clamp(v, index_clamp) for t, v in prior_index[pos].items()}
             result.allowed_ppg[pos] = dict(prior_allowed[pos])
             result.l5_allowed_ppg[pos] = dict(prior_allowed[pos])
-            result.adjusted_allowed_ppg[pos] = {
-                t: prior_league_avg[pos] * prior_index[pos].get(t, 1.0) for t in prior_allowed[pos]
-            }
+            # pa_factor/adjusted_allowed_ppg are a display-only lens (the
+            # Matchups tab's Opp-Adjusted Type, and PA by Week's Avg
+            # Adjusted/Opp Avg columns), deliberately NOT derived from
+            # `index` above - see the main branch's own comment on this for
+            # why.
             result.pa_factor[pos] = {
-                t: (result.adjusted_allowed_ppg[pos][t] / result.allowed_ppg[pos][t])
-                if result.allowed_ppg[pos].get(t, 0.0) > 0
-                else 1.0
+                t: (prior_league_avg[pos] / prior_opp_avg_excl[pos][t]) if prior_opp_avg_excl[pos].get(t, 0.0) > 0 else 1.0
                 for t in prior_allowed[pos]
+            }
+            result.adjusted_allowed_ppg[pos] = {
+                t: result.allowed_ppg[pos][t] * result.pa_factor[pos][t] for t in prior_allowed[pos]
             }
         result.rank = _rank_positions(result.index)
         result.season_used = prior_season
@@ -359,6 +363,23 @@ def compute_matchup_index(
         }
 
     league_avg = _league_avg_by_pos(cur_points, played_weeks, positions)
+    # pa_factor/adjusted_allowed_ppg's own opponent-strength baseline -
+    # deliberately league_avg / opp_avg_excl (a ratio of two plain point
+    # averages), NOT derived from `index` above (a mean of each week's OWN
+    # ratio, averaged across weeks) - those two aren't the same number
+    # (mean-of-ratios != ratio-of-means) and diverge most exactly when a
+    # single week's opp_avg_excl is small, which `index` can weight far more
+    # heavily than the team's other games (confirmed live - an index-derived
+    # adjusted number that didn't visibly tie back to the Matchups tab's own
+    # displayed Opp Avg column at all, and could run many multiples of raw
+    # on a thin sample). `index` itself is untouched - it's what actually
+    # drives a player's forward-looking weekly projection (see
+    # engine/valuation.py), where smoothing across weeks instead of one
+    # blunt end-of-sample ratio is the right call; pa_factor/adjusted_
+    # allowed_ppg are purely this tab's own explanatory "raw vs. who they
+    # actually faced" number and should be easy to hand-verify against the
+    # Opp Avg column sitting right next to them.
+    opp_avg_excl = opponent_avg_excl_by_team(cur_points, opponent, played_weeks, positions)
 
     w = min(weeks_played / pa_prior_season_weeks, 1.0) if pa_prior_season_weeks > 0 else 1.0
     for pos in positions:
@@ -371,17 +392,13 @@ def compute_matchup_index(
         result.allowed_ppg[pos] = dict(cur_season_allowed[pos])
         result.l5_allowed_ppg[pos] = dict(cur_l5_allowed[pos])
         # Raw/Adjusted stay pure current-season (matching allowed_ppg above),
-        # not blended with prior-season data - a display lens on the same
-        # cur_season_index that also seeds `blended`, never the prior-season
-        # fallback that only affects the site-wide projection-driving index.
-        result.adjusted_allowed_ppg[pos] = {
-            t: league_avg[pos] * cur_season_index[pos].get(t, 1.0) for t in teams
-        }
+        # not blended with prior-season data.
         result.pa_factor[pos] = {
-            t: (result.adjusted_allowed_ppg[pos][t] / result.allowed_ppg[pos][t])
-            if result.allowed_ppg[pos].get(t, 0.0) > 0
-            else 1.0
+            t: (league_avg[pos] / opp_avg_excl[pos][t]) if opp_avg_excl[pos].get(t, 0.0) > 0 else 1.0
             for t in teams
+        }
+        result.adjusted_allowed_ppg[pos] = {
+            t: result.allowed_ppg[pos][t] * result.pa_factor[pos][t] for t in teams
         }
 
     result.rank = _rank_positions(result.index)

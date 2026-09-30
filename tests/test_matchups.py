@@ -295,7 +295,14 @@ def test_prior_season_fallback_weight():
     assert half_a == pytest.approx(w * cur_index_1wk["WR"]["A"] + (1 - w) * prior_a, abs=1e-6)
 
 
-def test_adjusted_allowed_ppg_and_pa_factor_tie_to_the_current_season_index():
+def test_adjusted_allowed_ppg_and_pa_factor_tie_to_the_opp_avg_excl_column():
+    # pa_factor/adjusted_allowed_ppg must hand-verify against the SAME Opp
+    # Avg number the Matchups tab actually displays (opponent_avg_excl_by_
+    # team) - a ratio of two plain point averages (league_avg / opp_avg),
+    # NOT `index` (a mean of each week's own ratio) - those two are
+    # genuinely different numbers (mean-of-ratios != ratio-of-means), which
+    # is exactly what a real adjusted figure not tying back to the displayed
+    # Opp Avg column caught live.
     prior_df = pl.DataFrame(_rows_for(OUTPUT, 2024))
     current_df = pl.DataFrame(_rows_for(CURRENT_OUTPUT, 2025))
     prior_points = points_by_team_week_pos(prior_df, 2024, ["WR"], REY_SCORING)
@@ -308,13 +315,24 @@ def test_adjusted_allowed_ppg_and_pa_factor_tie_to_the_current_season_index():
         index_clamp=(0.0, 10.0),
     )
 
-    cur_season_index, cur_season_allowed = _index_for_basis(current_points, OPPONENT, TEAM_WEEKS, ["WR"], lambda ws: ws)
+    _, cur_season_allowed = _index_for_basis(current_points, OPPONENT, TEAM_WEEKS, ["WR"], lambda ws: ws)
     league_avg = _league_avg_by_pos(current_points, TEAM_WEEKS, ["WR"])
+    opp_avg_excl = opponent_avg_excl_by_team(current_points, OPPONENT, TEAM_WEEKS, ["WR"])
 
     for team in ["A", "B", "C", "D"]:
-        expected_adjusted = league_avg["WR"] * cur_season_index["WR"][team]
+        expected_factor = league_avg["WR"] / opp_avg_excl["WR"][team]
+        expected_adjusted = cur_season_allowed["WR"][team] * expected_factor
+        assert result.pa_factor["WR"][team] == pytest.approx(expected_factor)
         assert result.adjusted_allowed_ppg["WR"][team] == pytest.approx(expected_adjusted)
-        assert result.pa_factor["WR"][team] == pytest.approx(expected_adjusted / cur_season_allowed["WR"][team])
+
+    # This is genuinely a different number than the old index-derived formula
+    # would have produced for at least one team (not necessarily every team -
+    # mean-of-ratios and ratio-of-means can coincide on a small fixture) -
+    # guards against silently reverting to mean-of-ratios.
+    assert any(
+        result.adjusted_allowed_ppg["WR"][team] != pytest.approx(league_avg["WR"] * result.index["WR"][team])
+        for team in ["A", "B", "C", "D"]
+    )
 
     # Raw allowed_ppg is untouched by the adjustment - Adjusted is a separate
     # field, not a mutation of Raw.
@@ -390,13 +408,15 @@ def test_adjusted_allowed_ppg_falls_back_to_prior_season_when_no_current_weeks_p
     )
 
     prior_team_weeks = team_weeks_from_opponent(PRIOR_OPPONENT, ["A", "B", "C", "D"], [1, 2, 3])
-    prior_index, prior_allowed = _index_for_basis(prior_points, PRIOR_OPPONENT, prior_team_weeks, ["WR"], lambda ws: ws)
+    _, prior_allowed = _index_for_basis(prior_points, PRIOR_OPPONENT, prior_team_weeks, ["WR"], lambda ws: ws)
     prior_league_avg = _league_avg_by_pos(prior_points, prior_team_weeks, ["WR"])
+    prior_opp_avg_excl = opponent_avg_excl_by_team(prior_points, PRIOR_OPPONENT, prior_team_weeks, ["WR"])
 
     for team in ["A", "B", "C", "D"]:
-        expected_adjusted = prior_league_avg["WR"] * prior_index["WR"][team]
+        expected_factor = prior_league_avg["WR"] / prior_opp_avg_excl["WR"][team]
+        expected_adjusted = prior_allowed["WR"][team] * expected_factor
+        assert result.pa_factor["WR"][team] == pytest.approx(expected_factor)
         assert result.adjusted_allowed_ppg["WR"][team] == pytest.approx(expected_adjusted)
-        assert result.pa_factor["WR"][team] == pytest.approx(expected_adjusted / prior_allowed["WR"][team])
 
 
 # Reuses OPPONENT's 4-team round robin (week1: A-B/C-D, week2: A-C/B-D,

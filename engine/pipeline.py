@@ -769,6 +769,16 @@ def run_league(
     # ESPN's own team list order is arbitrary (internal team_id order), and
     # every downstream list/dropdown should reflect this same order.
     espn_teams = sorted(client.get_teams(), key=lambda t: (-t.wins, -t.points_for))
+    # "Shown on site as" overrides (docs/js/settings.js's Teams table, see
+    # ingest/settings_sheet.py's own comment) - applied onto .manager itself,
+    # the ONE field teamLabel() already prefers everywhere on the site, so
+    # every downstream consumer (teams.json, meta.json, trade targets, etc.)
+    # picks this up for free with no separate field to thread through.
+    team_display_names = cfg.get("team_display_names", {})
+    for t in espn_teams:
+        override = team_display_names.get(str(t.team_id))
+        if override:
+            t.manager = override
 
     has_dst = "DST" in settings.positions
     offense_positions = [p for p in settings.positions if p != "DST"]

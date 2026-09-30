@@ -167,6 +167,22 @@ def compute_current_seeds(
     return seeds
 
 
+def bracket_bye_count(playoff_team_count: int) -> int:
+    """How many top seeds get a first-round bye in a standard single-
+    elimination bracket. A real bracket's ROUND 1 needs a power-of-2 number
+    of slots; with fewer real teams than that, the top seeds simply have no
+    round-1 opponent to fill the extra slots with, so they sit out and wait
+    for round 2 - e.g. 6 teams still needs an 8-slot bracket, so the top 2
+    seeds (8 - 6) bye through round 1. Already a power of 2 (4, 8, 16...) or
+    just 1 team -> 0 byes, nothing to skip."""
+    if playoff_team_count <= 1:
+        return 0
+    bracket_size = 1
+    while bracket_size < playoff_team_count:
+        bracket_size *= 2
+    return bracket_size - playoff_team_count
+
+
 def simulate_playoffs(
     teams: list[TeamState],
     remaining_matchups: list[RemainingMatchup],
@@ -177,10 +193,19 @@ def simulate_playoffs(
     seed: int,
     playoff_team_count: int,
     division_winners_first: bool,
-    bye_seeds: int = 2,
+    bye_seeds: int | None = None,
 ) -> dict[int, dict]:
     """Ties count as 0.5 win (tie_rule=NONE); tiebreak is total points scored,
-    per the verified league settings (playoff_seed_tie_rule=TOTAL_POINTS_SCORED)."""
+    per the verified league settings (playoff_seed_tie_rule=TOTAL_POINTS_SCORED).
+
+    bye_seeds: how many top seeds the Bye% column credits with a first-round
+    bye - defaults to bracket_bye_count(playoff_team_count) (the standard
+    bracket rule) rather than a fixed number, so a league whose playoff
+    field isn't 6 teams doesn't silently inherit O-League's own 2-bye
+    answer. Still overridable by a caller (e.g. a league with a genuinely
+    non-standard bracket)."""
+    if bye_seeds is None:
+        bye_seeds = bracket_bye_count(playoff_team_count)
     rng = np.random.default_rng(seed)
     team_ids = [t.team_id for t in teams]
     n = len(team_ids)

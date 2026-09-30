@@ -198,28 +198,22 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
    compare view's own headers never get that move, so they still need this
    clearance; without it .compare-btn's own margin-left:auto would push it
    flush against the modal's right edge, directly under the X. */
-/* Frozen while the rest of the modal scrolls - .modal-box itself is the
-   real scrolling ancestor (see its own overflow-y:auto above), so
-   position:sticky here sticks relative to IT, not to this header's
-   immediate parent, and .modal-box's own clipped bounds (border-radius +
-   overflow) are what actually hide scrolled-past content behind it - a
-   plain sticky top:0 with an UNCLIPPED scrolling ancestor (the old
-   .modal-overlay-scrolls setup) let content still render above the header
-   once .modal-box's own top edge scrolled past the viewport, since nothing
-   clipped it there (confirmed live - see .modal-box's own comment). Needs
-   its own solid background (this section sits ABOVE everything else that
-   scrolls underneath it once stuck, including .player-stat-grid/the comp
-   tables) and a z-index above ordinary content. Deliberately NO negative
-   margins to reach .modal-box's own edges here - an earlier version tried
-   that (to avoid a background "sliver" at this header's own edges) and
-   negative top margin on a sticky element is a known source of sticky-
-   position miscalculation; it was also solving a problem that didn't exist
-   - .modal-box's own background is the SAME var(--card) this header uses,
-   so its padding area was never going to reveal anything different
-   regardless. The bottom border reads as a deliberate divider whether it's
-   currently stuck or not (no reliable cross-browser "is this sticky
-   element actually stuck right now" CSS selector to only add it once
-   scrolled). */
+/* position:sticky here is now only load-bearing for the compare view's own
+   two per-column headers, which still render inline inside .modal-content
+   (the scrolling element - see modal.js's openModal) rather than through
+   its separate .modal-header-slot. For openPlayerModal's single-player
+   view, this header lives IN that separate non-scrolling slot instead
+   (see .modal-header-slot's own comment for why - a real scroll-position
+   recalculation lag, not a clipping/scroll-container mistake), where
+   position:sticky is simply inert (nothing around it ever scrolls, so it
+   never has anything to "stick" against) - kept on the shared class rather
+   than split into a header-slot-only vs. compare-only variant, since an
+   inert sticky is harmless and one rule serving both keeps them visually
+   identical. Needs its own solid background (this section sits ABOVE
+   everything else that scrolls underneath it once stuck, including
+   .player-stat-grid/the comp tables in the compare-view case) and a
+   z-index above ordinary content. The bottom border reads as a deliberate
+   divider either way. */
 .player-modal-header {
   display: flex; align-items: center; gap: 12px; padding-right: 36px;
   position: sticky; top: 0; z-index: 5; background: var(--card);
@@ -440,6 +434,14 @@ thead .sticky-col-first { z-index: 2; }
   border-right: 1px solid var(--border);
 }
 .standings-table thead .sticky-seed, .standings-table thead .sticky-team { z-index: 2; }
+/* Every column WITHOUT its own Current/ROS group label (Seed, Team, Div,
+   xWins, Playoff%, Bye%, Div win%, Seed dist. - see standings.js's
+   rowspan="2" header cells) defaults to vertical-align:middle, which floats
+   its label in the dead center of the whole two-row-tall header instead of
+   down next to the single-row group labels (Record/PF/PA) sitting right
+   below it. Bottom-aligning these instead reads as one continuous header
+   block, label text sitting at a consistent height right above the data. */
+.standings-table thead th[rowspan] { vertical-align: bottom; }
 
 /* Settings' field rows used a fixed 220px label + inline range/select/checkbox
    in one unbroken flex row - on a narrow phone that's simply wider than the
@@ -711,6 +713,32 @@ thead .sticky-col-first { z-index: 2; }
 .bar-fill { height: 100%; background: var(--accent); }
 .bar-value { width: 60px; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; }
 
+/* Team Strength's own multi-row bar list (strength.js's positionBars) -
+   CSS Grid instead of each .bar-row being an independent flexbox, so the
+   label/value COLUMNS size consistently across every row. Flexbox sizes
+   each row independently: a row whose value text is longer ("25.8 (+3.8)")
+   left .bar-track less room than a row with a shorter one ("6.8 (-0.0)"),
+   making the bars themselves visibly different widths for no real reason -
+   confirmed live on mobile, once the value column stopped using a fixed
+   px width (needed so long value text wouldn't wrap - see that change).
+   Grid's own per-COLUMN auto-sizing (computed once across every row in the
+   group, unlike flexbox) is what actually keeps every row's bar the same
+   width regardless of its own value text length. Scoped to .bar-group's
+   own DIRECT .bar-row children (not .bar-row generally) - the same class
+   also backs simple standalone label+value rows elsewhere (playermodal.js's
+   FAAB estimate, settings.js's field rows), which aren't part of a group
+   needing cross-row column alignment and must keep their plain flex
+   layout. */
+.bar-group { display: grid; grid-template-columns: auto 1fr auto; align-items: center; column-gap: 8px; row-gap: 4px; font-size: 12px; }
+.bar-group > .bar-row { display: contents; }
+/* display:contents drops .bar-row-total's own box - and with it, any
+   border/margin/padding declared on the row itself (see the base
+   .bar-row-total rule above, now inert here) - reapplied to each of its 3
+   children instead, whose separate top borders/margins/padding all land in
+   the same grid row and read as one continuous divider line. */
+.bar-group > .bar-row-total > * { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 8px; }
+.bar-group .bar-label, .bar-group .bar-value { width: auto; white-space: nowrap; }
+
 .select-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
 .select-row select { padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--ink-900); }
 /* Trade Calculator's Team A/Team B/Sort label+select pairs - grouped into
@@ -921,23 +949,36 @@ details[open] summary { margin-bottom: 8px; }
   padding: 5dvh 16px;
   z-index: 1000;
 }
-/* .modal-box (not .modal-overlay) is the scrolling ancestor - it needs its
-   OWN clipped bounds, not just the overlay's, so a player-modal-header's
-   position:sticky properly hides content scrolled past it. An earlier
-   version made .modal-overlay the scroller instead (overflow-y:auto there,
-   .modal-box unbounded) - once .modal-box's own top edge scrolled above the
-   viewport, its content kept rendering in normal flow (nothing clipped it),
-   spilling out above the still-visibly-stuck header instead of disappearing
-   behind it (confirmed live - Game Log/schedule rows floating above the
-   frozen Jahmyr Gibbs header). max-height matches the overlay's own 5vh top
-   +bottom padding (100vh - 10vh) so the box's rounded corners/shadow still
-   read as one contained card rather than running the full viewport height
-   on tall player content. */
+/* .modal-box is a flex COLUMN, not the scroller itself - .modal-header-slot
+   (when a caller passes headerHtml - see modal.js's openModal) and
+   .modal-content are its two children, only the latter of which scrolls
+   (flex:1 + overflow-y:auto below). overflow:hidden here is what clips
+   BOTH children to the box's own rounded corners/max-height regardless of
+   which one is doing the actual scrolling internally.
+
+   This replaced THREE earlier rounds that each fixed one real,
+   reproducible bug while keeping the header position:sticky INSIDE the
+   scrolling element (first .modal-overlay, then .modal-box itself - see
+   git history/this file's own past revisions): which element was the real
+   scroll container, a stale scrollTop carried across redraws, and phone
+   address-bar vh/dvh mismatches. Each fix was real and stayed real, but a
+   genuine touch/momentum scroll gesture could STILL show later content
+   above the header afterward, which no synchronous/programmatic scrollTop
+   test here ever reproduced - position:sticky's own offset is recomputed
+   by the browser relative to live scroll position, and that recomputation
+   is well-documented (WebKit especially) to occasionally lag a frame or
+   more behind a real scroll, briefly exposing whatever the header itself
+   hasn't caught up to yet. A plain, non-sticky header that's simply never
+   part of the scrolling box at all has no such recalculation to lag -
+   it's always exactly where it is. See playermodal.js's openPlayerModal
+   for the one caller that actually uses headerHtml today; every other
+   caller (the points-against modal, and the compare view's own two
+   per-column headers) keeps the old sticky-inside-.modal-content
+   behavior, unchanged - .modal-header-slot stays empty for them. */
 .modal-box {
   background: var(--card);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  padding: 20px;
   max-width: 860px;
   width: 100%;
   /* dvh after vh for the same phone address-bar-chrome reason as
@@ -946,10 +987,29 @@ details[open] summary { margin-bottom: 8px; }
      taller than what's actually visible once the two units disagree. */
   max-height: calc(100vh - 10vh);
   max-height: calc(100dvh - 10dvh);
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
   position: relative;
 }
+/* Collapses to nothing when a caller doesn't pass headerHtml (see
+   modal.js's openModal) - :empty rather than a JS-toggled class, since
+   "did this specific open pass headerHtml" is exactly what innerHTML being
+   empty already encodes. Horizontal+top padding only (no bottom) - the
+   header itself (.player-modal-header) already carries its own bottom
+   padding/border divider, and .modal-content right below picks its OWN top
+   padding back up only when this slot is empty (see that rule) so the two
+   never stack into a double gap. */
+.modal-header-slot:empty { display: none; }
+.modal-header-slot:not(:empty) { padding: 20px 20px 0; }
+.modal-content {
+  padding: 20px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  flex: 1 1 auto;
+  min-height: 0; /* lets a flex child with overflow actually shrink/scroll instead of growing unbounded - the classic flexbox+overflow gotcha */
+}
+.modal-header-slot:not(:empty) + .modal-content { padding-top: 4px; }
 .modal-close {
   position: absolute;
   top: 10px;
@@ -973,9 +1033,13 @@ details[open] summary { margin-bottom: 8px; }
   th, td { padding: 5px 6px; font-size: 12px; }
   select, input, button { font-size: 16px; } /* prevents iOS auto-zoom on focus */
   nav.tabs button { padding: 8px 10px; font-size: 12px; }
-  .modal-box { padding: 14px; max-width: 100%; }
+  /* .modal-box itself carries no padding anymore (see its own comment) -
+     the tighter mobile inset applies to its two padded children instead. */
+  .modal-box { max-width: 100%; }
+  .modal-header-slot:not(:empty) { padding: 14px 14px 0; }
+  .modal-content { padding: 14px; }
+  .modal-header-slot:not(:empty) + .modal-content { padding-top: 4px; }
   .bar-label { width: 64px; }
-  .bar-value { width: 46px; }
   .player-picker { gap: 4px; }
   .desktop-col { display: none; }
   .mobile-col { display: table-cell; }
@@ -1276,7 +1340,9 @@ details[open] summary { margin-bottom: 8px; }
 
 @media (max-width: 700px) {
   .modal-tab-btn { padding: 8px 10px; font-size: 12px; }
-  .modal-overlay-wide .modal-box { max-width: 100%; padding: 14px; }
+  /* padding lives on .modal-content now (see the other mobile rule above,
+     unscoped so it already covers this wide/compare variant too). */
+  .modal-overlay-wide .modal-box { max-width: 100%; }
   /* +Compare stays a normal in-flow flex item here too (no more position:
      absolute + a guessed top offset - an earlier version of this rule did
      that and its own bottom edge ended up intersecting the frozen header's

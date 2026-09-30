@@ -97,6 +97,21 @@ def test_apply_remote_settings_collects_seeding_keys_verbatim():
     assert len(changes) == 5
 
 
+def test_apply_remote_settings_collects_team_display_name_overrides():
+    cfg = _base_cfg()
+    changes = apply_remote_settings(cfg, {"team_9_display_name": "Tim", "team_3_display_name": "chris"})
+    assert cfg["team_display_names"] == {"9": "Tim", "3": "chris"}
+    assert len(changes) == 2
+
+
+def test_apply_remote_settings_clearing_a_team_display_name_removes_the_override():
+    cfg = _base_cfg()
+    apply_remote_settings(cfg, {"team_9_display_name": "Tim"})
+    changes = apply_remote_settings(cfg, {"team_9_display_name": ""})
+    assert cfg["team_display_names"] == {}
+    assert len(changes) == 1
+
+
 def test_parse_seeding_config_builds_division_order_and_per_seed_configs():
     division_order, seed_configs = parse_seeding_config(
         {

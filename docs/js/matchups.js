@@ -94,10 +94,9 @@ function paByPositionTable(matchups, positions, basis, type, sortState) {
   return `<table><thead>${header}</thead><tbody>${rows}</tbody></table>`;
 }
 
-function paByWeekTable(byPositionForPos, season, priorSeason, sortState) {
+function paByWeekTable(byPositionForPos, sortState) {
   const teams = Object.keys(byPositionForPos).sort();
   const anyCurrent = teams.some((t) => Object.keys(byPositionForPos[t].current).length > 0);
-  const seasonUsed = anyCurrent ? season : priorSeason;
   const key = anyCurrent ? "current" : "prior";
   const allWeeks = new Set();
   teams.forEach((t) => Object.keys(byPositionForPos[t][key]).forEach((w) => allWeeks.add(Number(w))));
@@ -146,7 +145,7 @@ function paByWeekTable(byPositionForPos, season, priorSeason, sortState) {
       return `<tr data-team="${escapeHtml(t)}" class="clickable-row"><td>${escapeHtml(t)}</td><td class="cell-center">${fmt(rawAvgByTeam[t], 1)}</td><td class="cell-center">${fmt(byPositionForPos[t].opp_avg_excl ?? 0, 1)}</td><td class="cell-center"><strong>${fmt(adjAvgByTeam[t], 1)}</strong>${factorNote}</td>${cells}</tr>`;
     })
     .join("");
-  return `<p class="muted small">${seasonUsed} season, actual points allowed per week (not projected).</p><table>${header}<tbody>${rows}</tbody></table>`;
+  return `<table>${header}<tbody>${rows}</tbody></table>`;
 }
 
 export function renderMatchups(container, data) {
@@ -207,11 +206,10 @@ export function renderMatchups(container, data) {
     typeWrap.hidden = view !== "position";
 
     if (view === "week") {
-      help.textContent = 'Actual points allowed by position, per week. "Opp Avg" is what this defense\'s actual opponents scored on average against everyone ELSE (excluding their own game against this defense) - "Adjusted" scales Raw Avg by that same strength-of-opponent factor; weekly cells always stay raw. Click any column header to sort by it.';
-      wrap.innerHTML = paByWeekTable((data.recentResults || { by_position: {} }).by_position[pos] || {}, data.recentResults?.current_season, data.recentResults?.prior_season, sortState);
+      help.textContent = '"Opp Avg" is what this defense\'s opponents scored on average against everyone ELSE (excluding their own game against this defense) - "Adjusted" scales Raw Avg by that same strength-of-opponent factor.';
+      wrap.innerHTML = paByWeekTable((data.recentResults || { by_position: {} }).by_position[pos] || {}, sortState);
     } else {
-      const typeLabel = typeSelect.value === "adj" ? "opponent-strength-adjusted" : "raw";
-      help.textContent = `Every position at once - each cell stacks ${typeLabel} points allowed over its rank within that position (1 = best/easiest matchup, higher = tougher), recomputed for whichever Basis/Type is picked. Click a cell for that position's full detail, including its blended index; click a column header to sort by it.`;
+      help.textContent = "1 = easiest matchup, higher = tougher";
       wrap.innerHTML = paByPositionTable(data.matchups, positions, basisSelect.value, typeSelect.value, sortState);
     }
 

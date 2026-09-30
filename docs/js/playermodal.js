@@ -499,6 +499,20 @@ function niceAxisMax(rawMax, targetCount) {
   const step = niceStep(rawMax / targetCount);
   return Math.ceil(rawMax / step) * step;
 }
+// No real winning bid can exceed 100% of a team's ORIGINAL season budget
+// without an in-season FAAB trade (rare) - but niceAxisMax's own rounding
+// doesn't know that, and a real max that's only modestly over (or even
+// under) 100% can still round up to the next "nice" step a full 150% wide,
+// wasting most of the chart's width on empty space past where any bid could
+// realistically land (confirmed live). Clamps the padded/rounded axis back
+// down to exactly 100% whenever the REAL data itself never actually crossed
+// that line - genuinely trade-inflated data (realMax > 1.0) still gets its
+// own normal padded/rounded axis past 100%, sized to the real value, not an
+// arbitrary fixed ceiling.
+function budgetAwareAxisMax(realMax, targetCount) {
+  const padded = niceAxisMax(realMax * 1.15, targetCount);
+  return realMax <= 1.0 ? Math.min(padded, 1.0) : padded;
+}
 function niceTicksJs(axisMax, targetCount) {
   const step = niceStep(axisMax / targetCount);
   const ticks = [];
@@ -649,10 +663,12 @@ function faabEstimateSection(player, data) {
   // dots within a small tolerance of each other cluster into ONE dot sized
   // by count (clusterBidValues) rather than stacking vertically or getting
   // an "xN" text tag - both were tried and got busy fast with several
-  // duplicate/near-duplicate bids. Axis runs 0 to niceAxisMax (a round
-  // number a bit past the highest real price), with tick labels, so "where
-  // the bulk sits" reads in absolute terms rather than just relative
-  // position between two comp-specific endpoints. Median (solid line) and
+  // duplicate/near-duplicate bids. Axis runs 0 to budgetAwareAxisMax (a
+  // round number a bit past the highest real price, clamped to 100% unless
+  // the real data genuinely exceeds it - see that function), with tick
+  // labels, so "where the bulk sits" reads in absolute terms rather than
+  // just relative position between two comp-specific endpoints. Median
+  // (solid line) and
   // mean (triangle) both always shown - median-line has a gap below its own
   // label so the two never visually overlap. A dot beyond 1.5x the
   // IQR past p75 renders in the "outlier" color - a real winning price far
@@ -666,14 +682,21 @@ function faabEstimateSection(player, data) {
     const raw = (c.bid_distribution || []).map((v) => v.value);
     if (!raw.length) return "";
     const sorted = raw.slice().sort((a, b) => a - b);
-    const axisMax = niceAxisMax(sorted[sorted.length - 1] * 1.15, 4);
+    const axisMax = budgetAwareAxisMax(sorted[sorted.length - 1], 4);
     const xPct = (v) => (v / axisMax) * 100;
     const p25 = percentileOf(sorted, 25), p75 = percentileOf(sorted, 75);
     const med = median(raw), avg = meanOf(raw);
     const iqr = p75 - p25;
 
     const clusters = clusterBidValues(sorted, axisMax / 30);
-    const baseR = 4, maxR = 9;
+    // Area-proportional (sqrt of count), not linear - a cluster of 4 reads
+    // as roughly "4x the ink" of a single bid, not 4x the diameter, which
+    // would visually overstate it. baseR/maxR widened from an earlier
+    // 4-9px range that left too little visual difference between a single
+    // bid and a small handful of them to "see where volume took place" at a
+    // glance (confirmed live) - maxR=14 (28px across) still comfortably
+    // clears the .faab-iqr-band's own 32px-tall band in styles.css.
+    const baseR = 5, maxR = 14;
     const dots = clusters
       .map((cl) => {
         const r = Math.min(maxR, baseR * Math.sqrt(cl.values.length));
@@ -796,7 +819,7 @@ function faabEstimateSection(player, data) {
     ? (() => {
         const sampleValues = samples.map(([v]) => v);
         const sameWeekValues = sameWeekSamples.map(([v]) => v);
-        const axisMax = niceAxisMax(Math.max(dist.max, condPriceMean || 0, condPriceMedian || 0, ...sampleValues, ...sameWeekValues, 0.001) * 1.15, 5);
+        const axisMax = budgetAwareAxisMax(Math.max(dist.max, condPriceMean || 0, condPriceMedian || 0, ...sampleValues, ...sameWeekValues, 0.001), 5);
         const xPct = (v) => Math.max(0, Math.min(100, (v / axisMax) * 100));
         const defaultConfidence = 80;
         const defaultBid = weightedPercentileJs(samples, defaultConfidence);
@@ -1062,12 +1085,15 @@ function scheduleRankPillHtml(rank, avgIndex, timeframeLabel) {
 // behind the header's own solid background (see styles.css's .player-
 // modal-header > .modal-close). The compare view keeps using the shared
 // external button, untouched - see openPlayerModal vs openComparePlayerModal.
-function playerModalContentHtml(player, data, { showCompareTrigger = true } = {}) {
+// Split out from playerModalContentHtml (which still just concatenates
+// header+body for the compare view's own per-column usage - two independent
+// sticky headers, one per column, sharing one scrolling ancestor) so
+// openPlayerModal can hand the header to openModal's separate non-scrolling
+// slot instead - see that function's own comment for why.
+function playerModalHeaderHtml(player, data, { showCompareTrigger = true } = {}) {
   const color = POSITION_COLOR[player.position] || "#888";
   const team = player.fantasy_team_id !== null ? data.teamsById.get(player.fantasy_team_id) : null;
-  const faabHtml = faabEstimateSection(player, data);
-
-  const header = `
+  return `
     <div class="player-modal-header">
       ${playerPhotoHtml(player, "player-photo-lg")}
       <div>
@@ -1083,6 +1109,17 @@ function playerModalContentHtml(player, data, { showCompareTrigger = true } = {}
           : ""
       }
     </div>
+  `;
+}
+
+function playerModalBodyHtml(player, data, { showCompareTrigger = true } = {}) {
+  const faabHtml = faabEstimateSection(player, data);
+  const tabs = [
+    { key: "projections", label: "Game Log", html: overviewTabHtml(player, data) },
+    ...(faabHtml ? [{ key: "faab", label: "FAAB Lab", html: faabHtml }] : []),
+  ];
+
+  return `
     ${showCompareTrigger ? compareSearchHtml() : ""}
     <div class="player-stat-grid">
       <div class="stat-tile">
@@ -1101,20 +1138,15 @@ function playerModalContentHtml(player, data, { showCompareTrigger = true } = {}
       </div>
       <div class="stat-tile"><div class="stat-label">Value</div><div class="stat-value">${player.value_delta === undefined || player.value_delta === null ? "–" : fmt(player.value_delta, 1)}</div></div>
     </div>
-  `;
-
-  const tabs = [
-    { key: "projections", label: "Game Log", html: overviewTabHtml(player, data) },
-    ...(faabHtml ? [{ key: "faab", label: "FAAB Lab", html: faabHtml }] : []),
-  ];
-
-  return `
-    ${header}
     <div class="modal-tabs">
       ${tabs.map((t, i) => `<button class="modal-tab-btn${i === 0 ? " active" : ""}" data-modal-tab="${t.key}">${t.label}</button>`).join("")}
     </div>
     ${tabs.map((t, i) => `<div class="modal-tabpanel${i === 0 ? " active" : ""}" data-modal-panel="${t.key}">${t.html}</div>`).join("")}
   `;
+}
+
+function playerModalContentHtml(player, data, opts = {}) {
+  return playerModalHeaderHtml(player, data, opts) + playerModalBodyHtml(player, data, opts);
 }
 
 // Hidden until "+ Compare" is clicked (see wireCompareTrigger) - a plain
@@ -1220,7 +1252,17 @@ function wireFaabConfidenceSlider(scopeEl, player, data) {
 }
 
 export function openPlayerModal(player, data) {
-  openModal(playerModalContentHtml(player, data));
+  // headerHtml goes into openModal's own separate NON-scrolling slot, not
+  // .modal-content - a genuinely separate, static element instead of a
+  // position:sticky child of the scrolling content is what actually
+  // guarantees later content can never render above it (no sticky
+  // recalculation to lag behind a real scroll gesture at all) - see
+  // modal.js's own comment on why position:sticky alone wasn't enough
+  // (confirmed live: Game Log/stat-grid content still appearing above the
+  // frozen header on a real scroll, which every synchronous/programmatic
+  // scrollTop test here had never caught).
+  openModal(playerModalBodyHtml(player, data), { headerHtml: playerModalHeaderHtml(player, data) });
+  const modalBox = document.querySelector(".modal-box");
   const scope = document.querySelector(".modal-content");
   // Hide the shared modal shell's own external close button (a DIRECT
   // child of .modal-box, never touched by .modal-content's innerHTML
@@ -1228,15 +1270,19 @@ export function openPlayerModal(player, data) {
   // would get it destroyed the next time any modal opens, since it'd then
   // be nested inside the very content .innerHTML overwrites) and wire the
   // embedded one this content just rendered instead - see playerModal
-  // ContentHtml's own header comment.
+  // HeaderHtml's own header comment.
   const externalClose = document.querySelector(".modal-box > .modal-close");
   if (externalClose) externalClose.hidden = true;
-  scope.querySelector(".player-modal-header-actions > .modal-close")?.addEventListener("click", closeModal);
+  // .player-modal-header-actions (the embedded close button AND the
+  // +Compare trigger) now lives in openModal's own separate header slot,
+  // not .modal-content - modalBox (not scope) is the right search root for
+  // both.
+  modalBox.querySelector(".player-modal-header-actions > .modal-close")?.addEventListener("click", closeModal);
   wirePlayerModalTabs(scope);
   wireFaabConfidenceSlider(scope, player, data);
   wireGameLogRows(scope);
   wirePriceCompRows(scope);
-  wireCompareTrigger(scope, player, data);
+  wireCompareTrigger(modalBox, player, data);
 }
 
 // Side-by-side on a wide screen (see .compare-grid/.modal-overlay-wide in

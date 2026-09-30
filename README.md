@@ -203,6 +203,13 @@ in a league's YAML to skip it entirely and just use the YAML values.
    there) rather than the sheet directly. Unconfigured seeds/leagues fall
    back to today's behavior - `division_winners_first` for the top seeds,
    Wins→Points For for the rest.
+
+   A team's displayed name is a third per-entity group, one key per ESPN
+   team id: `team_<id>_display_name` overrides that team's `manager` field
+   (what `teamLabel()` shows everywhere on the site) to whatever value is
+   given, or falls back to ESPN's own manager/team name if the key is
+   absent or blank. Editable from the site's Settings tab (see "Teams"
+   there) rather than the sheet directly.
 2. Share it as "Anyone with the link can view" (the pipeline reads it
    unauthenticated via the public CSV export endpoint).
 3. Put the sheet's id (the long string in its URL between `/d/` and `/edit`)

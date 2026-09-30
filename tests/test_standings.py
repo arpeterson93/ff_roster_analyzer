@@ -6,6 +6,7 @@ from engine.standings import (
     SeedConfig,
     SeedTeamState,
     TeamState,
+    bracket_bye_count,
     compute_current_seeds,
     matchup_win_probability,
     simulate_playoffs,
@@ -115,6 +116,41 @@ def test_non_playoff_teams_seeded_with_last_playoff_seed_criteria():
     assert seeds[2] == 1  # highest PF takes the only playoff seed
     assert seeds[1] == 2  # next-highest PF, not next-most wins, takes seed 2
     assert seeds[3] == 3
+
+
+@pytest.mark.parametrize(
+    "playoff_team_count,expected_byes",
+    [
+        (1, 0), (2, 0), (3, 1), (4, 0), (5, 3), (6, 2), (7, 1), (8, 0), (10, 6), (12, 4), (16, 0),
+    ],
+)
+def test_bracket_bye_count_standard_bracket_rule(playoff_team_count, expected_byes):
+    # A real single-elim bracket's round 1 needs a power-of-2 number of
+    # slots - short of that, the top seeds simply have no round-1 opponent
+    # and sit out waiting for round 2. 6 teams still needs an 8-slot
+    # bracket (the next power of 2 at/above 6), so the top 2 (8-6) bye.
+    assert bracket_bye_count(playoff_team_count) == expected_byes
+
+
+def test_simulate_playoffs_bye_odds_defaults_to_bracket_bye_count():
+    # No remaining matchups (and clearly separated win totals) makes every
+    # iteration produce the SAME seeding - a deterministic stand-in for
+    # "playoff picture is already fully decided" rather than needing a real
+    # Monte Carlo spread to test bye_odds against.
+    teams = [
+        TeamState(team_id=i, division_id=0, wins=float(9 - i), losses=0, ties=0, points_for=float(1000 - i))
+        for i in range(1, 9)
+    ]
+    result = simulate_playoffs(
+        teams, [], {}, {}, iterations=10, seed=1, playoff_team_count=6, division_winners_first=False,
+    )
+    # bracket_bye_count(6) == 2 - only seeds 1-2 (team_id 1-2, the two
+    # highest-win teams) bye; seeds 3-6 make the playoffs but play round 1.
+    assert result[1]["bye_odds"] == pytest.approx(1.0)
+    assert result[2]["bye_odds"] == pytest.approx(1.0)
+    for team_id in [3, 4, 5, 6]:
+        assert result[team_id]["playoff_odds"] == pytest.approx(1.0)
+        assert result[team_id]["bye_odds"] == pytest.approx(0.0)
 
 
 def test_identical_means_split_odds_roughly_evenly():

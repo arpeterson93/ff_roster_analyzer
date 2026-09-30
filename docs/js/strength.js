@@ -55,6 +55,17 @@ function positionBars(strength, total) {
   return bars + totalBar;
 }
 
+// .bar-group (see styles.css) is what actually keeps every row's bar the
+// same width regardless of that row's own value text length - CSS Grid
+// sizes each label/value COLUMN once across every row, unlike each
+// .bar-row being an independent flexbox (confirmed live: a row with a
+// longer value like "25.8 (+3.8)" left its own .bar-track visibly
+// narrower than a row with a shorter one, once the value column stopped
+// using a fixed px width - see that change's own history).
+function positionBarsHtml(strength, total) {
+  return `<div class="bar-group">${positionBars(strength, total)}</div>`;
+}
+
 // Total starting-lineup strength: the per-position vs_avg values are each
 // already (this team's ppw at that position) - (league-average ppw at that
 // position), so they sum linearly into one "whole lineup vs. a fully average
@@ -320,7 +331,7 @@ export function renderStrength(container, data, slug) {
     <div class="card card-compact">
       <div class="select-row"><label>Your team:</label> ${teamSelect(data, slug, team.team_id)}</div>
       <h2>Starting Lineup vs. League Avg</h2>
-      ${positionBars(team.slot_strength, computeTotalStrength(data, team))}
+      ${positionBarsHtml(team.slot_strength, computeTotalStrength(data, team))}
       <h3>Value (Points Above Replacement)</h3>
       <div class="table-wrap"><table><thead><tr><th>Rank</th><th>Player</th><th title="Points above the best available free agent for his slot, in weeks he started.">Starting</th><th title="Points above the best available free agent at his position, in weeks he sat (discounted 50% into Total).">Depth</th><th title="Starting + Depth (Depth discounted 50%). See his player card's own Value week-by-week tab for the full split.">Total</th><th title="Starting value only, week by week - 0 in a week he sat, not a modeling gap.">Weekly trend</th></tr></thead><tbody>${depthTable(team.depth, data.playersById)}</tbody></table></div>
       <h3>Suggested pickups</h3>
