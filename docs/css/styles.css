@@ -226,20 +226,24 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
 /* The close button, moved into this header (see openPlayerModal) so it's
    genuinely part of the frozen section instead of a separate absolutely-
    positioned sibling that the header's own solid background then hid -
-   :has() scopes this to ONLY that case (a direct-child .modal-close),
-   leaving the compare view's own headers (which never get this move)
-   on the base .modal-close rule/this header's own padding-right above. */
-.player-modal-header:has(> .modal-close) { padding-right: 4px; }
-/* margin-left:auto (not a fixed value) so this stays flush at the row's
-   right edge whether or not .compare-btn is also present/in-flow next to
-   it. align-self:flex-start (not the row's own default align-items:
-   center, which both buttons used to inherit) pulls both it and
-   .compare-btn up to the row's own top edge - closer to the modal's real
-   top-right corner, the way the close button used to sit before it moved
-   into this header, rather than vertically centered against the (taller)
-   photo next to them. */
-.player-modal-header > .modal-close { position: static; margin-left: auto; align-self: flex-start; }
-.player-modal-header > .compare-btn { align-self: flex-start; }
+   :has() scopes this to ONLY that case (a .modal-header-actions wrapper,
+   itself only ever rendered alongside an embedded .modal-close - see
+   playerModalContentHtml), leaving the compare view's own headers (which
+   never get that wrapper at all) on the base rule's padding-right above. */
+.player-modal-header:has(.player-modal-header-actions) { padding-right: 4px; }
+/* Groups +Compare and the close button so they can sit right next to each
+   other (a tight 6px gap) independently of the header's own wider 12px
+   gap (which is for photo/name spacing, not these two) - margin-left:auto
+   on the WRAPPER (not each button) pushes the whole pair flush to the
+   row's right edge together. align-items:flex-start pulls the pair up to
+   the row's own top edge - closer to the modal's real top-right corner -
+   instead of vertically centered against the (taller) photo next to it;
+   align-self:flex-start repeats that same top alignment for the wrapper
+   itself as an item WITHIN the outer header row (align-items above only
+   controls ITS OWN children's cross-axis position, row-direction here,
+   column once the mobile rule below flips it - see that rule for why). */
+.player-modal-header-actions { display: flex; align-items: flex-start; align-self: flex-start; gap: 6px; margin-left: auto; }
+.player-modal-header-actions > .modal-close { position: static; }
 .player-modal-header h2 { margin: 0; }
 .player-modal-header p { margin: 2px 0 0; }
 .player-photo-lg { width: 56px; height: 56px; min-width: 56px; border-radius: 50%; object-fit: cover; background: color-mix(in srgb, var(--ink-500) 12%, transparent); }
@@ -1234,11 +1238,20 @@ details[open] summary { margin-bottom: 8px; }
      own border-bottom, since the guessed offset didn't account for the
      header's real height on every screen - see the conversation this was
      built from). Shrinking the label down to just "+" (.compare-btn-label
-     hidden below) is what actually makes this safe to leave in-flow next
-     to the close button - two icon-sized buttons comfortably fit beside
-     the player name even on a narrow phone, which "+ Compare"'s full text
-     never did. */
+     hidden below) keeps it compact regardless of layout. */
   .player-modal-header { padding-right: 0; }
+  /* .player-modal-header-actions stacks vertically here (X above +Compare,
+     not side by side like the wide-screen row above) rather than trying to
+     fit both horizontally next to a player name that's already tight on a
+     narrow phone - see the conversation this was built from. order:-1 on
+     .modal-close (not DOM order, which has +Compare first - see
+     playerModalContentHtml) puts the close button on top specifically,
+     +Compare underneath it; align-items:flex-end is this column's own
+     CROSS-axis (horizontal, once flex-direction is column) alignment, so
+     both stay flush against the row's right edge stacked on top of each
+     other instead of centering/left-aligning within the pair's own width. */
+  .player-modal-header-actions { flex-direction: column; align-items: flex-end; gap: 4px; }
+  .player-modal-header-actions > .modal-close { order: -1; }
   .compare-btn-label { display: none; }
   .compare-toggle { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
   .compare-side-btn {

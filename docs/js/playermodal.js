@@ -1089,8 +1089,14 @@ function playerModalContentHtml(player, data, { showCompareTrigger = true } = {}
         <h2><span class="pos-tag" style="background:${color}">${player.position}</span> ${escapeHtml(player.name)} <span class="muted small">${escapeHtml(player.nfl_team || "")}</span></h2>
         <p class="muted small">${team ? escapeHtml(teamLabel(team)) : "Free agent"} · Bye ${player.bye ?? "–"}</p>
       </div>
-      ${showCompareTrigger ? `<button class="compare-btn" type="button" data-compare-trigger title="Compare"><span aria-hidden="true">+</span><span class="compare-btn-label"> Compare</span></button>` : ""}
-      ${showCompareTrigger ? `<button class="modal-close" type="button" aria-label="Close">&times;</button>` : ""}
+      ${
+        showCompareTrigger
+          ? `<div class="player-modal-header-actions">
+               <button class="compare-btn" type="button" data-compare-trigger title="Compare"><span aria-hidden="true">+</span><span class="compare-btn-label"> Compare</span></button>
+               <button class="modal-close" type="button" aria-label="Close">&times;</button>
+             </div>`
+          : ""
+      }
     </div>
     ${showCompareTrigger ? compareSearchHtml() : ""}
     <div class="player-stat-grid">
@@ -1240,7 +1246,7 @@ export function openPlayerModal(player, data) {
   // ContentHtml's own header comment.
   const externalClose = document.querySelector(".modal-box > .modal-close");
   if (externalClose) externalClose.hidden = true;
-  scope.querySelector(".player-modal-header > .modal-close")?.addEventListener("click", closeModal);
+  scope.querySelector(".player-modal-header-actions > .modal-close")?.addEventListener("click", closeModal);
   wirePlayerModalTabs(scope);
   wireFaabConfidenceSlider(scope, player, data);
   wireGameLogRows(scope);
