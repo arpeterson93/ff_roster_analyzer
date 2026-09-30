@@ -5,6 +5,7 @@ from engine.pipeline import (
     _actual_weekly_stats,
     _faab_week_override,
     _positional_ranks_from_overall,
+    _price_comps_are_single_observation,
     _prior_ros_pos_rank_snapshot,
     _resolve_ros_pos_rank_snapshot,
 )
@@ -70,6 +71,49 @@ def test_prior_ros_pos_rank_snapshot_reads_only_non_null_entries():
 def test_prior_ros_pos_rank_snapshot_handles_no_prior_run():
     assert _prior_ros_pos_rank_snapshot(None) == {}
     assert _prior_ros_pos_rank_snapshot([]) == {}
+
+
+def test_price_comps_flag_a_single_real_backing_observation():
+    # One comp, one league behind it - the literal single-neighbor
+    # fallback case (e.g. Ollie Gordon II's real 2026 wk4 query).
+    comps = [{"season": 2021, "week": 6, "name": "Devontae Booker", "bid_distribution": [{"source_league_id": 355398, "value": 0.3}]}]
+    assert _price_comps_are_single_observation(comps) is True
+
+
+def test_price_comps_flag_several_rows_that_are_still_one_real_event():
+    # Two comp ROWS, but they're the SAME real (league, player, week)
+    # observation surfacing twice - still just one anecdote.
+    comps = [
+        {"season": 2021, "week": 6, "name": "Devontae Booker", "bid_distribution": [{"source_league_id": 355398, "value": 0.3}]},
+        {"season": 2021, "week": 6, "name": "Devontae Booker", "bid_distribution": [{"source_league_id": 355398, "value": 0.3}]},
+    ]
+    assert _price_comps_are_single_observation(comps) is True
+
+
+def test_price_comps_not_flagged_with_a_second_real_observation():
+    comps = [
+        {"season": 2021, "week": 6, "name": "Devontae Booker", "bid_distribution": [{"source_league_id": 355398, "value": 0.3}]},
+        {"season": 2022, "week": 5, "name": "Tyler Allgeier", "bid_distribution": [{"source_league_id": 355398, "value": 0.15}]},
+    ]
+    assert _price_comps_are_single_observation(comps) is False
+
+
+def test_price_comps_not_flagged_when_one_comp_has_multi_league_backing():
+    # One comp ROW, but multiple real leagues independently backed it -
+    # genuine cross-league precedent, not a single anecdote.
+    comps = [
+        {
+            "season": 2021, "week": 6, "name": "Devontae Booker",
+            "bid_distribution": [{"source_league_id": 355398, "value": 0.3}, {"source_league_id": 111111, "value": 0.25}],
+        }
+    ]
+    assert _price_comps_are_single_observation(comps) is False
+
+
+def test_price_comps_not_flagged_when_empty():
+    # Nothing to flag - below_relevance_threshold/the unranked gate
+    # already cover an empty comps list.
+    assert _price_comps_are_single_observation([]) is False
 
 
 def test_faab_week_bumps_once_current_weeks_games_have_started():

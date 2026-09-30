@@ -1336,7 +1336,7 @@ def _knn(
     return scored, weights
 
 
-DISTANCE_CUTOFF_PERCENTILE = 70.0  # see _position_distance_cutoffs
+DISTANCE_CUTOFF_PERCENTILE = 85.0  # see _position_distance_cutoffs
 
 
 def _position_distance_cutoffs(
@@ -1360,37 +1360,33 @@ def _position_distance_cutoffs(
     "fit once per pipeline run"), not once per live query the way _knn
     itself does.
 
-    pct=70 chosen empirically, NOT guessed - see the conversation this was
-    built from (a live 2026 wk2 Kirk Cousins query whose 4th-nearest comp, a
-    2023 Brock Purdy row, took an outsized vote share purely from a large
-    backing count inflating its credibility - see _credibility - despite
-    sitting meaningfully farther away than the other 9 comps). Backtested
-    by rebuilding this exact calculation against tools/faab_history/
-    combined-training-table.parquet specifically - the pooled table this
-    actually runs against in production (see POOLED_TRAINING_TABLE_PATH) -
-    since the single-league table can't even reproduce the effect: every
-    one of its rows shares leagues_eligible == 1, so credibility never
-    varies there at all, and a first calibration pass against it found
-    ZERO "credibility overrode distance" cases before pooling was tried.
-    Against the pooled table, thousands of real holdout cases showed the
-    same shape as Cousins/Purdy (a distance-rank 3-10 comp taking the
-    largest single share of the vote) in both the PRICE and INTEREST pools.
-    p70 is where held-out won-row conditional-price MAE (the PRICE pool -
-    literally "% of budget", the number Cousins/Purdy was distorting) was
-    minimized: 0.03745 vs 0.03761 uncapped, degrading again by p60/p50 -
-    a real, if modest, U-shaped improvement, not just "more cutoff is
-    better." The INTEREST pool's own bid_probability error kept improving
-    monotonically all the way down to much more aggressive cutoffs (p5) in
-    the same backtest, but that reads less like "the credibility-override
-    bug is fixed" and more like the well-known artifact of a k-NN average
-    creeping toward a 1-NN classifier on a rare-event (~10-14% positive)
-    binary target - not a trend to chase blindly by picking whatever
-    percentile minimizes that number. p70 is used for both pools
-    deliberately: it's the directly-supported answer for price, and a
-    comparably conservative, non-extreme choice for interest that still
-    recovers a real chunk of that stage's own improvement (MAE
-    0.20305->0.19761 in the same backtest) without wandering into 1-NN
-    territory."""
+    pct=70 was the original choice, NOT guessed - see the conversation this
+    was built from (a live 2026 wk2 Kirk Cousins query whose 4th-nearest
+    comp, a 2023 Brock Purdy row, took an outsized vote share purely from a
+    large backing count inflating its credibility - see _credibility -
+    despite sitting meaningfully farther away than the other 9 comps).
+    Backtested against tools/faab_history/combined-training-table.parquet
+    (the pooled table this actually runs against in production - see
+    POOLED_TRAINING_TABLE_PATH), where p70 minimized held-out won-row
+    conditional-price MAE: 0.03745 vs 0.03761 uncapped, degrading again by
+    p60/p50 - a real, if modest, U-shaped improvement at the time.
+
+    Re-backtested and moved to p85 once KNN_FEATURE_NAMES itself shrank
+    from ~19-20 dims down to 11 (the share-feature and trailing_2_3_avg_
+    points cuts - see that constant): p70's benefit had flipped to a net
+    COST in the smaller space - every measure (all rows/won/RB, both MAE
+    and bias) improved monotonically all the way up to fully uncapped, with
+    p70 sitting among the WORST options tested, not the best (see the
+    conversation this was built from for the full sweep). Makes sense in
+    hindsight - the cutoff's whole job is rejecting spuriously-distant
+    comps in a noisy, high-dimensional space, and with the noisiest
+    dimensions already gone, a "far" comp is less likely to be spurious, so
+    the safety net increasingly just throws away real signal. p85 was
+    picked over fully uncapped deliberately, though: it's statistically
+    indistinguishable from uncapped on every measure in that same sweep
+    (e.g. RB MAE 3.352 vs 3.355) while still keeping SOME real ceiling in
+    place for the original Cousins/Purdy-shaped failure mode, which barely
+    moves aggregate MAE either way but is still worth guarding against."""
     by_pos: dict[str, list[dict]] = defaultdict(list)
     for r in pool:
         by_pos[r["position"]].append(r)

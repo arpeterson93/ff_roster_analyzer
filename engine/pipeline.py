@@ -215,6 +215,27 @@ def _resolve_ros_pos_rank_snapshot(ros_pos_rank: float | None, prior_snapshot: f
     return ros_pos_rank if ros_pos_rank is not None else prior_snapshot
 
 
+def _price_comps_are_single_observation(comps: list[dict]) -> bool:
+    """True when every price comp shown - however many rows the k-NN
+    returned - collectively traces back to just ONE distinct real (league,
+    season, week, player) bid, via each comp's own bid_distribution (see
+    engine.faab_estimate._price_comp_bid_distribution - every pooled
+    league's own real winning price for that comp's same real-world
+    event). Catches both the single-neighbor fallback (one comp, one
+    league) AND a subtler case: several comp ROWS that are all actually
+    the same underlying (league, player, week) observation surfacing
+    more than once. False for a genuinely empty comps list -
+    below_relevance_threshold/the unranked gate above already cover that,
+    nothing here to flag - or when at least 2 distinct real observations
+    back it."""
+    distinct = {
+        (bd.get("source_league_id"), c["season"], c["week"], c["name"])
+        for c in comps
+        for bd in c.get("bid_distribution", [])
+    }
+    return len(distinct) == 1
+
+
 def _positional_ranks_from_overall(players: list[dict]) -> None:
     """Recomputes each player's ros_pos_rank IN PLACE, from where they land
     among same-position players within ros_overall_rank's own order - not
@@ -560,6 +581,45 @@ def _compute_faab_estimates(
             }
             continue
 
+        # Live FantasyPros positional ranks - already fetched for the whole
+        # roster/free-agent pool earlier in this pipeline run (see ros_
+        # lookup/weekly_lookup above), same ECR-style rank number as
+        # tools/faab_history/build_training_table.py's forward_rank_
+        # features computes historically (lower = better; None if
+        # FantasyPros doesn't rank this player at all this week).
+        weekly_rank = faab_weekly_rank(p)
+        ros_rank = p.get("ros_pos_rank")
+
+        # A player FantasyPros doesn't rank AT ALL, weekly or ROS, has no
+        # real expert read behind him at any horizon - the k-NN/regression
+        # would have to extrapolate off recent stats alone, which is
+        # exactly the "quiet, not genuinely relevant" population is_relevant
+        # already exists to gate out (see NO_BID_MAX_ROS_RANK) - this is
+        # the SAME judgment call applied to the narrower case of a player
+        # who cleared that recent-usage bar but has zero rank signal at
+        # all. See the conversation this was built from.
+        if weekly_rank is None and ros_rank is None:
+            estimates[pid] = {
+                "bid_probability": {"comp_based_mean": 0.0, "comp_based_median": 0.0, "regression": 0.0},
+                "conditional_price": {"comp_based_mean": 0.0, "comp_based_median": 0.0, "regression": 0.0},
+                "comps": [], "interest_comps": [], "distribution": None,
+                "unranked": True,
+                "team_interest": team_interest,
+                "same_week": same_week,
+                "inputs": {
+                    "position": p["position"], "week": current_week,
+                    "prior_week_actual_points": prior_points, "prior_week_had_stat_row": prior_actual is not None,
+                    "own_injury_flag": p.get("injury_status") in TEAMMATE_INJURY_FLAG_STATUSES,
+                    "teammate_position_injury_flag": teammate_flag, "teammate_position_injury_is_new": teammate_injury_is_new,
+                    "snap_pct_prior_week": snap_pct,
+                    "trailing_2_3_avg_points": trailing_2_3_avg_points, "season_avg_points": season_avg_points,
+                    "weekly_rank": weekly_rank, "ros_rank": ros_rank,
+                    "carry_share_prior_week": carry_share, "had_carry_share_prior_week": carry_share is not None,
+                    "target_share_prior_week": target_share, "had_target_share_prior_week": target_share is not None,
+                },
+            }
+            continue
+
         query = {
             "position": p["position"],
             "week": current_week,
@@ -571,14 +631,8 @@ def _compute_faab_estimates(
             "snap_pct_prior_week": snap_pct,
             "trailing_2_3_avg_points": trailing_2_3_avg_points,
             "season_avg_points": season_avg_points,
-            # Live FantasyPros positional ranks - already fetched for the
-            # whole roster/free-agent pool earlier in this pipeline run (see
-            # ros_lookup/weekly_lookup above), same ECR-style rank number as
-            # tools/faab_history/build_training_table.py's forward_rank_
-            # features computes historically (lower = better; None if
-            # FantasyPros doesn't rank this player at all this week).
-            "weekly_rank": faab_weekly_rank(p),
-            "ros_rank": p.get("ros_pos_rank"),
+            "weekly_rank": weekly_rank,
+            "ros_rank": ros_rank,
             "carry_share_prior_week": carry_share,
             "target_share_prior_week": target_share,
         }
@@ -587,6 +641,13 @@ def _compute_faab_estimates(
         # see same_week_signal's own docstring on why it's never blended
         # into the k-NN comp/regression numbers, just shown alongside them.
         estimates[pid] = model.estimate(query) | {"team_interest": team_interest, "same_week": same_week}
+        # See _price_comps_are_single_observation - a price estimate whose
+        # ENTIRE comp set (however many rows are shown) still traces back
+        # to just one real (league, player, week) bid is a single anecdote
+        # wearing a k-NN's clothes, not real independent historical
+        # precedent - flagged so the site can show it as such rather than
+        # implying more support than actually exists.
+        estimates[pid]["single_backing_flag"] = _price_comps_are_single_observation(estimates[pid]["comps"])
 
     # Reserved key, never a real player id (ESPN ids are numeric strings) -
     # tells rankings.js whether pull_current_week_bids.py actually ran for
