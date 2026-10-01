@@ -877,7 +877,7 @@ function faabEstimateSection(player, data) {
               </div>
               `
                 : ""}
-              <input type="range" min="50" max="99" value="${defaultConfidence}" class="faab-confidence-slider" data-confidence-slider>
+              <input type="range" min="1" max="99" value="${defaultConfidence}" class="faab-confidence-slider" data-confidence-slider>
               <p class="muted small">Bid that would have won this share of comparable historical auctions. Pooled from ${samples.length} winning prices behind the comps below.${
                 sameWeekDefaultBid !== null ? ` The green marker/row is the same read against ${sameWeekSamples.length} real bid${sameWeekSamples.length === 1 ? "" : "s"} on THIS player, other leagues, this week - not backtested.` : ""
               }</p>

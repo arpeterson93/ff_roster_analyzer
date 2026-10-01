@@ -737,6 +737,17 @@ thead .sticky-col-first { z-index: 2; }
    children instead, whose separate top borders/margins/padding all land in
    the same grid row and read as one continuous divider line. */
 .bar-group > .bar-row-total > * { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 8px; }
+/* .bar-track's own height:14px is a border-box measurement (see the global
+   `*{box-sizing:border-box}` rule) - the border-top+padding-top the rule
+   above adds eats directly into that same 14px instead of sitting above it,
+   squashing the Total row's track down to ~5px of real content height (14 -
+   1 - 8) and leaving .bar-fill's height:100% flush against the divider
+   line itself rather than filling a normal-looking bar below it (confirmed
+   live: the fill visibly intersected the line). Restored by padding the
+   total height back out to the same 14px of content PLUS the border/padding
+   this row alone carries, so the Total bar renders exactly as tall as every
+   position bar above it. */
+.bar-group > .bar-row-total > .bar-track { height: 23px; }
 .bar-group .bar-label, .bar-group .bar-value { width: auto; white-space: nowrap; }
 
 .select-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
