@@ -152,7 +152,15 @@ def _index_for_basis(
     Each week's ratio is normalized by the opponent's own average output
     EXCLUDING that very week (leave-one-out) - a defense's adjustment factor
     must never benefit from its own result against that opponent, which a
-    plain per-team average would otherwise partly be built from."""
+    plain per-team average would otherwise partly be built from.
+
+    `index` (a MEAN OF EACH WEEK'S OWN ratio, averaged across weeks) is no
+    longer used by compute_matchup_index's own result.index - see that
+    function's own docstring for why it switched to a ratio-of-averages
+    calc instead. Kept completely unchanged here, `index` and all, purely so
+    this function's own direct unit tests (which exercise its real,
+    still-correct mean-of-ratios math) keep passing - compute_matchup_index
+    itself now only ever reads this function's `allowed_ppg` return."""
     offense_avg_excl: dict[tuple[str, str, int], float] = {}
     for team, weeks in team_weeks.items():
         for pos in positions:
@@ -301,30 +309,61 @@ def compute_matchup_index(
     "played" with a real per-game completion check - a team whose game
     hasn't kicked off yet no longer gets a same-week 0.0 just because another
     game that week is final. Omitting it keeps the old global-cutoff
-    behavior for existing callers/tests."""
+    behavior for existing callers/tests.
+
+    `index` (and so `rank`, and everything downstream of either - Rankings'
+    Opp column, Schedule/Start-Sit's ROS grid, engine/valuation.py's weekly
+    opponent adjustment) is now THE SAME ratio-of-averages calculation as
+    pa_factor/adjusted_allowed_ppg below (the Matchups tab's own "Opp-
+    Adjusted" number) - ratio of two plain point averages
+    (allowed_ppg / opp_avg_excl), not the OLD mean-of-each-week's-own-ratio
+    approach _index_for_basis itself still computes (its own `index` return
+    value is deliberately discarded below - that function is kept exactly as
+    it was, including its own direct unit tests, purely for its allowed_ppg
+    output now). See the conversation this was built from: a user comparing
+    Rankings' displayed Opp rank against the Matchups tab's own rank for the
+    same (team, position) found them disagreeing (Indianapolis vs QB: 7th
+    here, 8th there) - two genuinely different formulas computing what reads
+    as "the same number" on screen. Unifying on the Matchups tab's simpler,
+    more legible ratio-of-averages calc (recommended and chosen over keeping
+    them separate) means projections/valuation lose the week-to-week
+    smoothing mean-of-ratios provided - accepted as the right tradeoff for
+    one consistent, easy-to-hand-verify number everywhere instead of two
+    quietly-different ones."""
     teams = sorted({t for (t, _), o in opponent.items() if o is not None} | {o for o in opponent.values() if o})
     all_weeks = sorted({w for (_, w) in opponent.keys()})
     team_weeks = team_weeks_from_opponent(opponent, teams, all_weeks)
 
     prior_all_weeks = sorted({w for (_, w) in prior_opponent.keys()})
     prior_team_weeks = team_weeks_from_opponent(prior_opponent, teams, prior_all_weeks)
-    prior_index, prior_allowed = _index_for_basis(prior_points, prior_opponent, prior_team_weeks, positions, lambda ws: ws)
+    _, prior_allowed = _index_for_basis(prior_points, prior_opponent, prior_team_weeks, positions, lambda ws: ws)
+    prior_league_avg = _league_avg_by_pos(prior_points, prior_team_weeks, positions)
+    prior_opp_avg_excl = opponent_avg_excl_by_team(prior_points, prior_opponent, prior_team_weeks, positions)
+    # The SAME ratio-of-averages formula pa_factor/adjusted_allowed_ppg use
+    # below, applied to prior-season data - what the no-current-data branch
+    # uses as `index` outright, and what the main branch's own prior/current
+    # blend (the `w` weighting further down) blends against. Dropping the
+    # constant `league_avg` numerator pa_factor itself carries doesn't change
+    # any TEAM's RANK relative to others at the same position (every team's
+    # ratio is scaled by the exact same positive constant), so this stays a
+    # legitimate ~1.0-centered index while still producing identical ranks to
+    # sorting by adjusted_allowed_ppg directly, the way the Matchups tab does.
+    prior_ratio_index = {
+        pos: {
+            t: (prior_allowed[pos][t] / prior_opp_avg_excl[pos][t]) if prior_opp_avg_excl[pos].get(t, 0.0) > 0 else 1.0
+            for t in prior_allowed[pos]
+        }
+        for pos in positions
+    }
 
     result = MatchupIndex()
 
     no_current_data = not any(game_final.values()) if game_final is not None else weeks_played <= 0
     if no_current_data:
-        prior_league_avg = _league_avg_by_pos(prior_points, prior_team_weeks, positions)
-        prior_opp_avg_excl = opponent_avg_excl_by_team(prior_points, prior_opponent, prior_team_weeks, positions)
         for pos in positions:
-            result.index[pos] = {t: _clamp(v, index_clamp) for t, v in prior_index[pos].items()}
+            result.index[pos] = {t: _clamp(v, index_clamp) for t, v in prior_ratio_index[pos].items()}
             result.allowed_ppg[pos] = dict(prior_allowed[pos])
             result.l5_allowed_ppg[pos] = dict(prior_allowed[pos])
-            # pa_factor/adjusted_allowed_ppg are a display-only lens (the
-            # Matchups tab's Opp-Adjusted Type, and PA by Week's Avg
-            # Adjusted/Opp Avg columns), deliberately NOT derived from
-            # `index` above - see the main branch's own comment on this for
-            # why.
             result.pa_factor[pos] = {
                 t: (prior_league_avg[pos] / prior_opp_avg_excl[pos][t]) if prior_opp_avg_excl[pos].get(t, 0.0) > 0 else 1.0
                 for t in prior_allowed[pos]
@@ -342,51 +381,48 @@ def compute_matchup_index(
     else:
         played_weeks = {t: [w for w in ws if w <= weeks_played] for t, ws in team_weeks.items()}
 
-    cur_season_index, cur_season_allowed = _index_for_basis(
-        cur_points, opponent, played_weeks, positions, lambda ws: ws
-    )
-    cur_l5_index, cur_l5_allowed = _index_for_basis(
-        cur_points, opponent, played_weeks, positions, lambda ws: ws[-5:]
-    )
+    _, cur_season_allowed = _index_for_basis(cur_points, opponent, played_weeks, positions, lambda ws: ws)
+    _, cur_l5_allowed = _index_for_basis(cur_points, opponent, played_weeks, positions, lambda ws: ws[-5:])
 
     if pa_basis == "season":
-        cur_index = cur_season_index
+        cur_allowed_for_index = cur_season_allowed
     elif pa_basis == "l5":
-        cur_index = cur_l5_index
-    else:  # blend
-        cur_index = {
+        cur_allowed_for_index = cur_l5_allowed
+    else:  # blend - the two RAW allowed-points averages blended first (both
+        # already plain point-per-game numbers, a natural thing to blend),
+        # then divided by the one season-long opp_avg_excl below ONCE -
+        # simpler than blending two already-divided ratios, and matches the
+        # same "one season-long factor, whichever average it's scaling"
+        # convention pa_factor/adjusted_allowed_ppg already use for L5.
+        cur_allowed_for_index = {
             pos: {
-                t: pa_l5_weight * cur_l5_index[pos].get(t, 1.0) + (1 - pa_l5_weight) * cur_season_index[pos].get(t, 1.0)
-                for t in cur_season_index[pos]
+                t: pa_l5_weight * cur_l5_allowed[pos].get(t, 0.0) + (1 - pa_l5_weight) * cur_season_allowed[pos].get(t, 0.0)
+                for t in cur_season_allowed[pos]
             }
             for pos in positions
         }
 
     league_avg = _league_avg_by_pos(cur_points, played_weeks, positions)
-    # pa_factor/adjusted_allowed_ppg's own opponent-strength baseline -
-    # deliberately league_avg / opp_avg_excl (a ratio of two plain point
-    # averages), NOT derived from `index` above (a mean of each week's OWN
-    # ratio, averaged across weeks) - those two aren't the same number
-    # (mean-of-ratios != ratio-of-means) and diverge most exactly when a
-    # single week's opp_avg_excl is small, which `index` can weight far more
-    # heavily than the team's other games (confirmed live - an index-derived
-    # adjusted number that didn't visibly tie back to the Matchups tab's own
-    # displayed Opp Avg column at all, and could run many multiples of raw
-    # on a thin sample). `index` itself is untouched - it's what actually
-    # drives a player's forward-looking weekly projection (see
-    # engine/valuation.py), where smoothing across weeks instead of one
-    # blunt end-of-sample ratio is the right call; pa_factor/adjusted_
-    # allowed_ppg are purely this tab's own explanatory "raw vs. who they
-    # actually faced" number and should be easy to hand-verify against the
-    # Opp Avg column sitting right next to them.
+    # The SAME opponent-strength baseline `index` above (prior_ratio_index)
+    # and below (cur_ratio_index) both use - a ratio of two plain point
+    # averages (allowed/opp_avg_excl), not a mean of each week's own ratio.
+    # See this function's own docstring for why these two used to be
+    # deliberately different numbers and no longer are.
     opp_avg_excl = opponent_avg_excl_by_team(cur_points, opponent, played_weeks, positions)
+    cur_ratio_index = {
+        pos: {
+            t: (cur_allowed_for_index[pos][t] / opp_avg_excl[pos][t]) if opp_avg_excl[pos].get(t, 0.0) > 0 else 1.0
+            for t in cur_allowed_for_index[pos]
+        }
+        for pos in positions
+    }
 
     w = min(weeks_played / pa_prior_season_weeks, 1.0) if pa_prior_season_weeks > 0 else 1.0
     for pos in positions:
         blended = {}
         for t in teams:
-            cur_v = cur_index[pos].get(t, 1.0)
-            prior_v = prior_index[pos].get(t, 1.0)
+            cur_v = cur_ratio_index[pos].get(t, 1.0)
+            prior_v = prior_ratio_index[pos].get(t, 1.0)
             blended[t] = _clamp(w * cur_v + (1 - w) * prior_v, index_clamp)
         result.index[pos] = blended
         result.allowed_ppg[pos] = dict(cur_season_allowed[pos])

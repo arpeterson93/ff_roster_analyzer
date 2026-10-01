@@ -228,17 +228,26 @@ def test_prior_season_index_uses_the_priors_own_schedule_not_currents():
         pa_basis="season", pa_l5_weight=0.5, pa_prior_season_weeks=6, index_clamp=(0.0, 10.0),
     )
 
+    # result.index is now the ratio-of-averages calc (allowed_ppg /
+    # opp_avg_excl), same as pa_factor/adjusted_allowed_ppg - see
+    # compute_matchup_index's own docstring - not _index_for_basis's own
+    # mean-of-each-week's-own-ratio `index` return (still real, just no
+    # longer what this reads).
     prior_team_weeks = team_weeks_from_opponent(PRIOR_OPPONENT, ["A", "B", "C", "D"], [1, 2, 3])
-    expected_index, _ = _index_for_basis(prior_points, PRIOR_OPPONENT, prior_team_weeks, ["WR"], lambda ws: ws)
+    _, expected_allowed = _index_for_basis(prior_points, PRIOR_OPPONENT, prior_team_weeks, ["WR"], lambda ws: ws)
+    expected_opp_avg_excl = opponent_avg_excl_by_team(prior_points, PRIOR_OPPONENT, prior_team_weeks, ["WR"])
 
     for team in ["A", "B", "C", "D"]:
-        assert result.index["WR"][team] == pytest.approx(expected_index["WR"][team])
+        expected_index = expected_allowed["WR"][team] / expected_opp_avg_excl["WR"][team]
+        assert result.index["WR"][team] == pytest.approx(expected_index)
 
     # Sanity check the bug this guards against: computing with the WRONG
     # (current-season) schedule gives visibly different numbers.
     wrong_team_weeks = team_weeks_from_opponent(OPPONENT, ["A", "B", "C", "D"], [1, 2, 3])
-    wrong_index, _ = _index_for_basis(prior_points, OPPONENT, wrong_team_weeks, ["WR"], lambda ws: ws)
-    assert wrong_index["WR"]["A"] != pytest.approx(expected_index["WR"]["A"])
+    _, wrong_allowed = _index_for_basis(prior_points, OPPONENT, wrong_team_weeks, ["WR"], lambda ws: ws)
+    wrong_opp_avg_excl = opponent_avg_excl_by_team(prior_points, OPPONENT, wrong_team_weeks, ["WR"])
+    wrong_index_a = wrong_allowed["WR"]["A"] / wrong_opp_avg_excl["WR"]["A"]
+    assert wrong_index_a != pytest.approx(expected_allowed["WR"]["A"] / expected_opp_avg_excl["WR"]["A"])
 
 
 CURRENT_OUTPUT = {
@@ -298,11 +307,13 @@ def test_prior_season_fallback_weight():
 def test_adjusted_allowed_ppg_and_pa_factor_tie_to_the_opp_avg_excl_column():
     # pa_factor/adjusted_allowed_ppg must hand-verify against the SAME Opp
     # Avg number the Matchups tab actually displays (opponent_avg_excl_by_
-    # team) - a ratio of two plain point averages (league_avg / opp_avg),
-    # NOT `index` (a mean of each week's own ratio) - those two are
-    # genuinely different numbers (mean-of-ratios != ratio-of-means), which
-    # is exactly what a real adjusted figure not tying back to the displayed
-    # Opp Avg column caught live.
+    # team) - a ratio of two plain point averages (league_avg / opp_avg).
+    # result.index now uses this SAME ratio-of-averages calc (see
+    # compute_matchup_index's own docstring on why it switched away from a
+    # mean-of-each-week's-own-ratio approach) - the two are proportional by
+    # exactly the per-position league_avg constant, confirmed below, so
+    # Rankings' Opp rank (sourced from index/rank) and the Matchups tab's own
+    # rank (sourced from adjusted_allowed_ppg) now always agree.
     prior_df = pl.DataFrame(_rows_for(OUTPUT, 2024))
     current_df = pl.DataFrame(_rows_for(CURRENT_OUTPUT, 2025))
     prior_points = points_by_team_week_pos(prior_df, 2024, ["WR"], REY_SCORING)
@@ -325,14 +336,15 @@ def test_adjusted_allowed_ppg_and_pa_factor_tie_to_the_opp_avg_excl_column():
         assert result.pa_factor["WR"][team] == pytest.approx(expected_factor)
         assert result.adjusted_allowed_ppg["WR"][team] == pytest.approx(expected_adjusted)
 
-    # This is genuinely a different number than the old index-derived formula
-    # would have produced for at least one team (not necessarily every team -
-    # mean-of-ratios and ratio-of-means can coincide on a small fixture) -
-    # guards against silently reverting to mean-of-ratios.
-    assert any(
-        result.adjusted_allowed_ppg["WR"][team] != pytest.approx(league_avg["WR"] * result.index["WR"][team])
-        for team in ["A", "B", "C", "D"]
-    )
+    # adjusted_allowed_ppg == league_avg * index for every team now - both
+    # are the same ratio-of-averages calc, differing only by the constant
+    # league_avg multiplier (which doesn't change any team's RANK relative
+    # to the others at this position). This is the unification itself:
+    # before, this assertion would have FAILED for at least one team (index
+    # was a mean-of-ratios, genuinely a different number) - see the
+    # conversation this was built from.
+    for team in ["A", "B", "C", "D"]:
+        assert result.adjusted_allowed_ppg["WR"][team] == pytest.approx(league_avg["WR"] * result.index["WR"][team])
 
     # Raw allowed_ppg is untouched by the adjustment - Adjusted is a separate
     # field, not a mutation of Raw.

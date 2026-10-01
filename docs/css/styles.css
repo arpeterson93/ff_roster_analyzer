@@ -990,7 +990,18 @@ details[open] summary { margin-bottom: 8px; }
   background: var(--card);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  max-width: 860px;
+  /* 860px content width + 18px to offset .modal-content's own
+     scrollbar-gutter reservation below - see that rule's comment. Without
+     this, the box's real content width is just 860 minus whatever a
+     vertical scrollbar happens to take (confirmed live: a QB's Game Log
+     table measured 816px wide against only 805px actually available once
+     the vertical scrollbar was reserved, an 11px overflow that forced the
+     Game Log into its OWN unwanted horizontal scrollbar - see
+     .modal-content's own comment). 18px is a deliberately generous
+     estimate of a classic (non-overlay) scrollbar's width - real Windows
+     Chrome measured ~15px, but Firefox and OS-scaled displays can run a
+     little wider, and a couple of spare px here costs nothing. */
+  max-width: 878px;
   width: 100%;
   /* dvh after vh for the same phone address-bar-chrome reason as
      .modal-overlay's own padding above - the two must stay matched
@@ -1019,6 +1030,16 @@ details[open] summary { margin-bottom: 8px; }
   overscroll-behavior: contain;
   flex: 1 1 auto;
   min-height: 0; /* lets a flex child with overflow actually shrink/scroll instead of growing unbounded - the classic flexbox+overflow gotcha */
+  /* ALWAYS reserves the vertical scrollbar's gutter, whether or not this
+     particular player/tab is actually tall enough to need it - without
+     this, content width silently depends on whether a scrollbar happens to
+     be showing (a stat-heavy tab needing to scroll gets ~15px less width
+     than a short one that doesn't), which is exactly what let a QB's Game
+     Log table (816px) overflow a scrollbar-shrunk 805px and need its own
+     unwanted horizontal scroll - see .modal-box's own max-width comment,
+     which adds back the width this reserves so content isn't net-narrower
+     than before in the common (no-scrollbar) case either. */
+  scrollbar-gutter: stable;
 }
 .modal-header-slot:not(:empty) + .modal-content { padding-top: 4px; }
 .modal-close {
