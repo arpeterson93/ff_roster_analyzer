@@ -1,14 +1,15 @@
 name: faab-weekly
 
-# Pulls this week's real FAAB bids from every FAAB-eligible pooled public
-# league (tools/faab_history/pull_current_week_bids.py) and commits the
-# result straight to main. Deliberately separate from update.yml: this
-# writes tools/faab_history/current-week-bids.json directly into git, not
-# docs/data/site-data, and only needs public-league ESPN access (no
-# ESPN_S2_AGS/SWID_AGS) - see that script's own module docstring for why
-# Wednesday morning specifically (most pooled leagues' own Tuesday-night/
-# Wednesday-morning waivers have settled by then, a day before The O
-# League's own Wednesday-night run).
+# Pulls this week's real FAAB bids AND a rostered-player-ids snapshot from
+# every FAAB-eligible pooled public league
+# (tools/faab_history/pull_current_week_bids.py) and commits the result
+# straight to main. Deliberately separate from update.yml: this writes
+# tools/faab_history/current-week-bids.json and current-week-rosters.json
+# directly into git, not docs/data/site-data, and only needs public-league
+# ESPN access (no ESPN_S2_AGS/SWID_AGS) - see that script's own module
+# docstring for why Wednesday morning specifically (most pooled leagues'
+# own Tuesday-night/Wednesday-morning waivers have settled by then, a day
+# before The O League's own Wednesday-night run).
 #
 # Triggered by a cron-job.org job POSTing to this workflow's dispatch
 # endpoint (same PAT as the update.yml jobs - see README's "Update cadence"
@@ -39,14 +40,14 @@ jobs:
           PYTHONIOENCODING: utf-8
         run: python -m tools.faab_history.pull_current_week_bids
 
-      - name: Commit current-week-bids.json
+      - name: Commit current-week-bids.json and current-week-rosters.json
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add tools/faab_history/current-week-bids.json
+          git add tools/faab_history/current-week-bids.json tools/faab_history/current-week-rosters.json
           if git diff --cached --quiet; then
             echo "no changes to commit"
             exit 0
           fi
-          git commit -m "Update current-week-bids.json"
+          git commit -m "Update current-week-bids.json and current-week-rosters.json"
           git push origin HEAD:main
