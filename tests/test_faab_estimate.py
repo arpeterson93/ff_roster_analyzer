@@ -962,19 +962,51 @@ def test_same_week_availability_counts_won_leagues_against_free_agent_denominato
         _bid_row(1, signal="won"),
         _bid_row(2, signal="outbid"),  # real activity, but not a WIN - doesn't count toward leagues_with_bid
     ]
-    out = _same_week_availability_from_counts(rows, rostered_in={"9", "10"}, total_roster_leagues=12)
+    all_roster_leagues = {str(n) for n in range(1, 13)}  # 12 leagues pulled this week
+    out = _same_week_availability_from_counts(rows, rostered_in={"9", "10"}, all_roster_leagues=all_roster_leagues)
     assert out["leagues_with_bid"] == 1
-    assert out["leagues_eligible"] == 10  # 12 leagues pulled, 2 had him rostered already
+    assert out["leagues_eligible"] == 10  # 12 leagues pulled, 2 had him rostered already (and no activity there)
 
 
 def test_same_week_availability_zero_bid_activity_is_still_a_real_fraction():
     # No rows at all (never bid on anywhere this week) is still a real,
     # informative 0/N - not "no signal" the way same_week_signal treats an
     # empty rows list (see that function's own None-on-empty handling).
-    out = _same_week_availability_from_counts([], rostered_in=set(), total_roster_leagues=400)
+    all_roster_leagues = {str(n) for n in range(400)}
+    out = _same_week_availability_from_counts([], rostered_in=set(), all_roster_leagues=all_roster_leagues)
     assert out == {"leagues_with_bid": 0, "leagues_eligible": 400}
 
 
 def test_same_week_availability_rostered_everywhere_is_zero_eligible():
-    out = _same_week_availability_from_counts([], rostered_in={"1", "2"}, total_roster_leagues=2)
+    out = _same_week_availability_from_counts([], rostered_in={"1", "2"}, all_roster_leagues={"1", "2"})
     assert out["leagues_eligible"] == 0
+
+
+def test_same_week_availability_a_league_just_won_in_still_counts_eligible():
+    # The REAL bug this regression-tests (confirmed live 2026-10-01: Ollie
+    # Gordon II showed 945% INT). The roster snapshot is pulled from the
+    # SAME already-open league object right after the bid fetch, in the
+    # SAME run - so a league that just WON this player this week already
+    # shows him on the winner's roster by the time the snapshot is taken,
+    # even though he was a free agent there until that exact transaction.
+    # A naive "roster-pulled leagues minus rostered-in" denominator would
+    # subtract every winning league out of its own numerator's population,
+    # letting leagues_with_bid exceed leagues_eligible (see the old,
+    # broken version of this function this replaced).
+    rows = [_bid_row(n, signal="won") for n in range(1, 11)]  # won in all 10 pooled leagues
+    all_roster_leagues = {str(n) for n in range(1, 11)}
+    rostered_in = all_roster_leagues  # the post-transaction snapshot shows him rostered EVERYWHERE he just won
+    out = _same_week_availability_from_counts(rows, rostered_in=rostered_in, all_roster_leagues=all_roster_leagues)
+    assert out["leagues_with_bid"] == 10
+    assert out["leagues_eligible"] == 10  # every winning league counts as eligible, not zero
+    assert out["leagues_with_bid"] <= out["leagues_eligible"]  # the ratio can never exceed 100%
+
+
+def test_same_week_availability_a_league_already_rostered_with_no_activity_is_not_eligible():
+    # The genuine "not eligible" case the fix still has to get right: rostered
+    # AND no real bid activity there this week - he was never a free agent
+    # to begin with, not a side effect of winning him just now.
+    rows = [_bid_row(1, signal="won")]
+    all_roster_leagues = {"1", "2", "3"}
+    out = _same_week_availability_from_counts(rows, rostered_in={"2"}, all_roster_leagues=all_roster_leagues)
+    assert out["leagues_eligible"] == 2  # league 1 (won) + league 3 (free agent, not rostered) - league 2 excluded

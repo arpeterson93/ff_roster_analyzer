@@ -675,7 +675,7 @@ def _compute_faab_estimates(
         # puller hasn't produced one yet" (e.g. an older cached run from
         # before this was added), same distinction same_week_data_available
         # already draws for the FAAB Est. column.
-        "same_week_availability_data_available": current_week in model.same_week_total_roster_leagues,
+        "same_week_availability_data_available": current_week in model.same_week_roster_universe,
     }
     return estimates
 

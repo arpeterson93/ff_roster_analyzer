@@ -2125,7 +2125,7 @@ def _same_week_signal_from_rows(rows: list[dict]) -> dict | None:
     }
 
 
-def _same_week_availability_from_counts(rows: list[dict], rostered_in: set[str], total_roster_leagues: int) -> dict:
+def _same_week_availability_from_counts(rows: list[dict], rostered_in: set[str], all_roster_leagues: set[str]) -> dict:
     """The actual computation behind FaabModel.same_week_availability -
     factored out the same way _same_week_signal_from_rows is (see that
     function) so it's testable without a real current-week-rosters.json on
@@ -2146,15 +2146,41 @@ def _same_week_availability_from_counts(rows: list[dict], rostered_in: set[str],
     contested auction's own outbid rows as if they were separate leagues'
     worth of interest.
 
-    leagues_eligible: total_roster_leagues (every pooled league THIS WEEK's
-    roster pull actually succeeded for - see FaabModel.__init__) minus how
-    many of those had gsis_id on a roster already - i.e. confirmed NOT a
-    free agent there, so not a real chance to bid on him at all. Same
-    "eligible" definition tools/faab_history/build_training_table.py's
-    build_no_bid_rows uses for the historical, backfilled population."""
+    leagues_eligible: NOT simply "every roster-pulled league minus the ones
+    showing him rostered" - that naive version shipped broken (confirmed
+    live 2026-10-01: Ollie Gordon II showed 945% INT - 416 won leagues over
+    an "eligible" denominator of only 44). The roster snapshot is pulled
+    from the SAME already-open league object right after the bid fetch, in
+    the SAME run - so for every league that just WON him this week, the
+    snapshot taken moments later already shows him on the winner's roster,
+    which the naive formula then subtracted out of the denominator instead
+    of counting as eligible. A league he just won in was, by definition,
+    a free agent there until that exact transaction - real market evidence
+    of eligibility the post-transaction snapshot alone can't see.
+
+    Fixed by unioning in every league with ANY real transaction row
+    (won/outbid/other_failure - the won leagues' own rivals who got outbid
+    prove the SAME thing) regardless of what the snapshot taken afterward
+    shows: eligible = (roster-pulled leagues confirmed NOT rostered) OR
+    (leagues with real bid activity this week). A league only drops out of
+    the denominator when the snapshot shows him already rostered there AND
+    there's no bid evidence this week - i.e. he was never a free agent to
+    begin with this week, not that he stopped being one by winning.
+    leagues_with_bid is always a subset of this union by construction, so
+    the ratio can never exceed 100% the way the naive version could.
+
+    source_league_id in rows is a JSON int; rostered_in/all_roster_leagues
+    are str (current-week-rosters.json's league keys, which JSON forces to
+    strings) - normalized to str here so the set operations above actually
+    match leagues instead of silently comparing across two disjoint types
+    (confirmed via a real repro: str/int rostered_in never intersected a
+    same-typed active-leagues set in an earlier draft of this fix, which
+    would have reproduced the identical 945% bug under a different name)."""
+    active_leagues = {str(r["source_league_id"]) for r in rows}
+    eligible_leagues = (all_roster_leagues - rostered_in) | active_leagues
     return {
-        "leagues_with_bid": len({r["source_league_id"] for r in rows if r["signal"] == "won"}),
-        "leagues_eligible": total_roster_leagues - len(rostered_in),
+        "leagues_with_bid": len({str(r["source_league_id"]) for r in rows if r["signal"] == "won"}),
+        "leagues_eligible": len(eligible_leagues),
     }
 
 
@@ -2252,12 +2278,18 @@ class FaabModel:
         # same_week_availability only ever gets a real total for the
         # specific week key this dict actually has.
         self.same_week_rostered_leagues: dict[tuple[str, int], set[str]] = defaultdict(set)
-        self.same_week_total_roster_leagues: dict[int, int] = {}
+        # The full set of league ids (as str - see CURRENT_WEEK_ROSTERS_PATH's
+        # keys, JSON object keys are always strings) pull_current_week_bids.py
+        # got a real roster snapshot for THIS week - the universe
+        # same_week_availability unions against, not just a count (see
+        # _same_week_availability_from_counts's own docstring on why a plain
+        # count + naive subtraction shipped broken).
+        self.same_week_roster_universe: dict[int, set[str]] = {}
         if CURRENT_WEEK_ROSTERS_PATH.exists():
             rosters_doc = json.loads(CURRENT_WEEK_ROSTERS_PATH.read_text())
             rosters_week = rosters_doc["week"]
             leagues = rosters_doc["leagues"]
-            self.same_week_total_roster_leagues[rosters_week] = len(leagues)
+            self.same_week_roster_universe[rosters_week] = set(leagues.keys())
             for lid, gsis_ids in leagues.items():
                 for gsis_id in gsis_ids:
                     self.same_week_rostered_leagues[(gsis_id, rosters_week)].add(lid)
@@ -2308,12 +2340,12 @@ class FaabModel:
         _same_week_availability_from_counts's own docstring on why that's
         still a real, informative fraction (e.g. 0/400) rather than
         "no signal"."""
-        total = self.same_week_total_roster_leagues.get(week)
-        if not total or gsis_id is None:
+        all_roster_leagues = self.same_week_roster_universe.get(week)
+        if not all_roster_leagues or gsis_id is None:
             return None
         rows = self.same_week_by_gsis.get((gsis_id, week), [])
         rostered_in = self.same_week_rostered_leagues.get((gsis_id, week), set())
-        return _same_week_availability_from_counts(rows, rostered_in, total)
+        return _same_week_availability_from_counts(rows, rostered_in, all_roster_leagues)
 
     def estimate(self, query: dict) -> dict:
         comp = comp_based_estimate(
