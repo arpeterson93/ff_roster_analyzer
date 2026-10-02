@@ -35,16 +35,20 @@ function fmtPts(v) {
   return v === null || v === undefined ? "–" : fmt(v, 1);
 }
 
-// xFPTS nested beneath the actual value in the same cell, smaller font -
-// reuses styles.css's .comp-recent-cell/.sub pair (already used this way in
+// xFPTS nested beneath the actual value in the same cell, smaller/muted font
+// via styles.css's .comp-recent-cell/.sub pair (already used this way in
 // playermodal.js's comp cells; .sub only takes effect as a direct
 // descendant of .comp-rank-cell/.comp-recent-cell, so the wrapper is
-// required, not just the span itself). Omitted entirely (not a dash) when
-// there's no expected-points data for that week (K/DST - see
-// engine/expected_points.py).
+// required, not just the span itself) - the actual value is bumped up to
+// the theme's own full-contrast text color (--ink-900, not a literal white -
+// this site supports a light theme too, where literal white would be
+// illegible) so it visually leads over the dimmer expected value under it,
+// rather than both inheriting this cell's own .muted gray equally. Omitted
+// entirely (not a dash) when there's no expected-points data for that week
+// (K/DST - see engine/expected_points.py).
 function fmtPtsWithXfp(actual, xfp) {
-  const sub = xfp !== null && xfp !== undefined ? `<span class="sub">x${fmtPts(xfp)}</span>` : "";
-  return `<span class="comp-recent-cell">${fmtPts(actual)}${sub}</span>`;
+  const sub = xfp !== null && xfp !== undefined ? `<span class="sub">${fmtPts(xfp)}</span>` : "";
+  return `<span class="comp-recent-cell"><span style="color:var(--ink-900)">${fmtPts(actual)}</span>${sub}</span>`;
 }
 
 // FP Rank and Weather are both only ever real for the CURRENT week (FP Rank:
