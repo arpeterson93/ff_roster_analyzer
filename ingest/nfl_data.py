@@ -106,6 +106,64 @@ def play_by_play(seasons: int | list[int], current_season: int | None = None) ->
     return _normalize_team_columns(df, ["posteam", "defteam", "home_team", "away_team"])
 
 
+def ff_opportunity_weekly(seasons: int | list[int], current_season: int | None = None) -> pl.DataFrame:
+    """Weekly expected-fantasy-points components (ffverse/ffopportunity's
+    xgboost model: completions/yards/TDs/INTs/first-downs an AVERAGE player
+    would be expected to produce given this player's exact same volume of
+    opportunity - targets, air yards, carries, down/distance/field position
+    on each of their real plays). One row per player-week. Same graceful-
+    empty-frame-on-failure behavior as player_stats above. See
+    engine/expected_points.py for how this gets turned into league-scored
+    xFPTS - deliberately NOT this frame's own pre-baked `*_fantasy_points_exp`
+    columns, which assume one fixed generic scoring format."""
+    seasons_list = [seasons] if isinstance(seasons, int) else list(seasons)
+    try:
+        df = _cached_load(
+            "ff_opportunity_weekly",
+            seasons_list,
+            lambda: nfl.load_ff_opportunity(seasons_list, stat_type="weekly"),
+            current_season=current_season,
+        )
+    except ConnectionError:
+        probe = _cached_load(
+            "ff_opportunity_weekly_schema_probe",
+            [2023],
+            lambda: nfl.load_ff_opportunity([2023], stat_type="weekly"),
+            current_season=None,
+        )
+        return probe.clear()
+    return _normalize_team_columns(df, ["posteam"])
+
+
+def ff_opportunity_pbp(
+    seasons: int | list[int], stat_type: str, current_season: int | None = None
+) -> pl.DataFrame:
+    """Play-by-play version of ff_opportunity_weekly - one row per
+    (game_id, play_id) per passer/receiver (stat_type="pbp_pass") or rusher
+    (stat_type="pbp_rush"), joinable against ingest.nfl_data.play_by_play on
+    (game_id, play_id) - confirmed 100% join coverage for 2025. Powers the
+    Player Modal Game Log's per-play expected-points visual (see
+    engine/xfp_play_log.py)."""
+    seasons_list = [seasons] if isinstance(seasons, int) else list(seasons)
+    cache_name = f"ff_opportunity_{stat_type}"
+    try:
+        df = _cached_load(
+            cache_name,
+            seasons_list,
+            lambda: nfl.load_ff_opportunity(seasons_list, stat_type=stat_type),
+            current_season=current_season,
+        )
+    except ConnectionError:
+        probe = _cached_load(
+            f"{cache_name}_schema_probe",
+            [2023],
+            lambda: nfl.load_ff_opportunity([2023], stat_type=stat_type),
+            current_season=None,
+        )
+        return probe.clear()
+    return _normalize_team_columns(df, ["posteam"])
+
+
 def player_stats(seasons: int | list[int], current_season: int | None = None) -> pl.DataFrame:
     """Weekly per-player stats. Returns an empty frame with the expected columns
     if the season's file does not exist yet (e.g. the current season before

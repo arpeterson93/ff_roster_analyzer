@@ -1,8 +1,8 @@
 import { fmt, escapeHtml, getYourTeam } from "./state.js";
 import {
   POSITION_COLOR, INJURY_BADGE, impliedTotalCellHtml, opponentCellHtml, sortByPositionOrder, teamLabel,
-  pointsWeeksAgo, seasonAvgPoints, seasonTotalPoints, weatherCellHtml, rosCellHtml, projectedCellHtml,
-  snapPct, attPct, tgtPct, shortName,
+  pointsWeeksAgo, seasonAvgPoints, seasonTotalPoints, seasonTotalXfp, weatherCellHtml, rosCellHtml, projectedCellHtml,
+  snapPct, attPct, tgtPct, airYardPct, shortName,
 } from "./colors.js";
 import { openPlayerModal } from "./playermodal.js";
 import { openPointsAgainstModal } from "./pointsagainstmodal.js";
@@ -320,6 +320,14 @@ function statsFpts(p, statsWeek, currentWeek) {
   return weekEntryFor(p, statsWeek).actual?.points ?? null;
 }
 
+// Expected-points (xFPTS) twin of statsFpts above - null whenever
+// ffopportunity has no model (K/DST) or no row for that player-week, same
+// convention as statsFpts.
+function statsXfpts(p, statsWeek, currentWeek) {
+  if (statsWeek === "season") return seasonTotalXfp(p, currentWeek);
+  return weekEntryFor(p, statsWeek).actual?.xfp_points ?? null;
+}
+
 // The trailing single-value columns after the grouped stat block (which is
 // rendered directly via statCellsHtml, not through this column-def list -
 // see renderStatsTable). Snap %/Att %/Tgt % are skill-position usage
@@ -330,12 +338,18 @@ function statsTrailingColumns(data, filters) {
   const cw = data.meta.current_week;
   const sw = filters.statsWeek;
   const fpts = { key: "_fpts", label: "FPTS", fmt: (_v, p) => fmtScore(statsFpts(p, sw, cw)) };
+  // No ffopportunity model for K/DST (see engine/expected_points.py) - xFPTS
+  // simply doesn't exist for either, same reasoning Snap%/Att%/Tgt%/AirYd%
+  // already use to drop the whole Usage group for those positions.
   if (filters.position === "K" || filters.position === "DST") return [fpts];
+  const xfpts = { key: "_xfpts", label: "xFPTS", title: "Expected fantasy points - see the implementation plan's D2", fmt: (_v, p) => fmtScore(statsXfpts(p, sw, cw)) };
   return [
     { key: "_snap_pct", label: "Snap%", fmt: (_v, p) => fmtPct(snapPct(p, sw, cw)) },
     { key: "_att_pct", label: "Att%", title: "RB carry share only", fmt: (_v, p) => fmtPct(attPct(p, sw, cw)) },
     { key: "_tgt_pct", label: "Tgt%", fmt: (_v, p) => fmtPct(tgtPct(p, sw, cw)) },
+    { key: "_air_yard_pct", label: "AirYd%", fmt: (_v, p) => fmtPct(airYardPct(p, sw, cw)) },
     fpts,
+    xfpts,
   ];
 }
 
@@ -381,7 +395,9 @@ function sortValue(p, key, data, filters) {
   if (key === "_snap_pct") return snapPct(p, filters.statsWeek, cw) ?? -Infinity;
   if (key === "_att_pct") return attPct(p, filters.statsWeek, cw) ?? -Infinity;
   if (key === "_tgt_pct") return tgtPct(p, filters.statsWeek, cw) ?? -Infinity;
+  if (key === "_air_yard_pct") return airYardPct(p, filters.statsWeek, cw) ?? -Infinity;
   if (key === "_fpts") return statsFpts(p, filters.statsWeek, cw) ?? -Infinity;
+  if (key === "_xfpts") return statsXfpts(p, filters.statsWeek, cw) ?? -Infinity;
   // Schedule's per-week heat cells ("_wk12_sched", etc.) - same rank-type
   // convention as fp_week_pos_rank_label above (lower rank = better, so a
   // bye/no-data week sorts as Infinity, the worst possible rank, not 0).
@@ -418,15 +434,19 @@ function filteredSortedRows(data, filters, watched) {
   const yourTeamId = getYourTeam(data.meta.slug);
   let rows = data.players.filter((p) => {
     if (search && !p.name.toLowerCase().includes(search)) return false;
-    // My Team is additive, not exclusive: with Available and/or Watch List
-    // also checked, show their (AND'd, same as before) match OR My Team's
-    // roster - e.g. Available + My Team shows free agents plus your own
-    // players, not just whichever filter "wins".
-    if (filters.myTeamOnly || filters.faOnly || filters.watchedOnly) {
+    // My Team is additive, not exclusive: with Ownership (Available/Owned)
+    // and/or Watch List also set, show their (AND'd, same as before) match
+    // OR My Team's roster - e.g. Available + My Team shows free agents plus
+    // your own players, not just whichever filter "wins".
+    if (filters.myTeamOnly || filters.ownership !== "all" || filters.watchedOnly) {
       const isMyTeam = filters.myTeamOnly && p.fantasy_team_id === yourTeamId;
+      const ownershipOk =
+        filters.ownership === "available" ? p.fantasy_team_id === null
+        : filters.ownership === "owned" ? p.fantasy_team_id !== null
+        : true;
       const passesAvailWatch =
-        (filters.faOnly || filters.watchedOnly) &&
-        (!filters.faOnly || p.fantasy_team_id === null) &&
+        (filters.ownership !== "all" || filters.watchedOnly) &&
+        ownershipOk &&
         (!filters.watchedOnly || watched.has(p.id));
       if (!isMyTeam && !passesAvailWatch) return false;
     }
@@ -530,12 +550,12 @@ function renderStatsTable(wrap, container, data, filters, watched) {
   // row 1 was actually frozen there to hide it (confirmed live).
   const topLead = common.map((c) => `<th${c.className ? ` class="${c.className}"` : ""}></th>`).join("");
   const topGroups = blocks.map(([group, cols]) => `<th colspan="${cols.length}" class="block-end">${escapeHtml(group)}</th>`).join("");
-  // Snap%/Att%/Tgt% (present together, or not at all - see
+  // Snap%/Att%/Tgt%/AirYd% (present together, or not at all - see
   // statsTrailingColumns) get their own "Usage" group label spanning all
-  // three, same as the player modal's Game Log; FPTS stays its own
-  // unlabeled trailing column either way.
+  // four, same as the player modal's Game Log; FPTS/xFPTS stay their own
+  // unlabeled trailing columns either way.
   const hasUsage = trailing.some((c) => c.key === "_snap_pct");
-  const topTrail = hasUsage ? `<th colspan="3" class="block-end">Usage</th><th></th>` : trailing.map(() => "<th></th>").join("");
+  const topTrail = hasUsage ? `<th colspan="4" class="block-end">Usage</th><th></th><th></th>` : trailing.map(() => "<th></th>").join("");
   // Every column sorts by its own stat key EXCEPT the combined C/A column
   // (an array key, "completions"+"attempts" - no single sensible sort
   // value), which stays a plain unclickable header.
@@ -549,9 +569,9 @@ function renderStatsTable(wrap, container, data, filters, watched) {
     .join("");
   // The Usage group's own boundary (see topTrail above) needs the same
   // continuous line through the label row and every body row, not just the
-  // top group-header cell - Tgt% is Usage's last column either way (Snap%/
-  // Att%/Tgt%/FPTS is a fixed order - see statsTrailingColumns).
-  const isTrailingBlockEnd = (c) => hasUsage && c.key === "_tgt_pct";
+  // top group-header cell - AirYd% is Usage's last column either way (Snap%/
+  // Att%/Tgt%/AirYd%/FPTS/xFPTS is a fixed order - see statsTrailingColumns).
+  const isTrailingBlockEnd = (c) => hasUsage && c.key === "_air_yard_pct";
   const header = `
     <tr class="group-header-row">${topLead}${topGroups}${topTrail}</tr>
     <tr>${common.map((c) => sortableThHtml(c)).join("")}${bottomLabels}${trailing.map((c) => sortableThHtml(isTrailingBlockEnd(c) ? { ...c, className: "block-end" } : c)).join("")}</tr>
@@ -603,7 +623,7 @@ export function renderRankings(container, data, slug) {
   const weekOptions = [];
   for (let w = 1; w <= data.meta.current_week; w++) weekOptions.push(w);
 
-  const filters = { tab: "overview", position: "ALL", faOnly: false, team: "ALL", watchedOnly: false, myTeamOnly: false, search: "", statsWeek: "season" };
+  const filters = { tab: "overview", position: "ALL", ownership: "all", team: "ALL", watchedOnly: false, myTeamOnly: false, search: "", statsWeek: "season" };
   let watched = new Set();
 
   function draw() {
@@ -616,7 +636,11 @@ export function renderRankings(container, data, slug) {
           <select id="rankings-team-filter">${nflTeams.map((t) => `<option value="${t}">${t}</option>`).join("")}</select>
           ${filters.tab === "stats" ? `<select id="rankings-stats-week" class="filter-stats-week"><option value="season">Season</option>${weekOptions.map((w) => `<option value="${w}">Week ${w}</option>`).join("")}</select>` : ""}
           ${yourTeamId !== null ? `<label class="filter-checkbox"><input type="checkbox" id="rankings-myteam-only" /> My Team</label>` : ""}
-          <label class="filter-checkbox"><input type="checkbox" id="rankings-fa-only" /> Available</label>
+          <select id="rankings-ownership-filter">
+            <option value="all">All</option>
+            <option value="available">Available</option>
+            <option value="owned">Owned</option>
+          </select>
           ${yourTeamId !== null ? `<label class="filter-checkbox"><input type="checkbox" id="rankings-watched-only" /> Watch List</label>` : ""}
         </div>
         <div class="modal-tabs" id="rankings-tabs">
@@ -682,9 +706,10 @@ export function renderRankings(container, data, slug) {
         render(container, data, filters, watched);
       });
     }
-    container.querySelector("#rankings-fa-only").checked = filters.faOnly;
-    container.querySelector("#rankings-fa-only").addEventListener("change", (e) => {
-      filters.faOnly = e.target.checked;
+    const ownershipEl = container.querySelector("#rankings-ownership-filter");
+    ownershipEl.value = filters.ownership;
+    ownershipEl.addEventListener("change", (e) => {
+      filters.ownership = e.target.value;
       render(container, data, filters, watched);
     });
     const watchedOnlyEl = container.querySelector("#rankings-watched-only");

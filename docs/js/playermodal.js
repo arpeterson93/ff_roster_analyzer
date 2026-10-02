@@ -1,7 +1,7 @@
 import { fmt, escapeHtml } from "./state.js";
-import { POSITION_COLOR, opponentCellHtml, teamLabel, playerPhotoHtml, weeklyProjection, colorForRatio, ratioForRank, snapPct, attPct, tgtPct } from "./colors.js";
+import { POSITION_COLOR, opponentCellHtml, teamLabel, playerPhotoHtml, weeklyProjection, colorForRatio, ratioForRank, snapPct, attPct, tgtPct, airYardPct } from "./colors.js";
 import { openModal, closeModal } from "./modal.js";
-import { groupedHeaderHtml, statCellsHtml } from "./statcolumns.js";
+import { blocksForPosition, groupedHeaderHtml, statCellsHtml } from "./statcolumns.js";
 
 // Bar-per-play chart (x = elapsed game time, y = points scored on THAT
 // play) plus a top-plays table, for weeks with a per-play breakdown (see
@@ -79,7 +79,13 @@ function tdLabelHtml(p) {
   return `<div class="play-td-label">TD</div>`;
 }
 
-function playLogDetailHtml(plays, incompletions = [], gameDurationMin = 60, zeroPointPlays = []) {
+// The actual chart+table for one plays list (actual OR expected - see
+// playLogDetailHtml below, which computes the shared time axis ONCE across
+// both so they line up, then calls this once per section). Factored out of
+// playLogDetailHtml itself when the expected-points visual (D4) was added,
+// so both sections get the exact same bar/scaling/short-field treatment
+// rather than a second, drifting copy of this math.
+function _chartAndTableHtml(plays, incompletions, zeroPointPlays, totalMinutes, toChartPct, segments, hasOt) {
   const positives = plays.filter((p) => p.points > 0).map((p) => p.points);
   const negatives = plays.filter((p) => p.points < 0).map((p) => -p.points);
   const maxPos = Math.max(1, ...positives, 0);
@@ -101,29 +107,6 @@ function playLogDetailHtml(plays, incompletions = [], gameDurationMin = 60, zero
   // was BOTH the game's highest-scoring play AND a short-field snap would
   // have its dot clipped off by the chart's overflow:hidden top edge.
   const TOP_MARGIN_PCT = 14;
-  // The axis is 60 minutes (4 real 15-min quarters) unless the game went to
-  // OT - then it extends to gameDurationMin (see engine/pipeline.py's
-  // game_durations_by_game_id), the REAL end of the game across every play,
-  // not just this player's own. A player's own last touch can land well
-  // before the game actually ended (someone else wins it on a late OT
-  // field goal without this player getting the ball back again) - sizing
-  // the axis off only their own plays would draw the OT segment far
-  // narrower than the overtime that actually happened. Still guarded by
-  // every list's own elapsed times in case gameDurationMin is missing
-  // (older cached data) or, in theory, undershoots.
-  const REGULATION_MIN = 60;
-  const allElapsed = [...plays, ...incompletions, ...zeroPointPlays].map((p) => p.elapsed_min);
-  const totalMinutes = Math.max(REGULATION_MIN, gameDurationMin || 0, ...allElapsed);
-  const hasOt = totalMinutes > REGULATION_MIN;
-  // Every x-position on this chart goes through toChartPct rather than a
-  // plain (minutes/total)*100 - bars/markers are centered on their own x
-  // position (translateX(-50%)) and can be several pixels wide, so a play
-  // right at kickoff or right at the final whistle would otherwise have
-  // half its own shape clipped off by the chart's overflow:hidden edge.
-  // Reserving a small margin on both ends keeps every play's shape fully
-  // visible without needing to turn off the edge clipping entirely.
-  const EDGE_MARGIN_PCT = 3;
-  const toChartPct = (minutes) => EDGE_MARGIN_PCT + (minutes / totalMinutes) * (100 - 2 * EDGE_MARGIN_PCT);
   const bars = plays
     .map((p) => {
       const leftPct = toChartPct(p.elapsed_min);
@@ -190,14 +173,12 @@ function playLogDetailHtml(plays, incompletions = [], gameDurationMin = 60, zero
       return `<div class="play-bar play-zero-bar" style="left:${leftPct}%; bottom:${bottom}%; height:${ZERO_BAR_HALF_SPAN_PCT * 2}%" title="${title}">${shortFieldMarkerHtml(z)}</div>`;
     })
     .join("");
-  // Segments: four fixed 15-minute quarters, plus one more (regulation to
-  // totalMinutes) only when the game actually went there. Interior
-  // boundaries (everything but the very last segment's end, which is the
-  // right edge of the chart) get a divider line, same as the existing
-  // Q1/Q2/Q3 lines - a game that reaches OT now also gets one at the 60
-  // minute mark, separating Q4 from OT.
-  const segments = [15, 30, 45, 60].map((end, i) => ({ start: i * 15, end, label: `Q${i + 1}` }));
-  if (hasOt) segments.push({ start: REGULATION_MIN, end: totalMinutes, label: "OT" });
+  // segments/hasOt come from playLogDetailHtml (computed ONCE across both
+  // the actual and expected plays lists, so both sections share one time
+  // axis) - see that function for the "four 15-min quarters, +OT if the
+  // game went there" logic. Interior boundaries (everything but the very
+  // last segment's end, which is the right edge of the chart) get a
+  // divider line, same as the existing Q1/Q2/Q3 lines.
   const qlines = segments
     .slice(0, -1)
     .map((s) => `<div class="play-chart-qline" style="left:${toChartPct(s.end).toFixed(2)}%"></div>`)
@@ -233,16 +214,66 @@ function playLogDetailHtml(plays, incompletions = [], gameDurationMin = 60, zero
   `;
 }
 
+// Expanded Game Log row: the actual per-play chart+table (see
+// _chartAndTableHtml), then - when ffopportunity has per-play expected data
+// for this week (D4) - a second, labeled chart+table for expected points
+// underneath it. Both share the SAME time axis (computed once here, across
+// actual AND expected plays combined) so the two charts line up visually
+// rather than each picking its own OT/no-OT sizing. Unlike the actual
+// version, expectedPlays has no incompletions/zero-point split - every
+// pass/rush play has SOME nonzero expected value (see
+// engine/xfp_play_log.py's module docstring), so it's passed straight
+// through as the whole "plays" list for its own section.
+function playLogDetailHtml(plays, incompletions = [], gameDurationMin = 60, zeroPointPlays = [], expectedPlays = []) {
+  // The axis is 60 minutes (4 real 15-min quarters) unless the game went to
+  // OT - then it extends to gameDurationMin (see engine/pipeline.py's
+  // game_durations_by_game_id), the REAL end of the game across every play,
+  // not just this player's own. A player's own last touch can land well
+  // before the game actually ended (someone else wins it on a late OT
+  // field goal without this player getting the ball back again) - sizing
+  // the axis off only their own plays would draw the OT segment far
+  // narrower than the overtime that actually happened. Still guarded by
+  // every list's own elapsed times (actual AND expected) in case
+  // gameDurationMin is missing (older cached data) or, in theory,
+  // undershoots.
+  const REGULATION_MIN = 60;
+  const allElapsed = [...plays, ...incompletions, ...zeroPointPlays, ...expectedPlays].map((p) => p.elapsed_min);
+  const totalMinutes = Math.max(REGULATION_MIN, gameDurationMin || 0, ...allElapsed);
+  const hasOt = totalMinutes > REGULATION_MIN;
+  // Every x-position on this chart goes through toChartPct rather than a
+  // plain (minutes/total)*100 - bars/markers are centered on their own x
+  // position (translateX(-50%)) and can be several pixels wide, so a play
+  // right at kickoff or right at the final whistle would otherwise have
+  // half its own shape clipped off by the chart's overflow:hidden edge.
+  // Reserving a small margin on both ends keeps every play's shape fully
+  // visible without needing to turn off the edge clipping entirely.
+  const EDGE_MARGIN_PCT = 3;
+  const toChartPct = (minutes) => EDGE_MARGIN_PCT + (minutes / totalMinutes) * (100 - 2 * EDGE_MARGIN_PCT);
+  // Segments: four fixed 15-minute quarters, plus one more (regulation to
+  // totalMinutes) only when the game actually went there.
+  const segments = [15, 30, 45, 60].map((end, i) => ({ start: i * 15, end, label: `Q${i + 1}` }));
+  if (hasOt) segments.push({ start: REGULATION_MIN, end: totalMinutes, label: "OT" });
+  const actualSection = _chartAndTableHtml(plays, incompletions, zeroPointPlays, totalMinutes, toChartPct, segments, hasOt);
+  const expectedSection = expectedPlays.length
+    ? `<div class="play-chart-section-label muted small">Expected</div>${_chartAndTableHtml(expectedPlays, [], [], totalMinutes, toChartPct, segments, hasOt)}`
+    : "";
+  return `${actualSection}${expectedSection}`;
+}
+
 // Snap %/Att %/Tgt % (see colors.js's snapPct/attPct/tgtPct) - a skill-
 // position-only concept, appended after Misc rather than baked into
 // statcolumns.js's own OFFENSE_BLOCKS: a kicker's own participation lives
 // under snap_counts' SPECIAL-TEAMS snaps, not offense_snaps, and neither K
 // nor DST has carries/targets at all, so neither gets this block.
-const USAGE_BLOCK = ["Usage", [["_snap_pct", "Snap%"], ["_att_pct", "Att%"], ["_tgt_pct", "Tgt%"]]];
+const USAGE_BLOCK = ["Usage", [["_snap_pct", "Snap%"], ["_att_pct", "Att%"], ["_tgt_pct", "Tgt%"], ["_air_yard_pct", "AirYd%"]]];
 const _USAGE_POSITIONS = new Set(["QB", "RB", "WR", "TE"]);
 
 function fmtUsagePct(v) {
   return v === null || v === undefined ? "-" : `${Math.round(v * 100)}%`;
+}
+
+function fmtXfpts(v) {
+  return v === null || v === undefined ? "-" : fmt(v, 1);
 }
 
 // Same grouped stat columns as the points-against modal, so a position's
@@ -250,22 +281,50 @@ function fmtUsagePct(v) {
 // with a per-play breakdown available (data.gameLogPlays - offense/kicker
 // only, see engine/play_log.py) is clickable to expand it; weeks without
 // one (DST, or a build from before this existed) render exactly as before.
+// A position's own stat block (see statcolumns.js's blocksForPosition) is
+// worth a column group only if at least one of this player's displayed
+// games actually has a nonzero value in it - e.g. a pure receiver's
+// Passing block, or a pocket QB's Receiving block, is reliably all "-" and
+// just adds width without information. A rare real event (a trick-play
+// completion) still earns its block back, since that one game has real
+// data there - this never hides a real stat, only a block that's genuinely
+// always empty for this specific player.
+function _blockHasData(block, weeks) {
+  const [, cols] = block;
+  return weeks.some((w) => {
+    const stats = w.actual?.stats;
+    if (!stats) return false;
+    return cols.some(([key]) => (Array.isArray(key) ? key : [key]).some((k) => stats[k]));
+  });
+}
+
 function gameLogTable(player, data) {
   const extraBlocks = _USAGE_POSITIONS.has(player.position) ? [USAGE_BLOCK] : [];
-  const { top, bottom, flatColumns, blockEnds } = groupedHeaderHtml(player.position, ["Wk", "Opp"], extraBlocks);
-  const colCount = flatColumns.length + 3;
   const currentWeek = data.meta.current_week;
   const playsByWeek = (data.gameLogPlays || {})[player.id] || {};
-  const rows = (player.weekly || [])
-    .filter((w) => w.actual)
-    .slice()
-    .reverse()
+  const playedWeeks = (player.weekly || []).filter((w) => w.actual);
+  // Narrows the table so a large-screen single modal - and especially the
+  // side-by-side compare view, where each player gets roughly half the
+  // width - doesn't need horizontal scroll to see every completed game's
+  // stats (see _blockHasData above).
+  const positionBlocks = blocksForPosition(player.position).filter((block) => _blockHasData(block, playedWeeks));
+  const { top, bottom, flatColumns, blockEnds } = groupedHeaderHtml([...positionBlocks, ...extraBlocks], ["Wk", "Opp"]);
+  // groupedHeaderHtml is shared with pointsagainstmodal.js and only ever
+  // builds ONE fixed trailing column (FPts) - xFPTS is a second trailing
+  // column specific to this page, so it's appended here rather than widening
+  // that shared function for every one of its callers.
+  const topWithXfp = top.replace(/<\/tr>$/, "<th></th></tr>");
+  const bottomWithXfp = bottom.replace(/<\/tr>$/, "<th>xFPts</th></tr>");
+  const colCount = flatColumns.length + 4;
+  const rows = playedWeeks
     .map((w) => {
       const fpts = w.actual.points !== undefined && w.actual.points !== null ? fmt(w.actual.points, 1) : "-";
+      const xfpts = fmtXfpts(w.actual.xfp_points);
       const weekDetail = playsByWeek[String(w.week)];
       const scoringPlays = weekDetail?.plays || [];
       const incompletions = weekDetail?.incompletions || [];
       const zeroPointPlays = weekDetail?.zero_point_plays || [];
+      const expectedPlays = weekDetail?.expected_plays || [];
       const hasDetail = scoringPlays.length > 0 || incompletions.length > 0 || zeroPointPlays.length > 0;
       const stats = extraBlocks.length
         ? {
@@ -273,17 +332,18 @@ function gameLogTable(player, data) {
             _snap_pct: fmtUsagePct(snapPct(player, w.week, currentWeek)),
             _att_pct: fmtUsagePct(attPct(player, w.week, currentWeek)),
             _tgt_pct: fmtUsagePct(tgtPct(player, w.week, currentWeek)),
+            _air_yard_pct: fmtUsagePct(airYardPct(player, w.week, currentWeek)),
           }
         : w.actual.stats;
-      const mainRow = `<tr class="game-log-row ${hasDetail ? "clickable-row" : ""}" data-week="${w.week}"><td>${w.week}</td><td>${opponentCellHtml(w)}</td>${statCellsHtml(stats, flatColumns, blockEnds)}<td><strong>${fpts}</strong></td></tr>`;
+      const mainRow = `<tr class="game-log-row ${hasDetail ? "clickable-row" : ""}" data-week="${w.week}"><td>${w.week}</td><td>${opponentCellHtml(w)}</td>${statCellsHtml(stats, flatColumns, blockEnds)}<td><strong>${fpts}</strong></td><td class="muted">${xfpts}</td></tr>`;
       const detailRow = hasDetail
-        ? `<tr class="game-log-detail" data-week-detail="${w.week}" hidden><td colspan="${colCount}">${playLogDetailHtml(scoringPlays, incompletions, weekDetail?.game_duration_min, zeroPointPlays)}</td></tr>`
+        ? `<tr class="game-log-detail" data-week-detail="${w.week}" hidden><td colspan="${colCount}">${playLogDetailHtml(scoringPlays, incompletions, weekDetail?.game_duration_min, zeroPointPlays, expectedPlays)}</td></tr>`
         : "";
       return mainRow + detailRow;
     })
     .join("");
   if (!rows) return `<p class="muted small">No games played yet this season.</p>`;
-  return `<div class="table-wrap"><table>${top}${bottom}<tbody>${rows}</tbody></table></div>`;
+  return `<div class="table-wrap"><table>${topWithXfp}${bottomWithXfp}<tbody>${rows}</tbody></table></div>`;
 }
 
 // Bars/markers are positioned by percent-of-elapsed-time, so two plays
@@ -562,14 +622,20 @@ function recentCellHtml(pts, trailing, season) {
 // something snap share alone can't distinguish from a real featured
 // back/receiver. No % sign, no decimals, per the same conversation - these
 // read as quick relative comps, not precise figures.
-function usageCellHtml(position, snapPct, carryShare, targetShare) {
+function usageCellHtml(position, snapPct, carryShare, targetShare, airYardShare) {
   const pct = (v) => (v !== null && v !== undefined ? Math.round(v * 100) : null);
   const snap = pct(snapPct);
   const main = snap !== null ? `SNAP ${snap}` : "–";
   const secondary =
     position === "RB" ? { label: "ATT", value: pct(carryShare) } : position === "WR" || position === "TE" ? { label: "TGT", value: pct(targetShare) } : null;
   const sub = secondary ? `<span class="sub">${secondary.label} ${secondary.value !== null ? secondary.value : "–"}</span>` : "";
-  return `<span class="comp-recent-cell">${main}${sub}</span>`;
+  // Air yard share (UI-display-only, see engine/faab_estimate.py's
+  // recent_air_yard_share - never fed into the K-NN/regression model) -
+  // same WR/TE-only scoping as TGT above, since air yards are a receiving
+  // concept.
+  const airYd = position === "WR" || position === "TE" ? pct(airYardShare) : null;
+  const airYdSub = airYd !== null ? `<span class="sub">AirYd ${airYd}</span>` : "";
+  return `<span class="comp-recent-cell">${main}${sub}${airYdSub}</span>`;
 }
 function flagsCellHtml(ownInjury, teammateInjury) {
   const flags = [ownInjury ? `<span class="comp-flag">inj</span>` : "", teammateInjury ? `<span class="comp-flag tm">tm inj</span>` : ""].join("");
@@ -750,7 +816,7 @@ function faabEstimateSection(player, data) {
         <td>${escapeHtml(c.name)}<div class="muted small">${c.season} wk${c.week}</div>${oLeagueTag(c.o_league_detail)}</td>
         <td>${fmt(c.pct_of_remaining_budget * 100, 1)}%</td>
         <td>${recentCellHtml(c.prior_week_actual_points, c.trailing_2_3_avg_points, c.season_avg_points)}</td>
-        <td>${usageCellHtml(inputs.position, c.snap_pct_prior_week, c.carry_share_prior_week, c.target_share_prior_week)}</td>
+        <td>${usageCellHtml(inputs.position, c.snap_pct_prior_week, c.carry_share_prior_week, c.target_share_prior_week, c.air_yard_share_prior_week)}</td>
         <td>${rankCellHtml(c.weekly_rank, c.ros_rank)}</td>
         <td>${flagsCellHtml(c.own_injury_flag, c.teammate_position_injury_flag)}</td>
       </tr>`;
@@ -768,7 +834,7 @@ function faabEstimateSection(player, data) {
         <td>${escapeHtml(c.name)}<div class="muted small">${c.season} wk${c.week}</div>${oLeagueTag(c.o_league_detail)}</td>
         <td>${bidRateCellHtml(c.leagues_with_bid, c.leagues_eligible)}</td>
         <td>${recentCellHtml(c.prior_week_actual_points, c.trailing_2_3_avg_points, c.season_avg_points)}</td>
-        <td>${usageCellHtml(inputs.position, c.snap_pct_prior_week, c.carry_share_prior_week, c.target_share_prior_week)}</td>
+        <td>${usageCellHtml(inputs.position, c.snap_pct_prior_week, c.carry_share_prior_week, c.target_share_prior_week, c.air_yard_share_prior_week)}</td>
         <td>${rankCellHtml(c.weekly_rank, c.ros_rank)}</td>
         <td>${flagsCellHtml(c.own_injury_flag, c.teammate_position_injury_flag)}</td>
       </tr>`
@@ -977,7 +1043,7 @@ function faabEstimateSection(player, data) {
           <tr>
             <td>${escapeHtml(player.name)}<div class="muted small">Week ${inputs.week}</div></td>
             <td>${recentCellHtml(inputs.prior_week_had_stat_row ? inputs.prior_week_actual_points : null, inputs.had_trailing_2_3_avg_points ? inputs.trailing_2_3_avg_points : null, inputs.had_season_avg_points ? inputs.season_avg_points : null)}</td>
-            <td>${usageCellHtml(inputs.position, inputs.snap_pct_prior_week, inputs.had_carry_share_prior_week ? inputs.carry_share_prior_week : null, inputs.had_target_share_prior_week ? inputs.target_share_prior_week : null)}</td>
+            <td>${usageCellHtml(inputs.position, inputs.snap_pct_prior_week, inputs.had_carry_share_prior_week ? inputs.carry_share_prior_week : null, inputs.had_target_share_prior_week ? inputs.target_share_prior_week : null, inputs.air_yard_share_prior_week)}</td>
             <td>${rankCellHtml(inputs.had_weekly_rank ? inputs.weekly_rank : null, inputs.had_ros_rank ? inputs.ros_rank : null)}</td>
             <td>${flagsCellHtml(inputs.own_injury_flag, inputs.teammate_position_injury_flag)}</td>
           </tr>

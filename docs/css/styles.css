@@ -490,6 +490,17 @@ thead .sticky-col-first { z-index: 2; }
    pattern as .mobile-line. */
 .short-name { display: none; }
 
+/* Player modal's Game Log table can run to 15-20+ columns for a player with
+   real stats in every block (see playermodal.js's _blockHasData, which
+   already drops a block with no real data at all - this is the remaining
+   width for whoever's left with genuinely real stats in most/all blocks,
+   e.g. a dual-threat QB). Tighter than the sitewide 6px/8px th/td default,
+   scoped to modal tables only (not Rankings/Start-Sit, which have their own
+   width budget and don't need it) - the main thing standing between fitting
+   without horizontal scroll and not, especially in the side-by-side compare
+   view where each player only gets about half the modal's own width. */
+.modal-box table th, .modal-box table td { padding: 5px 3px; }
+
 /* Player modal's expandable Game Log bar-per-play chart (see
    docs/js/playermodal.js's playLogDetailHtml / engine/play_log.py) -
    entirely percentage-positioned (left/bottom/height, never a fixed pixel

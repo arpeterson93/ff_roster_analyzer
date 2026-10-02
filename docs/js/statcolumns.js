@@ -75,8 +75,15 @@ export function blockEndIndices(blocks) {
 // a table whose first N columns are `leadColumns` (e.g. Wk/Opp) and last
 // column is FPts. extraBlocks (e.g. the player modal Game Log's Usage
 // block, skill positions only) appends after position's own blocks.
-export function groupedHeaderHtml(position, leadColumns, extraBlocks = []) {
-  const blocks = [...blocksForPosition(position), ...extraBlocks];
+// `blocks` is the full block list to render (position's own stat blocks
+// plus any extras, e.g. playermodal.js's Usage block) - callers resolve
+// this themselves (usually via blocksForPosition(position), optionally
+// filtered down first) rather than this function deriving it from a
+// position internally, so a caller can trim blocks a given player/view has
+// no real data for (see playermodal.js's gameLogTable) without that
+// decision leaking into pointsagainstmodal.js's own call, which always
+// wants every block for the position regardless of any one game's data.
+export function groupedHeaderHtml(blocks, leadColumns) {
   const ends = blockEndIndices(blocks);
   const lead = leadColumns.map(() => "<th></th>").join("");
   const groupRow = blocks

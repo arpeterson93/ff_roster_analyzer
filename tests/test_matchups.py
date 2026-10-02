@@ -10,6 +10,7 @@ from engine.matchups import (
     compute_matchup_index,
     compute_schedule_strength,
     dst_points_by_team_week_pos,
+    expected_points_by_team_week_pos,
     opponent_avg_excl_by_team,
     points_by_team_week_pos,
     team_weeks_from_opponent,
@@ -50,6 +51,39 @@ def test_points_by_team_week_pos():
     table = points_by_team_week_pos(df, 2025, ["WR"], REY_SCORING)
     assert table[("A", 1, "WR")] == 10
     assert table[("C", 3, "WR")] == 18
+
+
+def _expected_rows():
+    # ffopportunity weekly shape - posteam (not team), STRING season
+    # (confirmed from ffopportunity's own R source: built via
+    # substr(game_id, 1, 4)), no season_type, plus the WEEKLY_EXP_STAT_MAP
+    # columns actually used (rec_yards_gained_exp for REY scoring; the other
+    # mapped columns default to 0 via expected_stat_row_from_weekly's
+    # `.get(...) or 0.0`).
+    rows = []
+    for team, weeks in OUTPUT.items():
+        for week, yards in weeks.items():
+            rows.append({"season": "2025", "posteam": team, "week": week, "position": "WR", "rec_yards_gained_exp": yards})
+    return rows
+
+
+def test_expected_points_by_team_week_pos():
+    df = pl.DataFrame(_expected_rows())
+    table = expected_points_by_team_week_pos(df, 2025, ["WR"], REY_SCORING)
+    assert table[("A", 1, "WR")] == 10
+    assert table[("C", 3, "WR")] == 18
+
+
+def test_expected_points_by_team_week_pos_has_no_season_type_filter():
+    # Unlike points_by_team_week_pos, there's no season_type column to
+    # filter on at all - every row in the frame counts, matching
+    # ffopportunity's own real weekly data shape (confirmed live: no
+    # season_type column exists there).
+    rows = _expected_rows()
+    df = pl.DataFrame(rows)
+    assert "season_type" not in df.columns
+    table = expected_points_by_team_week_pos(df, 2025, ["WR"], REY_SCORING)
+    assert len(table) == sum(len(weeks) for weeks in OUTPUT.values())
 
 
 def test_index_for_basis_matches_hand_computation():

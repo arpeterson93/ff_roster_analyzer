@@ -19,6 +19,7 @@ except ImportError:
 import polars as pl
 
 from engine.curve import Curve, blend_current, build_curve, build_dst_curve
+from engine.expected_points import weekly_xfp_points
 from engine.faab_estimate import (
     INJURY_FLAG_STATUSES,
     POOLED_TRAINING_TABLE_PATH,
@@ -30,6 +31,7 @@ from engine.faab_estimate import (
     build_snap_pct_index,
     build_stats_index,
     is_faab_relevant,
+    recent_air_yard_share,
     recent_carry_share,
     recent_snap_pct,
     recent_target_share,
@@ -41,6 +43,7 @@ from engine.matchups import (
     compute_matchup_index,
     compute_schedule_strength,
     dst_points_by_team_week_pos,
+    expected_points_by_team_week_pos,
     opponent_avg_excl_by_team,
     points_by_team_week_pos,
     team_weeks_from_opponent,
@@ -52,6 +55,7 @@ from engine.play_log import (
 from engine.points_against import dst_points_against_detail, points_against_detail
 from engine.scoring import ScoringRules
 from engine import standings_stage
+from engine.xfp_play_log import expected_plays_for_player
 from engine.team_strength import (
     PlayerCtx,
     fa_pool_value,
@@ -149,7 +153,8 @@ def _actual_stats_row(row: dict, fields: list[str]) -> dict:
 
 
 def _actual_weekly_stats(
-    position, nfl_team, pid, week, game_final, offense_lookup, dst_lookup, active_lookup, opponent, player_rules
+    position, nfl_team, pid, week, game_final, offense_lookup, dst_lookup, active_lookup, opponent, player_rules,
+    ff_opp_lookup=None,
 ):
     """Real (not projected) stat line + points for one already-played week -
     powers both the Game Log and every FAAB "prior week"/season-average
@@ -158,7 +163,12 @@ def _actual_weekly_stats(
     this per-game `game_final` check fixes - a game that just hasn't kicked
     off yet even though another game that week is already final); a played
     week with zero recorded production is a real 0, not None - see
-    active_lookup."""
+    active_lookup.
+
+    `xfp_points` (expected fantasy points, see engine/expected_points.py) is
+    a sibling of `points` throughout: None wherever ffopportunity has no
+    model at all (DST, K - see ffopportunity's own coverage) or simply has
+    no row for this player-week, never 0.0 standing in for "no model"."""
     if not game_final.get((nfl_team, week), False):
         return None
     if position == "DST":
@@ -167,17 +177,24 @@ def _actual_weekly_stats(
             return None
         stats = _actual_stats_row(row, _DST_STAT_FIELDS)
         stats["xpr"] = None  # not available from nflverse - see engine/points_against.py
-        return {"stats": stats, "points": row["_points"]}
+        return {"stats": stats, "points": row["_points"], "xfp_points": None}
     row = offense_lookup.get((pid, week))
+    ff_opp_row = (ff_opp_lookup or {}).get((pid, week))
+    xfp_points = weekly_xfp_points(ff_opp_row, player_rules) if ff_opp_row else None
     if row:
-        return {"stats": _actual_stats_row(row, _OFFENSE_STAT_FIELDS), "points": player_rules.points_for_row(row)}
+        return {
+            "stats": _actual_stats_row(row, _OFFENSE_STAT_FIELDS), "points": player_rules.points_for_row(row),
+            "xfp_points": xfp_points,
+        }
     if opponent.get((nfl_team, week)) is not None and (pid, week) in active_lookup:
         # Active roster status, team actually played that week (not a bye),
         # but no player_stats row at all - a real 0 (e.g. zero targets), not
         # a missing week the way a bye/inactive/practice-squad week
         # legitimately is.
         zero_row = {f: 0 for f in _OFFENSE_STAT_FIELDS}
-        return {"stats": _actual_stats_row(zero_row, _OFFENSE_STAT_FIELDS), "points": 0.0}
+        return {
+            "stats": _actual_stats_row(zero_row, _OFFENSE_STAT_FIELDS), "points": 0.0, "xfp_points": xfp_points,
+        }
     return None
 
 
@@ -478,6 +495,12 @@ def _compute_faab_estimates(
         # decides which to actually show based on the player's own position.
         carry_share = recent_carry_share(p["id"], current_week, stats_index, team_rb_carries)
         target_share = recent_target_share(p["id"], current_week, stats_index)
+        # Display-only (FAAB Lab's comp tables, see docs/js/playermodal.js's
+        # usageCellHtml) - unlike carry_share/target_share above, NOT part of
+        # FEATURE_NAMES/KNN_FEATURE_NAMES, so this never reaches the actual
+        # k-NN/regression model inputs (see recent_air_yard_share's own
+        # docstring).
+        air_yard_share = recent_air_yard_share(p["id"], current_week, stats_index)
         trailing_2_3_avg_points, season_avg_points = recent_form(p)
 
         # Same relevance bar the historical no_bid rows had to clear to even
@@ -585,6 +608,7 @@ def _compute_faab_estimates(
                     "weekly_rank": faab_weekly_rank(p), "ros_rank": p.get("ros_pos_rank"),
                     "carry_share_prior_week": carry_share, "had_carry_share_prior_week": carry_share is not None,
                     "target_share_prior_week": target_share, "had_target_share_prior_week": target_share is not None,
+                    "air_yard_share_prior_week": air_yard_share,
                 },
             }
             continue
@@ -625,6 +649,7 @@ def _compute_faab_estimates(
                     "weekly_rank": weekly_rank, "ros_rank": ros_rank,
                     "carry_share_prior_week": carry_share, "had_carry_share_prior_week": carry_share is not None,
                     "target_share_prior_week": target_share, "had_target_share_prior_week": target_share is not None,
+                    "air_yard_share_prior_week": air_yard_share,
                 },
             }
             continue
@@ -644,6 +669,7 @@ def _compute_faab_estimates(
             "ros_rank": ros_rank,
             "carry_share_prior_week": carry_share,
             "target_share_prior_week": target_share,
+            "air_yard_share_prior_week": air_yard_share,
         }
         # same_week computed above (shared with the below_relevance_
         # threshold branch) - independent of everything estimate() computes,
@@ -923,6 +949,10 @@ def run_league(
     stats_index = build_stats_index(current_stats)
     team_rb_carries = team_position_totals(current_stats, "RB", "carries")
     team_targets = team_position_totals(current_stats, None, "targets")
+    # Air yard share's denominator - any position can be the intended
+    # receiver on a target, same "no position filter" reasoning team_targets
+    # above already uses, so this reuses the exact same generic helper.
+    team_air_yards = team_position_totals(current_stats, None, "receiving_air_yards")
     snaps_df = nd.snap_counts([season], current_season=season)
     snap_pct_index = build_snap_pct_index(snaps_df)
     offense_snaps_index = build_snap_counts_index(snaps_df)
@@ -944,6 +974,24 @@ def run_league(
         prior_points.update(dst_points_by_team_week_pos(prior_team_stats, prior_schedules, prior_season, dst_rules))
         matchup_positions.append("DST")
 
+    # Expected (xFP) points-allowed table for the Matchups page's own
+    # "Expected" selector (see engine/expected_points.py and
+    # engine/matchups.py's expected_points_by_team_week_pos) - computed
+    # alongside current_points/prior_points above but kept entirely
+    # separate from them: this never feeds project_player/valuation
+    # (matchup_index below, used everywhere else, is untouched), only
+    # matchups.json's own "_expected" display section further down. No K
+    # (no ffopportunity kicker model - see engine/expected_points.py's
+    # module docstring) and no DST (ffopportunity has no team-defense
+    # concept at all).
+    expected_matchup_positions = [p for p in offense_positions if p != "K"]
+    expected_current_points = expected_points_by_team_week_pos(
+        nd.ff_opportunity_weekly(season, current_season=season), season, expected_matchup_positions, player_rules
+    )
+    expected_prior_points = expected_points_by_team_week_pos(
+        nd.ff_opportunity_weekly(prior_season), prior_season, expected_matchup_positions, player_rules
+    )
+
     # Actual (not projected) per-week stat lines for weeks already played,
     # keyed for O(1) lookup while building each player's `weekly` array below.
     actual_offense_by_id_week: dict[tuple[str, int], dict] = {}
@@ -952,6 +1000,17 @@ def run_league(
         pid = id_map.resolve(gsis_id=row["player_id"], name=row["player_display_name"], pos=row["position"], team=row["team"]).id
         actual_offense_by_id_week[(pid, row["week"])] = row
         gsis_by_pid[pid] = row["player_id"]
+
+    # xFPTS source (see engine/expected_points.py) - same resolve-by-gsis
+    # pattern as actual_offense_by_id_week above. ffopportunity simply has
+    # no row at all for a K/DST week (no model for either - see
+    # engine/expected_points.py's module docstring), so no position filter
+    # is needed here; a missing lookup already falls out as the same
+    # None xfp_points _actual_weekly_stats uses for "no model"/"no row".
+    ff_opp_by_id_week: dict[tuple[str, int], dict] = {}
+    for row in nd.ff_opportunity_weekly(season, current_season=season).iter_rows(named=True):
+        pid = id_map.resolve(gsis_id=row["player_id"], name=row["full_name"], pos=row["position"], team=row["posteam"]).id
+        ff_opp_by_id_week[(pid, row["week"])] = row
 
     # Active-roster-but-no-stats-row weeks (see ACTIVE_ROSTER_STATUS above) -
     # keyed the same way as actual_offense_by_id_week so _actual_weekly_stats
@@ -994,6 +1053,17 @@ def run_league(
 
     matchup_index = compute_matchup_index(
         current_points, prior_points, season, prior_season, weeks_complete, opponent, prior_opponent, matchup_positions,
+        pa_basis=val_cfg["pa_basis"], pa_l5_weight=val_cfg["pa_l5_weight"],
+        pa_prior_season_weeks=val_cfg["pa_prior_season_weeks"], index_clamp=tuple(val_cfg["index_clamp"]),
+        game_final=game_final,
+    )
+    # Same computation, same schedule/weighting config, fed the expected
+    # (xFP) points table instead - the Matchups page's "Expected" selector
+    # reads this one, nothing else downstream does (see expected_current_points
+    # above).
+    expected_matchup_index = compute_matchup_index(
+        expected_current_points, expected_prior_points, season, prior_season, weeks_complete, opponent, prior_opponent,
+        expected_matchup_positions,
         pa_basis=val_cfg["pa_basis"], pa_l5_weight=val_cfg["pa_l5_weight"],
         pa_prior_season_weeks=val_cfg["pa_prior_season_weeks"], index_clamp=tuple(val_cfg["index_clamp"]),
         game_final=game_final,
@@ -1084,21 +1154,30 @@ def run_league(
         split (sum of numerators over weeks played / sum of denominators
         over those same weeks - not an average of weekly percentages, which
         would let a low-snap week count exactly as much as a full game and
-        skew the season number). All four None for a week not yet played or
+        skew the season number). All six None for a week not yet played or
         a DST (no individual snap_counts row exists for the DST construct -
         same "no nflverse stat to source it from" precedent as DST's own
         xpr field above); team_rb_carries specifically stays None (not 0.0)
         for a team-week with zero real RB carries - see
         engine.faab_estimate.recent_carry_share's docstring for why that's
-        a real 0/0, not a real 0% share."""
+        a real 0/0, not a real 0% share. player_air_yards/team_air_yards
+        follow the exact same raw-counts convention (air yard share) -
+        sourced straight off player_stats (stats_index/team_air_yards,
+        built alongside team_rb_carries/team_targets above), not a fresh
+        pbp load - see xfp-usage-stats-implementation-plan.md's D5."""
         if not game_final.get((nfl_team, week), False) or position == "DST":
-            return {"offense_snaps": None, "team_offense_snaps": None, "team_rb_carries": None, "team_targets": None}
+            return {
+                "offense_snaps": None, "team_offense_snaps": None, "team_rb_carries": None, "team_targets": None,
+                "player_air_yards": None, "team_air_yards": None,
+            }
         pfr_id = gsis_to_pfr.get(pid)
         return {
             "offense_snaps": offense_snaps_index.get(pfr_id, {}).get(week) if pfr_id else None,
             "team_offense_snaps": team_offense_snaps.get((nfl_team, week)),
             "team_rb_carries": team_rb_carries.get((nfl_team, week)),
             "team_targets": team_targets.get((nfl_team, week)),
+            "player_air_yards": stats_index.get(pid, {}).get(week, {}).get("receiving_air_yards"),
+            "team_air_yards": team_air_yards.get((nfl_team, week)),
         }
 
     def _register(p, fantasy_team_id: int | None):
@@ -1201,7 +1280,7 @@ def run_league(
                         "rank": matchup_index.rank.get(p.position, {}).get(opponent.get((p.nfl_team, w))),
                         "projected": None, "sd": None,
                         "our_projected": None,
-                        "actual": _actual_weekly_stats(p.position, p.nfl_team, res.id, w, game_final, actual_offense_by_id_week, actual_dst_by_team_week, active_by_id_week, opponent, player_rules),
+                        "actual": _actual_weekly_stats(p.position, p.nfl_team, res.id, w, game_final, actual_offense_by_id_week, actual_dst_by_team_week, active_by_id_week, opponent, player_rules, ff_opp_by_id_week),
                         "implied_total": (game_context.get((p.nfl_team, w)) or {}).get("implied_total"),
                         "opponent_implied_total": (game_context.get((p.nfl_team, w)) or {}).get("opponent_implied_total"),
                         "weather": None,
@@ -1214,7 +1293,7 @@ def run_league(
                         "kickoff": kickoff.get((p.nfl_team, wp.week)),
                         "index": wp.index, "rank": wp.rank, "projected": wp.projected, "sd": wp.sd,
                         "our_projected": wp.our_projected,
-                        "actual": _actual_weekly_stats(p.position, p.nfl_team, res.id, wp.week, game_final, actual_offense_by_id_week, actual_dst_by_team_week, active_by_id_week, opponent, player_rules),
+                        "actual": _actual_weekly_stats(p.position, p.nfl_team, res.id, wp.week, game_final, actual_offense_by_id_week, actual_dst_by_team_week, active_by_id_week, opponent, player_rules, ff_opp_by_id_week),
                         # implied_total is this player's OWN team; opponent_implied_total
                         # is the team they're facing that week - for a DST, the opponent's
                         # number is the one that actually matters (how many points the
@@ -1286,12 +1365,30 @@ def run_league(
     if "pbp" not in skip:
         try:
             pbp_current = nd.play_by_play(season, current_season=season)
+            # Expected-points twin of pbp_current (see engine/xfp_play_log.py) -
+            # best-effort alongside it: a fetch/schema problem here shouldn't
+            # take down the ACTUAL per-play breakdown above, so it's wrapped
+            # in its own inner try rather than widening this outer except.
+            pbp_exp_pass = pbp_exp_rush = None
+            try:
+                pbp_exp_pass = nd.ff_opportunity_pbp(season, "pbp_pass", current_season=season)
+                pbp_exp_rush = nd.ff_opportunity_pbp(season, "pbp_rush", current_season=season)
+            except Exception:
+                logger.warning("ffopportunity pbp fetch failed - expected Game Log per-play breakdown disabled for this build", exc_info=True)
+                warnings.append("ffopportunity pbp fetch failed; expected per-play Game Log breakdown unavailable this build")
+
             for w in range(1, weeks_played + 1):
                 week_rows = list(pbp_current.filter(pl.col("season") == season, pl.col("week") == w).iter_rows(named=True))
                 if not week_rows:
                     continue
                 play_index = build_game_play_index(week_rows)
                 game_durations = game_durations_by_game_id(week_rows)
+                week_exp_pass_rows = (
+                    list(pbp_exp_pass.filter(pl.col("week") == w).iter_rows(named=True)) if pbp_exp_pass is not None else []
+                )
+                week_exp_rush_rows = (
+                    list(pbp_exp_rush.filter(pl.col("week") == w).iter_rows(named=True)) if pbp_exp_rush is not None else []
+                )
                 for p in players_out:
                     if p["position"] not in offense_positions:
                         continue
@@ -1305,9 +1402,18 @@ def run_league(
                     if scoring_plays or incompletions or zero_point_plays:
                         game_id = plays_for_player[0].get("game_id")
                         duration = game_durations.get(game_id, 60.0)
+                        # No kicker/DST model (see engine/expected_points.py),
+                        # but this loop is already offense_positions-only, and
+                        # gsis_id simply won't appear in week_exp_pass_rows/
+                        # week_exp_rush_rows for a K - expected_plays_for_player
+                        # degrades to an empty list, not an error.
+                        expected_plays = expected_plays_for_player(
+                            week_exp_pass_rows, week_exp_rush_rows, gsis_id, player_rules
+                        )
                         game_log_plays_out.setdefault(p["id"], {})[str(w)] = {
                             "plays": scoring_plays, "incompletions": incompletions,
                             "zero_point_plays": zero_point_plays, "game_duration_min": round(duration, 2),
+                            "expected_plays": expected_plays,
                         }
         except Exception:
             logger.warning("play-by-play fetch/processing failed - Game Log per-play breakdown disabled for this build", exc_info=True)
@@ -1592,6 +1698,27 @@ def run_league(
             for team in matchup_index.index[pos]
         }
         for pos in matchup_positions
+    }
+    # "_expected" (leading underscore - not a real position, same convention
+    # as lineups_out's own "_unrostered_players" above): the Matchups page's
+    # "Expected" selector reads this sibling structure instead when active,
+    # same per-(pos,team) shape as the real one, just never populated for K
+    # or DST (no ffopportunity model for either - see
+    # expected_matchup_positions above) - docs/js/matchups.js hides the
+    # selector entirely for a position missing here.
+    matchups_out["_expected"] = {
+        pos: {
+            team: {
+                "index": expected_matchup_index.index[pos][team],
+                "rank": expected_matchup_index.rank[pos][team],
+                "allowed_ppg": expected_matchup_index.allowed_ppg[pos][team],
+                "l5_allowed_ppg": expected_matchup_index.l5_allowed_ppg[pos][team],
+                "adjusted_allowed_ppg": expected_matchup_index.adjusted_allowed_ppg.get(pos, {}).get(team, expected_matchup_index.allowed_ppg[pos][team]),
+                "pa_factor": expected_matchup_index.pa_factor.get(pos, {}).get(team, 1.0),
+            }
+            for team in expected_matchup_index.index[pos]
+        }
+        for pos in expected_matchup_positions
     }
     _log_checkpoint("lineups_and_matchups_json_done")
 

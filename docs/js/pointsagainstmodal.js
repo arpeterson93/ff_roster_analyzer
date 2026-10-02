@@ -1,6 +1,6 @@
 import { fmt, escapeHtml } from "./state.js";
 import { openModal } from "./modal.js";
-import { groupedHeaderHtml, statCellsHtml } from "./statcolumns.js";
+import { blocksForPosition, groupedHeaderHtml, statCellsHtml } from "./statcolumns.js";
 
 function opponentLabel(wk) {
   if (!wk.opponent) return `<span class="muted">-</span>`;
@@ -8,7 +8,7 @@ function opponentLabel(wk) {
 }
 
 function render(position, weekDetail, expandedWeek) {
-  const { top, bottom, flatColumns, blockEnds } = groupedHeaderHtml(position, ["", "Wk", "Opp"]);
+  const { top, bottom, flatColumns, blockEnds } = groupedHeaderHtml(blocksForPosition(position), ["", "Wk", "Opp"]);
   const weeks = Object.keys(weekDetail)
     .map(Number)
     .sort((a, b) => b - a);

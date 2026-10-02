@@ -133,6 +133,16 @@ export function pointsWeeksAgo(p, weeksAgo, currentWeek) {
   return pts === undefined ? null : pts;
 }
 
+// Expected-points (xFPTS, see engine/expected_points.py) twin of
+// pointsWeeksAgo above - null whenever ffopportunity has no model (K/DST)
+// or simply no row for that player-week, same convention as the actual
+// field it mirrors.
+export function xfpWeeksAgo(p, weeksAgo, currentWeek) {
+  const entry = (p.weekly || []).find((w) => w.week === currentWeek - weeksAgo);
+  const xfp = entry?.actual?.xfp_points;
+  return xfp === undefined ? null : xfp;
+}
+
 // Fantasy points per game ACTUALLY PLAYED so far this season - byes and
 // missed games (no stat row, same signal as pointsWeeksAgo above) are
 // excluded from both the sum and the denominator, mirroring engine/
@@ -145,6 +155,15 @@ export function seasonAvgPoints(p, currentWeek) {
   return played.reduce((sum, w) => sum + w.actual.points, 0) / played.length;
 }
 
+// Expected-points (xFPTS) twin of seasonAvgPoints above - Start/Sit's "Szn"
+// column needs the per-game average (not the season total seasonTotalXfp
+// gives Rankings' Stats tab), same played-weeks definition either way.
+export function seasonAvgXfp(p, currentWeek) {
+  const played = (p.weekly || []).filter((w) => w.week < currentWeek && w.actual?.xfp_points !== undefined && w.actual?.xfp_points !== null);
+  if (!played.length) return null;
+  return played.reduce((sum, w) => sum + w.actual.xfp_points, 0) / played.length;
+}
+
 // Total (not averaged) actual fantasy points scored so far this season -
 // Rankings' Stats tab uses this for its FPTS column in "season" mode, same
 // played-weeks definition as seasonAvgPoints above just summed instead of
@@ -154,6 +173,17 @@ export function seasonTotalPoints(p, currentWeek) {
   const played = (p.weekly || []).filter((w) => w.week < currentWeek && w.actual?.points !== undefined && w.actual?.points !== null);
   if (!played.length) return null;
   return played.reduce((sum, w) => sum + w.actual.points, 0);
+}
+
+// Expected-points (xFPTS) twin of seasonTotalPoints above - summed only
+// over weeks that actually have an xfp_points value (a K/DST week, or any
+// week ffopportunity has no row for, is excluded from both the sum and
+// the "any data at all" check, same as seasonTotalPoints excludes a
+// missing actual.points).
+export function seasonTotalXfp(p, currentWeek) {
+  const played = (p.weekly || []).filter((w) => w.week < currentWeek && w.actual?.xfp_points !== undefined && w.actual?.xfp_points !== null);
+  if (!played.length) return null;
+  return played.reduce((sum, w) => sum + w.actual.xfp_points, 0);
 }
 
 // Snap %/Att %/Tgt % share: a true sum(numerator)/sum(denominator) across
@@ -190,6 +220,15 @@ export function attPct(p, statsWeek, currentWeek) {
 }
 export function tgtPct(p, statsWeek, currentWeek) {
   return usageShare(p, statsWeek, currentWeek, (w) => w.actual?.stats?.targets, (w) => w.team_targets, null);
+}
+// Air yard share: this player's own intended-target depth (every target,
+// completed or not) as a share of his team's total that week/season - same
+// raw-counts-in/usageShare-derives-the-ratio convention as snapPct/attPct/
+// tgtPct above, fed by engine/pipeline.py's player_air_yards/team_air_yards
+// (sourced from nflverse's player_stats, not a separate pbp aggregation -
+// see the implementation plan's D5).
+export function airYardPct(p, statsWeek, currentWeek) {
+  return usageShare(p, statsWeek, currentWeek, (w) => w.player_air_yards, (w) => w.team_air_yards, null);
 }
 
 // ESPN's own CDN, keyed off the espn_id every player already carries - a

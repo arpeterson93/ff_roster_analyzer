@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import polars as pl
 
+from engine.expected_points import weekly_xfp_points
 from engine.scoring import ScoringRules
 from ingest.nfl_data import game_scores as _load_game_scores
 
@@ -35,6 +36,39 @@ def points_by_team_week_pos(
     for row in rows.iter_rows(named=True):
         key = (row["team"], row["week"], row["position"])
         table[key] = table.get(key, 0.0) + scoring.points_for_row(row)
+    return table
+
+
+def expected_points_by_team_week_pos(
+    df: pl.DataFrame, season: int, positions: list[str], scoring: ScoringRules
+) -> dict[tuple[str, int, str], float]:
+    """Expected-points (xFP) twin of points_by_team_week_pos above, fed
+    ffopportunity's weekly expected-stat rows (see engine/expected_points.py)
+    instead of real player_stats rows. Same (team, week, position) keying -
+    each team's OWN expected output, not pre-keyed by opponent; "allowed"
+    is derived downstream the exact same way (allowed_by_team_week_pos/
+    compute_matchup_index), fed this table instead of the actual one.
+
+    No season_type filter, unlike points_by_team_week_pos - ffopportunity's
+    weekly data has no such column at all (confirmed live), and its `week`
+    numbering runs through the playoffs (1-22) with no flag distinguishing
+    them. Harmless: every caller's own team_weeks/opponent lookup is built
+    from the real NFL schedule and already only ever consults real
+    regular-season weeks, so a playoff-week row in this table simply never
+    gets looked up. `positions` should exclude "K" (and never include "DST")
+    unless the caller specifically wants ffopportunity's own, essentially-
+    never-populated K rows (see engine/expected_points.py's module
+    docstring - no kicker model exists).
+
+    `season` is matched as a STRING - ffopportunity's own `season` column is
+    built from `substr(game_id, 1, 4)` (confirmed from its R source), so
+    it's a string dtype ("2026"), unlike player_stats' own numeric season
+    column points_by_team_week_pos compares against directly."""
+    rows = df.filter((pl.col("season") == str(season)) & (pl.col("position").is_in(positions)))
+    table: dict[tuple[str, int, str], float] = {}
+    for row in rows.iter_rows(named=True):
+        key = (row["posteam"], row["week"], row["position"])
+        table[key] = table.get(key, 0.0) + weekly_xfp_points(row, scoring)
     return table
 
 

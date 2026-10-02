@@ -588,6 +588,29 @@ def recent_target_share(gsis_id: str | None, week: int, stats_index: dict[str, d
     return None
 
 
+def recent_air_yard_share(gsis_id: str | None, week: int, stats_index: dict[str, dict[int, dict]]) -> float | None:
+    """This player's own air_yards_share - nflverse's own stat, already
+    computed team-wide (his air yards / his team's total, any position),
+    used as-is - same "no custom denominator needed" shape as
+    recent_target_share above. Most recent of week-1/week-2 that has a real
+    stat row - same lookback convention as recent_snap_pct/
+    recent_target_share. Display-only (FAAB Lab's comp tables, see
+    docs/js/playermodal.js's usageCellHtml) - NOT a K-NN/regression feature,
+    unlike recent_carry_share/recent_target_share above."""
+    if not gsis_id:
+        return None
+    weeks = stats_index.get(gsis_id)
+    if not weeks:
+        return None
+    for wk in (week - 1, week - 2):
+        if wk < 1:
+            continue
+        row = weeks.get(wk)
+        if row is not None:
+            return row.get("air_yards_share")
+    return None
+
+
 def build_event_won_rows_index(trainable_rows: list[dict]) -> dict[tuple, list[dict]]:
     """(season, week, add_player_id) -> every league's own WON row for that
     SAME real-world event. Callers should pass trainable_rows AFTER add_synthetic_price_wins
@@ -1727,6 +1750,7 @@ def _price_comp_dicts(
             # field existed, or for a position where it was never computed.
             "carry_share_prior_week": r.get("carry_share_prior_week"),
             "target_share_prior_week": r.get("target_share_prior_week"),
+            "air_yard_share_prior_week": r.get("air_yard_share_prior_week"),
             **_comp_rank_and_injury_fields(r),
             # See consolidate_cross_league_events - real specificity from
             # The O League itself when this comp is actually a cross-league
@@ -1764,6 +1788,7 @@ def _interest_comp_dicts(scored: list[dict], weights: list[float], shrunk_fracti
             # field existed, or for a position where it was never computed.
             "carry_share_prior_week": r.get("carry_share_prior_week"),
             "target_share_prior_week": r.get("target_share_prior_week"),
+            "air_yard_share_prior_week": r.get("air_yard_share_prior_week"),
             **_comp_rank_and_injury_fields(r),
             "o_league_detail": r.get("o_league_detail"),
             # See _price_comp_dicts's identical field - same normalized weight.

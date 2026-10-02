@@ -1,5 +1,5 @@
 import { fmt, escapeHtml, getYourTeam, setYourTeam } from "./state.js";
-import { POSITION_COLOR, INJURY_BADGE, impliedTotalCellHtml, opponentCellHtml, formatKickoff, shortName, sortByPositionOrder, teamLabel, playerPhotoHtml, weeklyProjection, pointsWeeksAgo, seasonAvgPoints, weatherCellHtml, rosCellHtml } from "./colors.js";
+import { POSITION_COLOR, INJURY_BADGE, impliedTotalCellHtml, opponentCellHtml, formatKickoff, shortName, sortByPositionOrder, teamLabel, playerPhotoHtml, weeklyProjection, pointsWeeksAgo, seasonAvgPoints, xfpWeeksAgo, seasonAvgXfp, weatherCellHtml, rosCellHtml } from "./colors.js";
 import { openPlayerModal } from "./playermodal.js";
 import { openPointsAgainstModal } from "./pointsagainstmodal.js";
 
@@ -33,6 +33,18 @@ const projValueFor = weeklyProjection;
 
 function fmtPts(v) {
   return v === null || v === undefined ? "–" : fmt(v, 1);
+}
+
+// xFPTS nested beneath the actual value in the same cell, smaller font -
+// reuses styles.css's .comp-recent-cell/.sub pair (already used this way in
+// playermodal.js's comp cells; .sub only takes effect as a direct
+// descendant of .comp-rank-cell/.comp-recent-cell, so the wrapper is
+// required, not just the span itself). Omitted entirely (not a dash) when
+// there's no expected-points data for that week (K/DST - see
+// engine/expected_points.py).
+function fmtPtsWithXfp(actual, xfp) {
+  const sub = xfp !== null && xfp !== undefined ? `<span class="sub">x${fmtPts(xfp)}</span>` : "";
+  return `<span class="comp-recent-cell">${fmtPts(actual)}${sub}</span>`;
 }
 
 // FP Rank and Weather are both only ever real for the CURRENT week (FP Rank:
@@ -98,10 +110,10 @@ function playerRow(p, week, currentWeek, slotLabel, isStreamed) {
     </td>
     ${isCurrentWeek ? `<td class="stat-col">${p.fp_week_pos_rank_label ?? "–"}</td>` : ""}
     <td class="stat-col"><strong>${fmt(proj, 1)}</strong></td>
-    <td class="stat-col muted">${fmtPts(seasonAvg)}</td>
-    <td class="stat-col muted">${fmtPts(pointsWeeksAgo(p, 3, currentWeek))}</td>
-    <td class="stat-col muted">${fmtPts(pointsWeeksAgo(p, 2, currentWeek))}</td>
-    <td class="stat-col muted">${fmtPts(pointsWeeksAgo(p, 1, currentWeek))}</td>
+    <td class="stat-col muted">${fmtPtsWithXfp(seasonAvg, seasonAvgXfp(p, currentWeek))}</td>
+    <td class="stat-col muted">${fmtPtsWithXfp(pointsWeeksAgo(p, 3, currentWeek), xfpWeeksAgo(p, 3, currentWeek))}</td>
+    <td class="stat-col muted">${fmtPtsWithXfp(pointsWeeksAgo(p, 2, currentWeek), xfpWeeksAgo(p, 2, currentWeek))}</td>
+    <td class="stat-col muted">${fmtPtsWithXfp(pointsWeeksAgo(p, 1, currentWeek), xfpWeeksAgo(p, 1, currentWeek))}</td>
     <td class="stat-col">${impliedTotalCellHtml(p, weekEntry)}</td>
     ${isCurrentWeek ? `<td class="stat-col">${weatherCellHtml(weekEntry)}</td>` : ""}
   </tr>`;

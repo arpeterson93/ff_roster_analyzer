@@ -149,7 +149,11 @@ function paByWeekTable(byPositionForPos, sortState) {
 }
 
 export function renderMatchups(container, data) {
-  const positions = Object.keys(data.matchups);
+  // "_expected" (see engine/pipeline.py's matchups.json build) is a sibling
+  // data source, not a real position - excluded from the position list/
+  // dropdown the same way lineups.json's "_unrostered_players" is excluded
+  // from being treated as a real fantasy team elsewhere on the site.
+  const positions = Object.keys(data.matchups).filter((p) => p !== "_expected");
   container.innerHTML = `
     <div class="card">
       <div class="select-row">
@@ -173,6 +177,12 @@ export function renderMatchups(container, data) {
             <option value="adj">Opp-Adjusted</option>
           </select>
         </span>
+        <span id="matchups-source-wrap"><label>Data:</label>
+          <select id="matchups-source-select">
+            <option value="actual">Actual</option>
+            <option value="expected">Expected</option>
+          </select>
+        </span>
       </div>
       <p id="matchups-help" class="muted small"></p>
       <div class="table-wrap" id="matchups-table-wrap"></div>
@@ -187,6 +197,8 @@ export function renderMatchups(container, data) {
   const basisWrap = container.querySelector("#matchups-basis-wrap");
   const typeSelect = container.querySelector("#matchups-type-select");
   const typeWrap = container.querySelector("#matchups-type-wrap");
+  const sourceSelect = container.querySelector("#matchups-source-select");
+  const sourceWrap = container.querySelector("#matchups-source-wrap");
 
   // One sort state per view - switching views/position/basis/type resets it
   // (a "Wk 4" sort key from PA by Week means nothing on PA by Position), but
@@ -204,13 +216,25 @@ export function renderMatchups(container, data) {
     posWrap.hidden = view !== "week";
     basisWrap.hidden = view !== "position";
     typeWrap.hidden = view !== "position";
+    sourceWrap.hidden = view !== "position";
 
     if (view === "week") {
       help.textContent = '"Opp Avg" is what this defense\'s opponents scored on average against everyone ELSE (excluding their own game against this defense) - "Adjusted" scales Raw Avg by that same strength-of-opponent factor.';
       wrap.innerHTML = paByWeekTable((data.recentResults || { by_position: {} }).by_position[pos] || {}, sortState);
     } else {
-      help.textContent = "1 = easiest matchup, higher = tougher";
-      wrap.innerHTML = paByPositionTable(data.matchups, positions, basisSelect.value, typeSelect.value, sortState);
+      // "Expected" reads matchups.json's "_expected" sibling (see
+      // engine/pipeline.py) - built the same way as the real table, just fed
+      // ffopportunity's expected-stat rows instead of actual ones. It has no
+      // K/DST entries at all (no ffopportunity model for either - see
+      // engine/expected_points.py) - those columns simply render as "-" via
+      // paByPositionTable's own existing missing-data handling, same as any
+      // other position/team with no data this week.
+      help.textContent =
+        sourceSelect.value === "expected"
+          ? "1 = easiest matchup, higher = tougher (expected, based on opponent-faced opportunity - no kicker/DST model exists, so those columns show no data)"
+          : "1 = easiest matchup, higher = tougher";
+      const source = sourceSelect.value === "expected" ? data.matchups._expected || {} : data.matchups;
+      wrap.innerHTML = paByPositionTable(source, positions, basisSelect.value, typeSelect.value, sortState);
     }
 
     wrap.querySelectorAll("tr[data-team], td[data-team]").forEach((el) => {
@@ -231,5 +255,6 @@ export function renderMatchups(container, data) {
   viewSelect.addEventListener("change", draw);
   basisSelect.addEventListener("change", draw);
   typeSelect.addEventListener("change", draw);
+  sourceSelect.addEventListener("change", draw);
   draw();
 }
