@@ -170,13 +170,12 @@ function symmetricLineupHtml(homeTeamId, awayTeamId, week, data) {
     const p = resolvePlayer(pid, data);
     if (!p) return "";
     const streamBadge = streamed.has(pid) ? ` <span class="pill small stream-badge" title="Free-agent bye-week fill-in, not on your roster">FA</span>` : "";
-    const irBadge = p.lineup_slot === "IR" ? ` <span class="muted small">(IR)</span>` : "";
     // Mobile drops the position chip and abbreviates to "F. Last" (see
     // styles.css's ".lineup-player .pos-tag"/".full-name"/".short-name"
     // rules) - this table is already tight with two full lineups mirrored
     // side by side, and a chip + full name doesn't fit a phone width.
     const nameHtml = `<span class="full-name">${escapeHtml(p.name)}</span><span class="short-name">${escapeHtml(shortName(p.name))}</span>`;
-    return `${posTag(p.position)} ${nameHtml}${streamBadge}${irBadge}`;
+    return `${posTag(p.position)} ${nameHtml}${streamBadge}`;
   };
   const scoreCell = (pid, lineupWeek) => {
     const p = pid && resolvePlayer(pid, data);
@@ -207,18 +206,51 @@ function symmetricLineupHtml(homeTeamId, awayTeamId, week, data) {
   const starterRows = keys.map((key) => lineupRow((home.slots || {})[key], (away.slots || {})[key], key.replace(/\d+$/, ""))).join("");
 
   // Bench sizes/order between the two teams have no natural row-for-row
-  // pairing the way starting slots do (each side is independently sorted by
-  // its own points) - paired by position in the list purely to share the
-  // same row-per-line layout as the starters above, not because a given row
-  // means anything about the two players relative to each other.
-  const homeBench = home.bench || [];
-  const awayBench = away.bench || [];
-  const benchRowCount = Math.max(homeBench.length, awayBench.length);
-  const benchRows = Array.from({ length: benchRowCount }, (_, i) => lineupRow(homeBench[i], awayBench[i], "")).join("");
+  // pairing the way starting slots do - paired by position in the list
+  // purely to share the same row-per-line layout as the starters above, not
+  // because a given row means anything about the two players relative to
+  // each other. Each side is independently sorted by its own projected
+  // points, with IR split into its own group entirely (not just sorted
+  // last within one combined list) - index-pairing a single combined list
+  // put each side's IR players at whatever row their OWN bench length
+  // happened to push them to, which almost never matched the other side's
+  // (confirmed live: a 7-bench team's 2 IR landed on rows 6-7, a 9-bench
+  // team's 2 IR landed on rows 8-9 - 4 different rows each flagged "IR"
+  // since a row only needs ONE side to be IR, reading as "4 IR slots" for
+  // a league where every team only has 2). Zipping the two sides' IR lists
+  // together as their own trailing block - the same way the non-IR bench
+  // above it is zipped - keeps both teams' IR rows aligned at the bottom
+  // regardless of how many healthy bench players either side has.
+  const isOnIR = (pid) => {
+    const p = pid && resolvePlayer(pid, data);
+    return !!(p && p.lineup_slot === "IR");
+  };
+  const splitBench = (bench, lineupWeek) => {
+    const scored = bench.map((pid) => {
+      const p = pid && resolvePlayer(pid, data);
+      const pts = p ? pointsForPlayerInLineup(p, week, lineupWeek, data.meta.current_week) || 0 : -Infinity;
+      return { pid, ir: isOnIR(pid), pts };
+    });
+    return {
+      nonIR: scored
+        .filter((x) => !x.ir)
+        .sort((a, b) => b.pts - a.pts)
+        .map((x) => x.pid),
+      ir: scored.filter((x) => x.ir).map((x) => x.pid),
+    };
+  };
+  const homeSplit = splitBench(home.bench || [], home);
+  const awaySplit = splitBench(away.bench || [], away);
+  const nonIRRowCount = Math.max(homeSplit.nonIR.length, awaySplit.nonIR.length);
+  const irRowCount = Math.max(homeSplit.ir.length, awaySplit.ir.length);
+  const benchRowCount = nonIRRowCount + irRowCount;
+  const nonIRRows = Array.from({ length: nonIRRowCount }, (_, i) => lineupRow(homeSplit.nonIR[i], awaySplit.nonIR[i], "")).join("");
+  const irRows = Array.from({ length: irRowCount }, (_, i) => lineupRow(homeSplit.ir[i], awaySplit.ir[i], "IR")).join("");
+  const benchRows = nonIRRows + irRows;
 
   return `
     <table class="lineup-symmetric">
-      <colgroup><col style="width:35%"><col style="width:8%"><col style="width:14%"><col style="width:8%"><col style="width:35%"></colgroup>
+      <colgroup><col class="lineup-col-name"><col class="lineup-col-score"><col class="lineup-col-slot"><col class="lineup-col-score"><col class="lineup-col-name"></colgroup>
       <tbody>
         ${starterRows}
         ${benchRowCount ? `<tr class="week-divider"><td colspan="5">Bench</td></tr>${benchRows}` : ""}
@@ -248,9 +280,7 @@ function matchupRow(m, data, expandedKey, yourTeamId, avg, spread, filterTeamId)
   const key = `${m.week}-${m.home_team_id}-${m.away_team_id}`;
   const isYours = !filterTeamId && (m.home_team_id === yourTeamId || m.away_team_id === yourTeamId);
   const colspan = filterTeamId ? 5 : 4;
-  const weekCell = filterTeamId
-    ? `<td class="schedule-cell small muted">${m.week}${m.week === data.meta.current_week ? " (current)" : ""}${m.live ? " (live)" : ""}</td>`
-    : "";
+  const weekCell = filterTeamId ? `<td class="schedule-cell small muted">${m.week}</td>` : "";
 
   const leftScore = scoreOf(m, flip ? "away" : "home", data);
   const rightScore = scoreOf(m, flip ? "home" : "away", data);
@@ -352,9 +382,12 @@ export function renderSchedule(container, data, slug) {
           .map((w) => {
             const weekMatchups = data.schedule.filter((m) => m.week === w);
             const allProjected = weekMatchups.length > 0 && weekMatchups.every((m) => !m.played);
-            const anyLive = weekMatchups.some((m) => m.live);
-            const statusLabel = anyLive ? " (live)" : allProjected ? " - Projected" : "";
-            const weekHeader = `<tr class="week-divider"><td colspan="4">Week ${w}${w === data.meta.current_week ? " (current)" : ""}${statusLabel}</td></tr>`;
+            // The current week gets no suffix at all (not "(current)", not
+            // "(live)") - it's already the week you land on/are looking at,
+            // so the label would be redundant noise. A genuinely future week
+            // still gets "- Projected" since those numbers aren't real yet.
+            const statusLabel = w === data.meta.current_week ? "" : allProjected ? " - Projected" : "";
+            const weekHeader = `<tr class="week-divider"><td colspan="4">Week ${w}${statusLabel}</td></tr>`;
             const matchups = weekMatchups.map((m) => matchupRow(m, data, state.expandedKey, yourTeamId, avg, spread, null)).join("");
             return weekHeader + matchups;
           })

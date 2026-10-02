@@ -45,7 +45,16 @@ function positionBars(strength, total) {
   const totalRatio = 0.5 + Math.max(-1, Math.min(1, total.vs_avg / maxAbs)) * 0.5;
   const totalWidthPct = Math.min(100, Math.abs(total.vs_avg / maxAbs) * 50);
   const totalSide = total.vs_avg >= 0 ? "right" : "left";
+  // .bar-total-divider is a 4th grid item (see .bar-group's own 3-column
+  // template in styles.css) spanning all 3 columns via grid-column:1/-1 -
+  // CSS Grid auto-placement gives a full-width spanning item its own row
+  // and pushes the next auto-placed items (label/track/value below) onto a
+  // fresh row after it, which is what draws ONE continuous line across the
+  // whole width instead of label/track/value each drawing their own
+  // border-top (3 short segments with gaps between them, where the grid's
+  // column-gap falls - confirmed live).
   const totalBar = `<div class="bar-row bar-row-total">
+    <div class="bar-total-divider"></div>
     <div class="bar-label"><strong>Total</strong> <span class="muted">#${total.rank}</span></div>
     <div class="bar-track">
       <div class="bar-fill" style="width:${totalWidthPct}%; background:${colorForRatio(totalRatio)}; margin-${totalSide === "right" ? "left" : "right"}:auto;"></div>

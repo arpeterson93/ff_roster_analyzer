@@ -733,21 +733,34 @@ thead .sticky-col-first { z-index: 2; }
 .bar-group > .bar-row { display: contents; }
 /* display:contents drops .bar-row-total's own box - and with it, any
    border/margin/padding declared on the row itself (see the base
-   .bar-row-total rule above, now inert here) - reapplied to each of its 3
-   children instead, whose separate top borders/margins/padding all land in
-   the same grid row and read as one continuous divider line. */
-.bar-group > .bar-row-total > * { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 8px; }
-/* .bar-track's own height:14px is a border-box measurement (see the global
-   `*{box-sizing:border-box}` rule) - the border-top+padding-top the rule
-   above adds eats directly into that same 14px instead of sitting above it,
-   squashing the Total row's track down to ~5px of real content height (14 -
-   1 - 8) and leaving .bar-fill's height:100% flush against the divider
-   line itself rather than filling a normal-looking bar below it (confirmed
-   live: the fill visibly intersected the line). Restored by padding the
-   total height back out to the same 14px of content PLUS the border/padding
-   this row alone carries, so the Total bar renders exactly as tall as every
-   position bar above it. */
-.bar-group > .bar-row-total > .bar-track { height: 23px; }
+   .bar-row-total rule above, now inert here). The divider used to be each
+   of label/track/value drawing its own border-top, which rendered as 3
+   short segments with a gap at every one of the grid's own column-gaps
+   instead of one line (confirmed live). A dedicated 4th grid item instead
+   (.bar-total-divider - see strength.js's totalBar), spanning every column
+   via grid-column:1/-1, draws it in one piece; CSS Grid's auto-placement
+   gives a full-width spanning item its own row and pushes label/track/
+   value's own auto-placement onto a fresh row right after it, so the 3
+   still land in their usual columns one row down. */
+.bar-group > .bar-row-total > .bar-total-divider { grid-column: 1 / -1; border-top: 1px solid var(--border); margin-top: 8px; }
+.bar-group > .bar-row-total > .bar-label,
+.bar-group > .bar-row-total > .bar-value { margin-top: 8px; }
+/* margin (not painted, unlike padding) is what the gap under the divider
+   line uses here, so .bar-track's own grey background can't spill above
+   .bar-fill the way padding-top once made it. Explicit height matches
+   label/value's own line-height (16.8px at this rule's 12px font-size)
+   instead of the usual 14px every position bar above uses - CSS Grid's
+   align-items:center centers each of this row's 3 items by its OWN size
+   within the shared row height, so without this the shorter track would
+   still get centered a couple px higher than the text next to it
+   (confirmed live). Matching heights means no padding is needed on the
+   track either, so .bar-fill's box coincides with .bar-track's exactly
+   again, on every edge - restoring the overflow:hidden + border-radius
+   clip every other row's rounded end relies on (that clip only rounds
+   fill's corners where fill's own box edge sits flush against track's;
+   the earlier padding-based gap broke that on the top edge specifically,
+   squaring off what should've been a rounded end). */
+.bar-group > .bar-row-total > .bar-track { height: 16.8px; margin-top: 8px; }
 .bar-group .bar-label, .bar-group .bar-value { width: auto; white-space: nowrap; }
 
 .select-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
@@ -929,6 +942,15 @@ details[open] summary { margin-bottom: 8px; }
    segments instead of one flat line. text-align + the site-wide td vertical
    centering are enough for this cell's plain short text label. */
 .lineup-slot { text-align: center; vertical-align: middle; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; padding-left: 12px; padding-right: 12px; }
+/* Column widths as classes (not inline on the <col>s) so the 700px
+   breakpoint below can actually repartition them - a flat 35/8/14/8/35 split
+   reads fine on desktop, but the same percentages leave too few actual
+   pixels for the slot label and score numbers on a phone-width screen, which
+   is what broke the slot column's centering and let 2-digit-plus-decimal
+   scores run up against the name text next to them. */
+.lineup-col-name { width: 35%; }
+.lineup-col-score { width: 8%; }
+.lineup-col-slot { width: 14%; }
 
 /* :not([hidden]) matters here - a bare .modal-overlay{display:flex} rule
    ties in specificity with the UA's [hidden]{display:none} and, as the
@@ -1093,12 +1115,31 @@ details[open] summary { margin-bottom: 8px; }
   #tab-startsit #startsit-week-select { flex: 1 1 0; min-width: 64px; }
   .mobile-line { display: block; }
 
+  /* Schedule specifically (not every tab) gives up the page's normal side
+     gutters on mobile - the symmetric lineup table below is the tightest
+     content on the site for horizontal room (two full lineups mirrored side
+     by side), so the usual 16px tabpanel + 14px card padding (30px per
+     side, ~60px total on a 390px phone) is worth trading away here for more
+     room for names/scores, even though every other tab keeps it. */
+  #tab-schedule { padding-left: 6px; padding-right: 6px; }
+  #tab-schedule .card { padding-left: 6px; padding-right: 6px; }
+
   /* Schedule's symmetric lineup: drop the position chip (already tight with
      two full lineups mirrored side by side) and swap to the "F. Last" short
      name form. */
   .lineup-player .pos-tag { display: none; }
   .full-name { display: none; }
   .short-name { display: inline; }
+  /* Give back some of the width the shortened name no longer needs to the
+     slot/score columns - at the desktop 35/8/14/8/35 split, a phone-width
+     slot column has only a few px left over after the slot cell's 12px side
+     padding, which is what pushed "FLEX"/"RB1" off-center, and the score
+     columns were tight enough that a 2-digit-plus-decimal number ("21.9")
+     could butt right up against the adjacent name. */
+  .lineup-col-name { width: 28%; }
+  .lineup-col-score { width: 13%; }
+  .lineup-col-slot { width: 18%; }
+  .lineup-slot { padding-left: 4px; padding-right: 4px; }
 
   /* Start/Sit's lineup card: drop the desktop shrink-wrap (".lineup-card"
      above) so the card itself never grows wider than the phone screen -
