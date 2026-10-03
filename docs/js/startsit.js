@@ -142,13 +142,21 @@ function lineupSection(roster, week, lineupWeek, currentWeek, allPlayersById) {
     return acc + (p ? projValueFor(p, week, currentWeek) || 0 : 0);
   }, 0);
 
-  // Sorted by THIS week's own displayed Proj value (not the backend's fixed
-  // espn_projected_week ordering, which doesn't vary week to week and can
-  // disagree with what's actually shown in the Proj column here).
+  // Non-IR bench always sorts above IR (a healthy bench player is a more
+  // likely add/start candidate than someone on IR regardless of either's
+  // own projection), THEN by THIS week's own displayed Proj value within
+  // each group (not the backend's fixed espn_projected_week ordering,
+  // which doesn't vary week to week and can disagree with what's actually
+  // shown in the Proj column here).
   const bench = (lineupWeek.bench || [])
     .map((id) => rosterById.get(id))
     .filter(Boolean)
-    .sort((a, b) => (projValueFor(b, week, currentWeek) || 0) - (projValueFor(a, week, currentWeek) || 0));
+    .sort((a, b) => {
+      const aIR = a.lineup_slot === "IR" ? 1 : 0;
+      const bIR = b.lineup_slot === "IR" ? 1 : 0;
+      if (aIR !== bIR) return aIR - bIR;
+      return (projValueFor(b, week, currentWeek) || 0) - (projValueFor(a, week, currentWeek) || 0);
+    });
   const benchRows = bench.map((p) => playerRow(p, week, currentWeek, p.lineup_slot === "IR" ? "IR" : "Bench")).join("");
   const benchTotal = bench.reduce((acc, p) => acc + (projValueFor(p, week, currentWeek) || 0), 0);
 

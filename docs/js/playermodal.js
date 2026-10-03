@@ -343,7 +343,7 @@ function gameLogTable(player, data) {
     })
     .join("");
   if (!rows) return `<p class="muted small">No games played yet this season.</p>`;
-  return `<div class="table-wrap"><table>${topWithXfp}${bottomWithXfp}<tbody>${rows}</tbody></table></div>`;
+  return `<div class="table-wrap"><table class="game-log-stats-table">${topWithXfp}${bottomWithXfp}<tbody>${rows}</tbody></table></div>`;
 }
 
 // Bars/markers are positioned by percent-of-elapsed-time, so two plays

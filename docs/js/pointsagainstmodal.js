@@ -30,7 +30,7 @@ function render(position, weekDetail, expandedWeek) {
     })
     .join("");
 
-  return `<div class="table-wrap"><table>${top}${bottom}<tbody>${rows || '<tr><td colspan="99" class="muted">No data yet.</td></tr>'}</tbody></table></div>`;
+  return `<div class="table-wrap"><table class="points-against-table">${top}${bottom}<tbody>${rows || '<tr><td colspan="99" class="muted">No data yet.</td></tr>'}</tbody></table></div>`;
 }
 
 export function openPointsAgainstModal(team, position, data) {

@@ -161,6 +161,14 @@ th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--bord
    Slot) is a normal, readable pattern too, so this is one site-wide default
    rather than a "center" class repeated on every table's own header row. */
 th { color: var(--ink-500); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; cursor: pointer; text-align: center; }
+/* Player Modal's Game Log (actual completed games - see playermodal.js's
+   gameLogTable) and the Points-Against-by-team modal (pointsagainstmodal.js)
+   both center their DATA cells too, not just headers - every column in
+   either table is a stat value/week/opponent badge, none of them reads
+   worse centered the way a long identifying name column would, so this is
+   scoped to just these two tables rather than the sitewide th/td default
+   above. */
+.game-log-stats-table td, .points-against-table td { text-align: center; }
 /* Grouped stat-column headers (Passing/Rushing/Receiving/Ret/etc - see
    docs/js/statcolumns.js's groupedHeaderHtml) span multiple sub-columns via
    colspan - center them over that span instead of the site-wide left
