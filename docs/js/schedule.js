@@ -151,6 +151,84 @@ export function scoreOf(m, side, data) {
   return (data.lineups[String(teamId)]?.weeks[String(m.week)] || {}).total ?? null;
 }
 
+// {actual, projected} for one player in one week - shared by the expanded
+// lineup's per-player cell and the matchup row's team total (see
+// actualAndProjectedTotal below), so both read off the exact same numbers
+// rather than two independent, driftable derivations.
+//
+// actual: real points once this player's own game has started - "-" (left
+// undefined) before kickoff, or for a future week. A non-current played
+// week's lineupWeek (the pipeline's own box-score snapshot, "actual":
+// true) already carries the real final total in its own `points` map;
+// the current week gets the same number from the live gameday tick
+// (engine/live.py) while remainingFractionFor is defined and < 1 (mid-game
+// through final, same "0 reads as a real score, not broken" reasoning
+// pointsForPlayerInLineup's own docstring already established for that map).
+//
+// projected: the live in-game blend (points-so-far + remaining-game-
+// fraction share of the pregame number) ONLY while this player's game is
+// actually mid-play (0 < frac < 1) - otherwise the STATIC pregame/future
+// projection (p.espn_projected_week for the current week, weeklyProjection
+// for any other week), even once their game is final. Deliberately never
+// the live blend post-final - by then it's numerically equal to `actual`,
+// which would make the second line pure redundant clutter instead of the
+// "how did this compare to expectation" comparison it's meant to be - and
+// for a past (non-current) week there's no stored original projection at
+// all (engine/pipeline.py explicitly nulls it out once a week is played -
+// "nothing to project for a week that already happened"), so this is left
+// undefined there, same as actual is left undefined pre-kickoff.
+function actualAndProjected(p, week, lineupWeek, data) {
+  const currentWeek = data.meta.current_week;
+  const isCurrentWeek = week === currentWeek;
+  const frac = isCurrentWeek ? remainingFractionFor(p, data) : undefined;
+  let actual;
+  if (isCurrentWeek) {
+    if (frac !== undefined && frac < 1) actual = lineupWeek?.points?.[p.id];
+  } else if (week < currentWeek) {
+    actual = lineupWeek?.points?.[p.id];
+  }
+  const liveProjected = isCurrentWeek && frac > 0 && frac < 1 ? lineupWeek?.projected_points?.[p.id] : undefined;
+  const staticProjected = isCurrentWeek ? p.espn_projected_week : weeklyProjection(p, week, currentWeek);
+  const projected = liveProjected !== undefined ? liveProjected : staticProjected;
+  return { actual, projected };
+}
+
+// Team-level twin of actualAndProjected above, for the matchup row's own
+// colored team-total cell. A fully played week has no per-player original
+// projection to sum (see that function's own docstring) - the real
+// recorded total (same number scoreOf returns) is the only line shown
+// there. Otherwise sums each starter's own actual/projected (an "actual"
+// team total is a real LIVE SCORE - a starter who hasn't kicked off yet
+// contributes 0 to it, same as any other fantasy site's live scoreboard,
+// rather than leaving the whole team total blank just because one starter
+// is in a late game) - `anyActual`/`anyProjected` distinguish "genuinely
+// nobody's played yet" (real "-") from "some real points are in" (a real,
+// if partial, number).
+function actualAndProjectedTotal(m, side, data) {
+  const teamId = side === "home" ? m.home_team_id : m.away_team_id;
+  if (m.played) {
+    return { actual: (side === "home" ? m.home_score : m.away_score) ?? null, projected: null };
+  }
+  const lineupWeek = lineupWeekFor(teamId, m.week, data);
+  if (!lineupWeek) return { actual: null, projected: null };
+  const pids = Object.values(lineupWeek.slots || {});
+  let actualSum = 0, anyActual = false, projectedSum = 0, anyProjected = false;
+  pids.forEach((pid) => {
+    const p = resolvePlayer(pid, data);
+    if (!p) return;
+    const { actual, projected } = actualAndProjected(p, m.week, lineupWeek, data);
+    if (actual !== undefined && actual !== null) {
+      actualSum += actual;
+      anyActual = true;
+    }
+    if (projected !== undefined && projected !== null) {
+      projectedSum += projected;
+      anyProjected = true;
+    }
+  });
+  return { actual: anyActual ? actualSum : null, projected: anyProjected ? projectedSum : null };
+}
+
 // One shared table, home team's players/scores on the outside-left and away
 // team's on the outside-right, mirrored around a single center "slot" column
 // - rather than two separate side-by-side tables - so the two lineups read
@@ -177,20 +255,18 @@ function symmetricLineupHtml(homeTeamId, awayTeamId, week, data) {
     const nameHtml = `<span class="full-name">${escapeHtml(p.name)}</span><span class="short-name">${escapeHtml(shortName(p.name))}</span>`;
     return `${posTag(p.position)} ${nameHtml}${streamBadge}`;
   };
+  // Same stacked actual-over-projected format as Start/Sit's xFPTS cells
+  // (see docs/js/startsit.js's fmtPtsWithXfp) - full-contrast actual on top
+  // ("-" before this player's game has started, or for a future week),
+  // smaller muted projected underneath (see actualAndProjected above for
+  // exactly which number that is at each stage).
   const scoreCell = (pid, lineupWeek) => {
     const p = pid && resolvePlayer(pid, data);
     if (!p) return "–";
-    const projected = pointsForPlayerInLineup(p, week, lineupWeek, data.meta.current_week);
-    // Actual-so-far is only worth surfacing alongside the projection while
-    // this player's own NFL game is actually mid-play (0 < frac < 1) - a
-    // player who hasn't kicked off yet still reads "0 so far" as broken
-    // rather than informative, and once their game's final the two numbers
-    // already agree (see pointsForPlayerInLineup's projected_points blend),
-    // so the second line would be pure redundant clutter.
-    const frac = remainingFractionFor(p, data);
-    const actual = frac > 0 && frac < 1 ? lineupWeek?.points?.[p.id] : undefined;
-    const liveLine = actual !== undefined ? `<span class="lineup-score-live">${fmt(actual, 1)} now</span>` : "";
-    return `${fmt(projected, 1)}${liveLine}`;
+    const { actual, projected } = actualAndProjected(p, week, lineupWeek, data);
+    const actualLine = `<span style="color:var(--ink-900)">${actual !== undefined && actual !== null ? fmt(actual, 1) : "–"}</span>`;
+    const projLine = projected !== undefined && projected !== null ? `<span class="sub">${fmt(projected, 1)}</span>` : "";
+    return `<span class="comp-recent-cell">${actualLine}${projLine}</span>`;
   };
   const lineupRow = (hPid, aPid, middleLabel) => {
     const rowClass = streamed.has(hPid) || streamed.has(aPid) ? "streamed-row" : "";
@@ -282,14 +358,33 @@ function matchupRow(m, data, expandedKey, yourTeamId, avg, spread, filterTeamId)
   const colspan = filterTeamId ? 5 : 4;
   const weekCell = filterTeamId ? `<td class="schedule-cell small muted">${m.week}</td>` : "";
 
-  const leftScore = scoreOf(m, flip ? "away" : "home", data);
-  const rightScore = scoreOf(m, flip ? "home" : "away", data);
+  const leftSide = flip ? "away" : "home";
+  const rightSide = flip ? "home" : "away";
+  const leftScore = scoreOf(m, leftSide, data);
+  const rightScore = scoreOf(m, rightSide, data);
   const leftWinPct = flip ? m.away_win_pct : m.home_win_pct;
   const rightWinPct = flip ? m.home_win_pct : m.away_win_pct;
-  const scoreCell = (v) => {
+  // Heat color still keys off scoreOf's own single best-current-estimate
+  // number (unchanged, also what standings.js's ROS PF/PA reads - see that
+  // function's own docstring) - this just additionally stacks the real
+  // actual-so-far team total over the projected one inside the same
+  // colored cell (see actualAndProjectedTotal above), same visual language
+  // as the per-player cells above.
+  const scoreCell = (v, side) => {
     if (v === null || v === undefined) return `<span class="muted">–</span>`;
     const ratio = spread > 0 ? Math.max(0, Math.min(1, 0.5 + (v - avg) / spread)) : 0.5;
-    return `<span class="heat-cell" style="background:${colorForRatio(ratio)}; display:inline-block; width:100%;">${fmt(v, 1)}</span>`;
+    const { actual, projected } = actualAndProjectedTotal(m, side, data);
+    // Unlike the per-player cells (plain card background, so the theme's
+    // own ink-900/--ink-500 contrast correctly), this cell sits on
+    // .heat-cell's own bright inline ratio-color fill - both lines are
+    // pinned to the same #111 .heat-cell already hardcodes for exactly that
+    // reason (see its own CSS comment), overriding what var(--ink-900)/.sub
+    // would otherwise resolve to in dark mode (near-white, illegible here).
+    // The actual line keeps a bold weight so it still visually leads over
+    // the smaller projected one now that color alone can't do that job.
+    const actualLine = `<span style="color:#111; font-weight:600">${actual !== null && actual !== undefined ? fmt(actual, 1) : "–"}</span>`;
+    const projLine = projected !== null && projected !== undefined ? `<span class="sub" style="color:#111">${fmt(projected, 1)}</span>` : "";
+    return `<span class="heat-cell comp-recent-cell" style="background:${colorForRatio(ratio)}; display:inline-block; width:100%;">${actualLine}${projLine}</span>`;
   };
 
   // Populated for the current week's real matchups AND every other
@@ -327,8 +422,8 @@ function matchupRow(m, data, expandedKey, yourTeamId, avg, spread, filterTeamId)
     <tr class="clickable-row schedule-row ${isYours ? "your-team-row" : ""}" data-key="${key}">
       ${weekCell}
       <td class="schedule-cell">${escapeHtml(teamLabel(left) || leftId)}${winPct(leftWinPct)}</td>
-      <td class="schedule-cell small">${scoreCell(leftScore)}</td>
-      <td class="schedule-cell small">${scoreCell(rightScore)}</td>
+      <td class="schedule-cell small">${scoreCell(leftScore, leftSide)}</td>
+      <td class="schedule-cell small">${scoreCell(rightScore, rightSide)}</td>
       <td class="schedule-cell">${escapeHtml(teamLabel(right) || rightId)}${winPct(rightWinPct)}</td>
     </tr>
     ${leftWinPct !== null && leftWinPct !== undefined ? `<tr class="winprob-row"><td colspan="${colspan}">${winProbBar(leftWinPct, rightWinPct)}</td></tr>` : ""}
