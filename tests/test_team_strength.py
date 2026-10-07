@@ -367,6 +367,53 @@ def test_pickups_excludes_free_agents_with_zero_ros_total():
     assert all(c["add"] != "dead_fa" for c in result)
 
 
+def test_pickups_does_not_credit_a_bystander_for_a_candidate_leaving_the_wire():
+    # Regression test for a real live bug: a FLEX slot's replacement bar
+    # (best_available, see position_value_by_player) is the single best
+    # free agent across every flex-eligible position COMBINED, shared by
+    # whichever teammate actually claims FLEX that week - regardless of
+    # that teammate's own position. Computing `before` against the
+    # original pool and `after` against the pool with the candidate
+    # removed used to lower that SHARED bar for every OTHER flex-eligible
+    # teammate too, crediting them for "the candidate left the wire" even
+    # though they're not involved in the swap at all and their own score
+    # never changed. rb2 here claims FLEX in both snapshots (12 always
+    # beats x's 8) and wr1 claims WR1 in both (18 always beats x's 8) -
+    # neither one's role or score ever changes, so neither one's own
+    # starting_value should either, regardless of whether x is added.
+    #
+    # rb1=20 (clear RB1), wr1=18 (clear WR1), rb2=12 (claims FLEX), y=1
+    # (bench WR, the weakest droppable - about to be cut). One free agent,
+    # x=8 (WR) - never outscores rb2 or wr1, so he can never actually
+    # displace either of them from their slot; he can only ever affect the
+    # BAR, not who's claimed, isolating the bug from any real reshuffling.
+    #
+    # Hand-computed expected gain (shared pool = {WR: [y]}, x removed, y
+    # added, used for BOTH before and after - see pickups()'s own
+    # docstring): rb1 (20-0=20), wr1 (18-1=17, y sets the bar), rb2
+    # (12-1=11, y sets the bar) are IDENTICAL in both snapshots. The only
+    # real difference is x's own depth_value once rostered (8 - 1 = 7,
+    # value_delta = 0.5*7 = 3.5) replacing y's (now washed out to 0 via
+    # his own self-comparison in the shared pool). gain = 3.5 exactly - not
+    # the ~17.5-20 a shared/shifting bar would produce.
+    slots = {"RB": 1, "WR": 1, "RB/WR/TE": 1}
+    eligibility = {"RB": {"RB"}, "WR": {"WR"}, "RB/WR/TE": {"RB", "WR", "TE"}}
+    weeks = [1]
+    players = {
+        "rb1": _wk("rb1", "RB", {1: 20.0}),
+        "rb2": _wk("rb2", "RB", {1: 12.0}),
+        "wr1": _wk("wr1", "WR", {1: 18.0}),
+        "y": _wk("y", "WR", {1: 1.0}),
+    }
+    free_agents = {"WR": [PlayerCtx(id="x", position="WR", ros_total=8.0, weekly={1: 8.0})]}
+    team_values = position_value_by_player(["rb1", "rb2", "wr1", "y"], players, free_agents, weeks, slots, eligibility)
+    result = pickups(["rb1", "rb2", "wr1", "y"], players, team_values, free_agents, weeks, slots, eligibility, max_pickups=5)
+    matches = [c for c in result if c["add"] == "x"]
+    assert len(matches) == 1
+    assert matches[0]["drop"] == "y"
+    assert matches[0]["gain"] == pytest.approx(3.5)
+
+
 # --- trade_targets fairness ratio: both sides > 0 alone lets through wildly
 # lopsided "trades" - see the conversation this was built from. Now scored
 # by position_value_team_total (points above replacement), not a lineup-

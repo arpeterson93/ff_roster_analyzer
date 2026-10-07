@@ -410,14 +410,44 @@ def pickups(
     already does for trade swaps. team_values is still used (not recomputed)
     to pick WHICH rostered player is weakest - only the scoring of the
     resulting swap needs the full recompute. Costlier than the old O(1)
-    compare - this reruns the claim loop once per free agent, the same
-    per-candidate cost trade_targets already pays for every trade
-    combination it considers."""
+    compare - this reruns the claim loop TWICE per free agent now (before
+    AND after, see below), the same per-candidate cost trade_targets
+    already pays for every trade combination it considers.
+
+    before is recomputed per candidate, against the SAME free-agent pool
+    `after` uses (this candidate already removed) - not once, up front,
+    against the original full pool. A FLEX slot's replacement bar
+    (best_available, see position_value_by_player) is the single best free
+    agent across every flex-eligible position combined, shared by whichever
+    teammate gets claimed there that week, REGARDLESS of that teammate's own
+    position. If this candidate happened to be the best flex-eligible free
+    agent in several weeks, computing `before` against the full pool and
+    `after` against the pool with him removed lowers that SHARED bar - which
+    inflates every OTHER flex-eligible teammate's own credited starting_value
+    in `after`, even teammates at a completely different position who were
+    never involved in this swap. That's a pure accounting artifact, not real
+    value: position_value_by_player deliberately never lets a bench player
+    (not even this candidate himself, once rostered but left on the bench)
+    serve as anyone else's modeled replacement - only the wire can - so
+    "removing him from the wire" can't actually cost or gain a THIRD teammate
+    anything real; his own bench spot is just unused either way (confirmed
+    live - adding one free agent was inflating unrelated teammates' own
+    starting_value at OTHER positions, see the conversation this was built
+    from). Holding the pool fixed between before/after isolates the real
+    effect to just this candidate's own contribution and the dropped
+    player's removal, which is all this function is actually trying to
+    measure.
+
+    That shared pool also gains the dropped player himself, not just loses
+    this candidate - he genuinely becomes a real wire option once cut, and
+    since before/after now share one pool regardless of what's in it, adding
+    him in doesn't reintroduce the asymmetry above (both calls still see him
+    identically) - it just makes the shared backdrop a closer match to the
+    real post-move market, in case he'd otherwise have set some OTHER
+    teammate's bar himself."""
     droppable = [pid for pid in team_player_ids if pid not in ir_player_ids and pid in team_values]
     if not droppable:
         return []
-
-    before = position_value_team_total(team_player_ids, players, free_agents_by_pos, weeks, slots, eligibility, depth_weight)
 
     candidates = []
     for fas in free_agents_by_pos.values():
@@ -452,11 +482,35 @@ def pickups(
             # available replacement" on any week he's the top FA, silently
             # zeroing out exactly the credit he should get (the same self-
             # comparison fa_pool_value's own leave-one-out design avoids).
-            after_free_agents = {
+            # drop_pid, conversely, GENUINELY becomes a real wire option once
+            # cut - added into this same shared pool (not just conceptually
+            # for "after"; see this function's own docstring on why before
+            # and after share one pool) so a third teammate's bar reflects
+            # the real post-move market as completely as this model can,
+            # not just "fa left the wire" in isolation. drop_pid simultaneously
+            # still occupying a roster slot in `before`'s own team_player_ids
+            # is a real but harmless inconsistency (he can't actually be both
+            # rostered and a free agent at once) - it only means `before`'s
+            # claim loop can, in principle, compare a third teammate against
+            # drop_pid's own weekly score as a hypothetical replacement
+            # alongside crediting drop_pid his own roster-slot value too;
+            # since the SAME thing happens identically in `after` (drop_pid
+            # is gone from the roster there, but still sits in this shared
+            # pool), third-party bars stay exactly as fixed between the two
+            # calls either way - which is the one property this rewrite
+            # actually depends on.
+            shared_free_agents = {
                 pos: [other for other in fas if other.id != fa.id] for pos, fas in free_agents_by_pos.items()
             }
+            drop_player = players.get(drop_pid)
+            if drop_player is not None:
+                shared_free_agents = {
+                    **shared_free_agents,
+                    drop_player.position: shared_free_agents.get(drop_player.position, []) + [drop_player],
+                }
+            before = position_value_team_total(team_player_ids, players, shared_free_agents, weeks, slots, eligibility, depth_weight)
             after = position_value_team_total(
-                after_roster, after_players, after_free_agents, weeks, slots, eligibility, depth_weight
+                after_roster, after_players, shared_free_agents, weeks, slots, eligibility, depth_weight
             )
             gain = after - before
             if gain > 0:
