@@ -465,6 +465,31 @@ def pickups(
     return candidates[:max_pickups]
 
 
+def _mutual_benefit(gain_self: float, gain_partner: float) -> float:
+    """Ranking score for a candidate trade - higher is a better
+    recommendation, with no hard pass/fail bar behind it (see trade_targets'
+    own docstring on why an empty list was worse than a ranked-low
+    candidate).
+
+    A genuine win-win (both sides' gain > 0) is scored by the NASH PRODUCT
+    (gain_self * gain_partner), not just the smaller of the two: for a fixed
+    total surplus, the product is maximized at an even split and punishes a
+    near-zero share on either side much harder than min() does - a 1.9/0.1
+    split (product 0.19) loses to a 1.0/1.0 split (product 1.0) with
+    roughly the same total, exactly the "technically both positive but
+    wildly lopsided" case a plain min() can't tell apart from a real
+    mutual win (confirmed live: a 19:1 split like that was actually
+    OUTRANKING more balanced trades before this fix, the exact case the
+    original fairness_ratio filter existed to reject). Not a real win-win
+    (either side <= 0) falls back to min(gain_self, gain_partner) instead -
+    always <= 0, so every non-win-win ranks below every genuine win-win,
+    and there's no division anywhere, so a zero-gain candidate can never
+    divide-by-zero crash the way the old ratio check once did."""
+    if gain_self > 0 and gain_partner > 0:
+        return gain_self * gain_partner
+    return min(gain_self, gain_partner)
+
+
 def trade_targets(
     team_id: int,
     team_player_ids: list[str],
@@ -477,7 +502,6 @@ def trade_targets(
     max_trade_targets: int,
     candidate_pool_size: int = 10,
     two_for_one_pool_size: int = 6,
-    fairness_ratio: float = 0.5,
     roster_size: int | None = None,
 ) -> list[dict]:
     """1-for-1 swaps with every other team (top `candidate_pool_size` by
@@ -496,22 +520,21 @@ def trade_targets(
     twin the Trade Calculator's own single-trade detail view calls once
     you've actually picked one of these suggestions to inspect.
 
-    Both sides' gain must be positive AND within `fairness_ratio` of each
-    other (min/max >= fairness_ratio) - `gain_self > 0 and gain_partner > 0`
-    alone lets through wildly lopsided "trades" like offering a bench kicker
-    (near-zero gain to you, since dropping him barely moves your lineup) for
-    a real bench upgrade (any positive gain, however large, satisfies
-    "> 0") that no actual manager would accept. A ratio (not a fixed point
-    gap) scales correctly with trade size and time of season - early-season
-    gains run much larger in absolute points than late-season ones.
-
-    Deliberately symmetric here, unlike the Trade Calculator's client-side
-    twin (docs/js/trade.js's tradeSuggestions/passesFairness), which leaves
-    the "I'm overpaying" direction unbounded - these are passive, browse-
-    only suggestions with no specific trade already in mind, so there's no
-    real "my call to make" the way there is once you're actively building a
-    specific offer around a player you want (see the conversation this was
-    built from).
+    No hard pass/fail filter - every candidate is scored by mutual_benefit
+    (see _mutual_benefit below) and the whole list is sorted by that,
+    highest first. This used to require both sides' gain to be positive AND
+    within a fixed `fairness_ratio` of each other before a candidate was
+    even returned - which meant a team with no genuinely mutual trade
+    available (common - many rosters just don't have one right now) got an
+    empty list instead of its best available option. Sorting instead of
+    filtering means the truly win-win trades still surface first, but a
+    team always gets its best `max_trade_targets` candidates rather than
+    nothing. Deliberately symmetric here, unlike the Trade Calculator's
+    client-side twin (docs/js/trade.js's tradeSuggestions), which leaves the
+    "I'm overpaying" direction unbounded - these are passive, browse-only
+    suggestions with no specific trade already in mind, so there's no real
+    "my call to make" the way there is once you're actively building a
+    specific offer around a player you want.
 
     roster_size (optional, real total roster spots - starting + BE + IR)
     resolves every before/after roster through _apply_roster_constraints
@@ -554,21 +577,17 @@ def trade_targets(
             after_theirs = [p for p in partner_roster if p not in gets] + gives
             gain_self = team_total(after_mine) - my_before
             gain_partner = team_total(after_theirs) - partner_before
-            if (
-                gain_self > 0
-                and gain_partner > 0
-                and min(gain_self, gain_partner) / max(gain_self, gain_partner) >= fairness_ratio
-            ):
-                results.append(
-                    {
-                        "partner_team_id": partner_id,
-                        "give": gives,
-                        "get": gets,
-                        "gain_self": gain_self,
-                        "gain_partner": gain_partner,
-                    }
-                )
-    results.sort(key=lambda r: r["gain_self"], reverse=True)
+            results.append(
+                {
+                    "partner_team_id": partner_id,
+                    "give": gives,
+                    "get": gets,
+                    "gain_self": gain_self,
+                    "gain_partner": gain_partner,
+                    "mutual_benefit": _mutual_benefit(gain_self, gain_partner),
+                }
+            )
+    results.sort(key=lambda r: r["mutual_benefit"], reverse=True)
     return results[:max_trade_targets]
 
 

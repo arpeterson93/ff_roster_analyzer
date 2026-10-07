@@ -144,11 +144,21 @@ Player value for trades and team strength is **lineup-delta ("next man
 down")**: the drop in a team's optimal-lineup ROS points if a player were
 removed, computed both roster-only (`value_delta`) and with the best
 available free agent backfilling the position (`value_delta_ww`, used as
-the primary basis for trade verdicts and pickup suggestions). A recommended
-trade must also clear a **fairness ratio** (`trade_fairness_ratio`,
-`min(gain_self, gain_partner) / max(...)`) - both sides being merely
-positive isn't enough, since that alone lets through wildly lopsided offers
-a real partner would never accept.
+the primary basis for trade verdicts and pickup suggestions). Both trade
+recommenders rank every candidate by **mutual benefit** rather than
+filtering any out, so a team without a perfectly win-win trade available
+still gets its best options instead of an empty list. A genuine win-win
+(both sides' gain > 0) scores by the **Nash product** (`gain_self *
+gain_partner`) - for a fixed total surplus this rewards an even split, not
+just a high floor, so a technically-positive-but-19:1-lopsided trade
+doesn't outrank a balanced one; anything that isn't a real win-win falls
+back to `min(gain_self, gain_partner)`, which is always <= 0 so it never
+outranks a genuine win-win. Team Strength's passive trade-target list uses
+this symmetric form as-is. The Trade Calculator's own interactive
+suggestion search forgives a low/negative gain on "my side" as long as
+"my side" isn't actually ahead (overpaying to land a specific player is an
+active, specific call only the person making the offer can make), falling
+back to the same balance-aware score once it is.
 
 **Future option, not built:** an alternative curve-construction method
 pairing historical ROS rankings with the players' subsequent actual PPG,

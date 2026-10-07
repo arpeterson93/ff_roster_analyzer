@@ -409,59 +409,86 @@ def _trade_setup(a_k2_ppw: float, b_rb2_ppw: float):
     return players, team_a, team_b
 
 
-def test_trade_targets_excludes_a_lopsided_trade_below_the_fairness_ratio():
-    # a_k2=3 (+2 over the K bar, discounted to +1 as MY depth) vs.
-    # b_rb2=8.9 (+3.9 over the RB bar, discounted to +1.9 as depth either
-    # side) - my gain (1.9) dwarfs the partner's gain from a_k2 becoming
-    # their full-value starter (2*2 - 3.9 = 0.1). Both positive, ratio
-    # ~0.05, nowhere near 0.5.
-    players, team_a, team_b = _trade_setup(a_k2_ppw=3.0, b_rb2_ppw=8.9)
-    results = trade_targets(
-        team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=players,
+def test_trade_targets_mutual_benefit_rewards_balance_over_raw_gain_self():
+    # Same a_k2 given away either way; b_rb2_ppw controls how BALANCED the
+    # trade is. ppw=8.9: my gain (1.9) dwarfs the partner's (0.1) - lopsided
+    # despite a healthy gain_self. ppw=8.0: the two gains are comparable.
+    # mutual_benefit (the Nash product gain_self * gain_partner - see
+    # _mutual_benefit) must reward the more balanced version even though
+    # its gain_self is nearly identical.
+    lopsided_players, team_a, team_b = _trade_setup(a_k2_ppw=3.0, b_rb2_ppw=8.9)
+    lopsided = trade_targets(
+        team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=lopsided_players,
         free_agents_by_pos=_TRADE_FA, weeks=_TRADE_WEEKS, slots=_TRADE_SLOTS,
-        eligibility=_TRADE_ELIGIBILITY, max_trade_targets=20, fairness_ratio=0.5,
+        eligibility=_TRADE_ELIGIBILITY, max_trade_targets=20,
     )
-    matches = [r for r in results if r["give"] == ["a_k2"] and r["get"] == ["b_rb2"]]
-    assert matches == []
+    balanced_players, team_a, team_b = _trade_setup(a_k2_ppw=3.0, b_rb2_ppw=8.0)
+    balanced = trade_targets(
+        team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=balanced_players,
+        free_agents_by_pos=_TRADE_FA, weeks=_TRADE_WEEKS, slots=_TRADE_SLOTS,
+        eligibility=_TRADE_ELIGIBILITY, max_trade_targets=20,
+    )
+    match = lambda results: [r for r in results if r["give"] == ["a_k2"] and r["get"] == ["b_rb2"]][0]
+    lopsided_match, balanced_match = match(lopsided), match(balanced)
+    assert balanced_match["mutual_benefit"] > lopsided_match["mutual_benefit"]
+    # Never excluded outright despite being lopsided - and here it's
+    # actually the TOP-ranked candidate anyway, since every other raw
+    # combo in this tiny fixture nets out worse for at least one side.
+    assert lopsided_match == lopsided[0]
 
 
-def test_trade_targets_includes_a_trade_within_the_fairness_ratio():
+def test_trade_targets_ranks_a_balanced_trade_above_the_lopsided_one():
     # Same a_k2, but b_rb2=8.0 (+3 over the RB bar, discounted to +1.5 as
-    # depth) - now my gain (1.5-1=... see gain_self below) and the
-    # partner's gain from a_k2's full-value promotion are comparable.
+    # depth) - now my gain and the partner's gain from a_k2's full-value
+    # promotion are comparable, so mutual_benefit is much higher than the
+    # lopsided b_rb2=8.9 version above.
     players, team_a, team_b = _trade_setup(a_k2_ppw=3.0, b_rb2_ppw=8.0)
     results = trade_targets(
         team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=players,
         free_agents_by_pos=_TRADE_FA, weeks=_TRADE_WEEKS, slots=_TRADE_SLOTS,
-        eligibility=_TRADE_ELIGIBILITY, max_trade_targets=20, fairness_ratio=0.5,
+        eligibility=_TRADE_ELIGIBILITY, max_trade_targets=20,
     )
     matches = [r for r in results if r["give"] == ["a_k2"] and r["get"] == ["b_rb2"]]
     assert len(matches) == 1
     assert matches[0]["gain_self"] > 0
     assert matches[0]["gain_partner"] > 0
+    # A real win-win scores by the Nash product (gain_self * gain_partner),
+    # not min() - see _mutual_benefit's own docstring. This fixture happens
+    # to land on a perfectly even 1.0/1.0 split, where the two formulas
+    # coincide (1.0 either way) - test_trade_targets_mutual_benefit_rewards_
+    # balance_over_raw_gain_self (above) is the one that actually exercises
+    # a case where they'd diverge.
+    assert matches[0]["mutual_benefit"] == pytest.approx(matches[0]["gain_self"] * matches[0]["gain_partner"])
 
 
-def test_trade_targets_fairness_ratio_zero_reduces_to_the_old_both_positive_check():
-    # fairness_ratio=0.0 (min/max always >= 0) is a no-op on top of the
-    # existing > 0 check - the lopsided trade from the exclusion test above
-    # reappears once fairness is switched off.
+def test_trade_targets_never_returns_an_empty_list_when_candidates_exist():
+    # The old hard filter (both gains positive AND within a fixed fairness
+    # ratio) could legitimately exclude every single candidate, leaving a
+    # team with no recommendation at all even though trades existed. Ranking
+    # instead of filtering means a team always gets its best available
+    # options - same lopsided-only setup as the ranking test above, but
+    # asserting the LIST ITSELF isn't empty, not just that one entry ranks
+    # low.
     players, team_a, team_b = _trade_setup(a_k2_ppw=3.0, b_rb2_ppw=8.9)
     results = trade_targets(
         team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=players,
         free_agents_by_pos=_TRADE_FA, weeks=_TRADE_WEEKS, slots=_TRADE_SLOTS,
-        eligibility=_TRADE_ELIGIBILITY, max_trade_targets=20, fairness_ratio=0.0,
+        eligibility=_TRADE_ELIGIBILITY, max_trade_targets=20,
     )
-    matches = [r for r in results if r["give"] == ["a_k2"] and r["get"] == ["b_rb2"]]
-    assert len(matches) == 1
+    assert results != []
+    # Sorted descending by mutual_benefit, highest-value trade first.
+    assert all(a["mutual_benefit"] >= b["mutual_benefit"] for a, b in zip(results, results[1:]))
 
 
 def test_trade_targets_does_not_crash_on_a_zero_gain_candidate():
-    # Regression test for a real live pipeline crash (ZeroDivisionError in
-    # the fairness check's min/max ratio) - a candidate whose gain is
-    # exactly 0 for one or both sides must be excluded, never evaluated
-    # through the ratio at all. Identical-value 1-for-1 swap: both rosters'
-    # points-above-replacement total is unchanged by the trade, so
-    # gain_self == gain_partner == 0 exactly for this candidate.
+    # Regression test: a candidate whose gain is exactly 0 for one or both
+    # sides must not crash (this used to divide by max(gain_self,
+    # gain_partner) in a fairness ratio, a real live ZeroDivisionError) -
+    # mutual_benefit = min(...) has no division at all, so this is now
+    # structurally impossible, but the candidate should still come back
+    # (not silently dropped) with mutual_benefit == 0. Identical-value
+    # 1-for-1 swap: both rosters' points-above-replacement total is
+    # unchanged by the trade, so gain_self == gain_partner == 0 exactly.
     slots = {"RB": 1}
     eligibility = {"RB": {"RB"}}
     weeks = [1, 2]
@@ -474,28 +501,10 @@ def test_trade_targets_does_not_crash_on_a_zero_gain_candidate():
     results = trade_targets(
         team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=players,
         free_agents_by_pos={}, weeks=weeks, slots=slots,
-        eligibility=eligibility, max_trade_targets=20, fairness_ratio=0.5,
+        eligibility=eligibility, max_trade_targets=20,
     )
-    assert results == []
-
-
-def test_trade_targets_stays_symmetric_even_when_my_team_would_be_overpaying():
-    # Unlike the Trade Calculator's client-side twin (docs/js/trade.js's
-    # tradeSuggestions), these passive/browse-only suggestions stay
-    # symmetric in BOTH directions. a_k2=5 (discounted depth gain for me:
-    # 0.1) vs. b_rb2=9.1 (the partner's full-value-promotion gain: 3.9) -
-    # my own gain is barely positive while the partner's is ~40x bigger,
-    # nowhere near the 0.5 fairness ratio, so this stays excluded even
-    # though I'm the one giving up disproportionately more value (see the
-    # conversation this was built from).
-    players, team_a, team_b = _trade_setup(a_k2_ppw=5.0, b_rb2_ppw=9.1)
-    results = trade_targets(
-        team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=players,
-        free_agents_by_pos=_TRADE_FA, weeks=_TRADE_WEEKS, slots=_TRADE_SLOTS,
-        eligibility=_TRADE_ELIGIBILITY, max_trade_targets=20, fairness_ratio=0.5,
-    )
-    matches = [r for r in results if r["give"] == ["a_k2"] and r["get"] == ["b_rb2"]]
-    assert matches == []
+    assert len(results) == 1
+    assert results[0]["mutual_benefit"] == 0
 
 
 # --- position_value_matrix: points-above-replacement PER POSITION (not per
@@ -703,7 +712,7 @@ def test_position_value_team_total_roster_size_none_skips_constraints():
     assert total == pytest.approx(20.0 * len(weeks))
 
 
-def test_trade_targets_roster_size_changes_which_candidates_clear_the_bar():
+def test_trade_targets_roster_size_changes_the_candidates_gain():
     # Direct wiring check (see _apply_roster_constraints' own tests for the
     # underlying mechanism): giving away a_k2 leaves team A with only ONE
     # kicker (a_k1) - no gap yet, so this isn't the "position dump" case by
@@ -711,9 +720,10 @@ def test_trade_targets_roster_size_changes_which_candidates_clear_the_bar():
     # b_rb3 arriving keeps count unchanged... until b_rb3 (RB depth, since
     # a_rb1 already starts) and the still-thin bench interact with the cap
     # differently than the unconstrained model assumes. Empirically: this
-    # exact candidate doesn't clear even a 0.0 fairness bar unconstrained,
-    # but does once roster_size is applied - confirming roster_size actually
-    # changes trade_targets' real output, not just a cosmetic pass-through.
+    # exact candidate is a real loser (at least one side's gain <= 0)
+    # unconstrained, but a real win for both sides once roster_size is
+    # applied - confirming roster_size actually changes trade_targets' real
+    # output, not just a cosmetic pass-through.
     slots = {"RB": 1, "K": 1}
     eligibility = {"RB": {"RB"}, "K": {"K"}}
     weeks = [1, 2]
@@ -735,13 +745,19 @@ def test_trade_targets_roster_size_changes_which_candidates_clear_the_bar():
     unconstrained = trade_targets(
         team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=dict(players),
         free_agents_by_pos=free_agents, weeks=weeks, slots=slots, eligibility=eligibility,
-        max_trade_targets=20, fairness_ratio=0.0, two_for_one_pool_size=3,
+        max_trade_targets=20, two_for_one_pool_size=3,
     )
     constrained = trade_targets(
         team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=dict(players),
         free_agents_by_pos=free_agents, weeks=weeks, slots=slots, eligibility=eligibility,
-        max_trade_targets=20, fairness_ratio=0.0, roster_size=3, two_for_one_pool_size=3,
+        max_trade_targets=20, roster_size=3, two_for_one_pool_size=3,
     )
     match = lambda results: [r for r in results if r["give"] == ["a_k2"] and r["get"] == ["b_rb3"]]
-    assert match(unconstrained) == [], "sanity check: this candidate does NOT clear the bar unconstrained"
-    assert match(constrained) == [{"partner_team_id": 2, "give": ["a_k2"], "get": ["b_rb3"], "gain_self": 2.0, "gain_partner": 4.0}]
+    unconstrained_match = match(unconstrained)
+    assert len(unconstrained_match) == 1
+    # sanity check: this candidate is a real loser for at least one side
+    # unconstrained (the old fairness filter would have excluded it)
+    assert unconstrained_match[0]["gain_self"] <= 0 or unconstrained_match[0]["gain_partner"] <= 0
+    assert match(constrained) == [
+        {"partner_team_id": 2, "give": ["a_k2"], "get": ["b_rb3"], "gain_self": 2.0, "gain_partner": 4.0, "mutual_benefit": 8.0}
+    ]

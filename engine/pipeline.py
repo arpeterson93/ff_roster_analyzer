@@ -77,6 +77,7 @@ from ingest.config import load_all_league_configs
 from ingest.espn_client import EspnClient
 from ingest.espn_scoreboard import fetch_remaining_game_fraction
 from ingest.settings_sheet import SettingsSheetError, apply_remote_settings, fetch_remote_settings
+from ingest.sleeper_client import get_future_sleeper_projections
 from ingest.weather import fetch_game_weather
 from tools import nflverse_freshness
 
@@ -907,20 +908,40 @@ def run_league(
     # zeroing this already supported before ir_return_week existed.
     ir_return_weeks_by_espn_id: dict[int, int] = {}
 
-    # ESPN's own per-week projection for every remaining week - this IS the
-    # primary number project_player uses now (see engine/valuation.py's
-    # module docstring); our own baseline*matchup method only fills in a
-    # week ESPN hasn't published yet. The current week already has this from
-    # espn_projected_week (get_teams()), so only future weeks need it here -
-    # _register merges the two into one per-player {week: points} dict.
-    # Best-effort: ~2x(final_week - current_week) extra ESPN requests, so a
-    # transient failure here shouldn't take down the whole build.
-    try:
-        espn_future_projections = client.get_future_espn_projections(weeks[1:])
-    except Exception as exc:
-        logger.warning("ESPN future-week projections fetch failed: %s", exc, exc_info=True)
-        warnings.append(f"ESPN future-week projections fetch failed: {exc}")
+    # Per-league opt-in (see ingest/settings_sheet.py's "projection_source"
+    # key) - every league defaults to "espn" (unset), so nothing changes
+    # unless a league's Settings sheet explicitly flips this.
+    projection_source = cfg.get("projection_source", "espn")
+
+    if projection_source == "sleeper":
+        # Sleeper has no separate "live current week" endpoint the way ESPN
+        # does, so this covers the FULL remaining range (including the
+        # current week) in one pass - _register below skips the ESPN-only
+        # espn_projected_week overlay entirely for this source.
+        try:
+            sleeper_future_projections = get_future_sleeper_projections(weeks, season, id_map, player_rules, dst_rules if has_dst else None)
+        except Exception as exc:
+            logger.warning("Sleeper projections fetch failed: %s", exc, exc_info=True)
+            warnings.append(f"Sleeper projections fetch failed: {exc}")
+            sleeper_future_projections = {}
         espn_future_projections = {}
+    else:
+        # ESPN's own per-week projection for every remaining week - this IS
+        # the primary number project_player uses now (see engine/
+        # valuation.py's module docstring); our own baseline*matchup method
+        # only fills in a week ESPN hasn't published yet. The current week
+        # already has this from espn_projected_week (get_teams()), so only
+        # future weeks need it here - _register merges the two into one
+        # per-player {week: points} dict. Best-effort: ~2x(final_week -
+        # current_week) extra ESPN requests, so a transient failure here
+        # shouldn't take down the whole build.
+        try:
+            espn_future_projections = client.get_future_espn_projections(weeks[1:])
+        except Exception as exc:
+            logger.warning("ESPN future-week projections fetch failed: %s", exc, exc_info=True)
+            warnings.append(f"ESPN future-week projections fetch failed: {exc}")
+            espn_future_projections = {}
+        sleeper_future_projections = {}
     _log_checkpoint("future_projections_done")
 
     # --- curves ---
@@ -1196,12 +1217,18 @@ def run_league(
         # actually moved them to IR (or rosters them at all).
         ir_return_week = ir_return_weeks_by_espn_id.get(p.espn_id)
 
-        # One merged {week: points} dict, current week included - see the
-        # espn_future_projections fetch above for why the current week comes
-        # from a separate ESPN call than every other week.
-        espn_weekly = dict(espn_future_projections.get(p.espn_id, {}))
-        if p.espn_projected_week is not None:
-            espn_weekly[current_week] = p.espn_projected_week
+        # One merged {week: points} dict, current week included. ESPN: see
+        # the espn_future_projections fetch above for why the current week
+        # comes from a separate ESPN call than every other week. Sleeper:
+        # already resolved to res.id and already covers every week in one
+        # pass (see the sleeper_future_projections fetch above), so there's
+        # no second overlay to merge in.
+        if projection_source == "sleeper":
+            espn_weekly = dict(sleeper_future_projections.get(res.id, {}))
+        else:
+            espn_weekly = dict(espn_future_projections.get(p.espn_id, {}))
+            if p.espn_projected_week is not None:
+                espn_weekly[current_week] = p.espn_projected_week
 
         proj = project_player(
             position=p.position, nfl_team=p.nfl_team, ros_pos_rank=ros_pos_rank,
@@ -1506,7 +1533,6 @@ def run_league(
         targets = trade_targets(
             t.team_id, roster_ids, other_rosters, players_ctx, free_agents_ctx, weeks,
             settings.slots, settings.slot_eligibility, strength_cfg["max_trade_targets"],
-            fairness_ratio=strength_cfg["trade_fairness_ratio"],
             roster_size=settings.roster_size,
         )
         partner_summary = []
@@ -1823,10 +1849,6 @@ def run_league(
         "positions": settings.positions,
         "slots": settings.slots, "slot_eligibility": {k: sorted(v) for k, v in settings.slot_eligibility.items()},
         "playoff_team_count": settings.playoff_team_count,
-        # Read by the Trade Calculator's client-side suggestion generator
-        # (docs/js/trade.js's tradeSuggestions) so it applies the exact same
-        # bar server-side trade_targets does, not a hardcoded duplicate.
-        "trade_fairness_ratio": strength_cfg["trade_fairness_ratio"],
         # Real total roster cap (starting slots + BE + IR) - read by the
         # Trade Calculator (docs/js/trade.js's applyRosterConstraints) to
         # know when a trade forces a cut.
@@ -1844,6 +1866,7 @@ def run_league(
             "pa_prior_season_weeks": val_cfg["pa_prior_season_weeks"],
             "division_winners_first": sim_cfg["division_winners_first"],
             "seeding_raw": sim_cfg.get("seeding_raw", {}),
+            "projection_source": projection_source,
         },
         "settings_sheet_id": settings_sheet_id,
         "settings_overrides_applied": settings_overrides,

@@ -170,9 +170,9 @@ function tradeTargetsTable(targets, playersById, teamsById) {
         <td class="desktop-col">${escapeHtml(give)}</td>
         <td class="desktop-col">${escapeHtml(get)}</td>
         <td class="mobile-col small"><div>Give: ${escapeHtml(give)}</div><div>Get: ${escapeHtml(get)}</div></td>
-        <td class="desktop-col">+${fmt(t.gain_self, 1)}</td>
-        <td class="desktop-col">+${fmt(t.gain_partner, 1)}</td>
-        <td class="mobile-col small"><div>You: +${fmt(t.gain_self, 1)}</div><div>Them: +${fmt(t.gain_partner, 1)}</div></td>
+        <td class="desktop-col">${t.gain_self >= 0 ? "+" : ""}${fmt(t.gain_self, 1)}</td>
+        <td class="desktop-col">${t.gain_partner >= 0 ? "+" : ""}${fmt(t.gain_partner, 1)}</td>
+        <td class="mobile-col small"><div>You: ${t.gain_self >= 0 ? "+" : ""}${fmt(t.gain_self, 1)}</div><div>Them: ${t.gain_partner >= 0 ? "+" : ""}${fmt(t.gain_partner, 1)}</div></td>
       </tr>`;
     })
     .join("")}</tbody></table>`;

@@ -192,7 +192,6 @@ function generateSuggestions(suggestionsEl, data, state, rostA, rostB, freeAgent
       lockedA: [...state.givesA], lockedB: [...state.givesB],
       players, freeAgentsByPos, weeks,
       slots: data.meta.slots, eligibility: data.meta.slot_eligibility,
-      fairnessRatio: data.meta.trade_fairness_ratio || 0,
       rosterSize: data.meta.roster_size,
       mySide,
     });
@@ -334,8 +333,8 @@ export function renderTrade(container, data) {
     const rostA = rosterIds(data, state.teamA).map((id) => playersById.get(id)).filter(Boolean);
     const rostB = rosterIds(data, state.teamB).map((id) => playersById.get(id)).filter(Boolean);
     // Which side (if either) is the viewer's own team - the suggestion
-    // search only leaves the "I'm overpaying" direction unbounded for
-    // whichever side this is (see docs/js/trade.js's passesFairness); null
+    // search's mutualBenefit score only forgives a LOW/negative gain on
+    // whichever side this is (see docs/js/trade.js's mutualBenefit); null
     // when neither picker is your team (comparing two other teams' rosters
     // has no "me" to grant that unbounded call to).
     const mySide = state.teamA === yourTeamId ? "a" : state.teamB === yourTeamId ? "b" : null;

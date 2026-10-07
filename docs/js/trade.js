@@ -671,27 +671,53 @@ function positionValueTeamTotal(teamPlayerIds, players, freeAgentsByPos, weeks, 
   return total;
 }
 
-// Both sides' gain must be positive, and the fairness ratio only bounds the
-// direction where mySide comes out ahead - the reverse (mySide getting LESS
-// than the partner) is deliberately left unbounded, since overpaying to
-// land a specific player is a real call only the person making the offer
-// can make, not something this filter should second-guess (see the
-// conversation this was built from, and engine/team_strength.py's
-// trade_targets, which applies the identical rule). mySide null (viewing
-// two teams that aren't "mine") falls back to the old symmetric bound -
-// with no side to call "mine," there's no one to grant the unbounded call
-// to, so both directions stay protected.
-function passesFairness(gainA, gainB, fairnessRatio, mySide) {
-  if (mySide === "a" && gainA <= gainB) return true;
-  if (mySide === "b" && gainB <= gainA) return true;
-  return Math.min(gainA, gainB) / Math.max(gainA, gainB) >= fairnessRatio;
+// A genuine win-win (both > 0) scores by the NASH PRODUCT (x*y), not just
+// the smaller of the two: for a fixed total surplus, the product is
+// maximized at an even split and punishes a near-zero share on either side
+// much harder than min() does - a 1.9/0.1 split (product 0.19) loses to a
+// 1.0/1.0 split (product 1.0) with roughly the same total, a case plain
+// min() can't tell apart from a real mutual win (confirmed live: a 19:1
+// split like that was actually outranking more balanced trades before
+// this fix - the exact case the original fairness ratio existed to
+// reject). Not a real win-win (either side <= 0) falls back to min(x, y) -
+// always <= 0, so every non-win-win ranks below every genuine win-win, and
+// there's no division anywhere, so a zero-gain candidate can never
+// divide-by-zero crash the way the old ratio check once did. Same idea as
+// engine/team_strength.py's _mutual_benefit - kept as its own small
+// function here since mutualBenefit below needs to call it from either
+// argument order depending on mySide.
+function winWinScore(x, y) {
+  return x > 0 && y > 0 ? x * y : Math.min(x, y);
+}
+
+// Ranking score for a candidate trade - higher is a better recommendation.
+// No hard pass/fail bar (see tradeSuggestions' own comment on why an empty
+// result list was worse than a ranked-low one): every candidate gets a
+// score and the whole list sorts by it, so a side with no genuinely mutual
+// trade available still gets its best option instead of nothing.
+// Symmetric (winWinScore(gainA, gainB), same objective engine/
+// team_strength.py's trade_targets uses) when mySide is null - comparing
+// two teams that aren't "mine" has no "me" to grant an exception to, so
+// both directions stay weighed equally. When mySide IS known and "my side"
+// is NOT ahead (gainA <= gainB for mySide "a"), the score is just my own
+// gain, uncorrected for balance - overpaying to land a specific player is
+// a real call only the person making the offer can make, not something
+// this score should second-guess. But once "my side" IS ahead, the same
+// balance-aware winWinScore applies as the symmetric case - a trade that
+// gives me a windfall while leaving the partner a near-nothing sliver is
+// just as unrealistic an offer to surface here as it would be anywhere
+// else, "my side" or not.
+function mutualBenefit(gainA, gainB, mySide) {
+  if (mySide === "a" && gainA <= gainB) return gainA;
+  if (mySide === "b" && gainB <= gainA) return gainB;
+  return winWinScore(gainA, gainB);
 }
 
 // Generates candidate multi-player trades between two rosters and scores
-// them with the SAME rules the server-side recommender uses (see
-// engine/team_strength.py's trade_targets and its identical passesFairness
-// rule) - not a duplicate implementation, a client-side twin of the same
-// idea, extended to "locked" players (see lockedA/lockedB) and larger
+// them with the SAME idea the server-side recommender uses (see
+// engine/team_strength.py's trade_targets and its identical mutual_benefit
+// ranking) - not a duplicate implementation, a client-side twin of the
+// same idea, extended to "locked" players (see lockedA/lockedB) and larger
 // combos than the server bothers precomputing for every team pair.
 //
 // gainA/gainB are now positionValueTeamTotal deltas (points-above-
@@ -707,28 +733,30 @@ function passesFairness(gainA, gainB, fairnessRatio, mySide) {
 // cheap per-candidate cost adds up at that scale: phase 1 ranks every raw
 // combo with heuristicGain (O(1) per candidate, no slot-matrix math at
 // all); only the top `verifyBudget` get the real positionValueTeamTotal
-// evaluation, and only THOSE real numbers ever get shown or filtered on.
-// The heuristic ranks by TOTAL surplus (both
-// sides summed) when mySide is known, not by how balanced a combo looks -
-// a min()-based rank would systematically bury exactly the deliberately-
-// lopsided-in-my-disfavor combos passesFairness now allows through, before
-// they ever reached the real evaluation. Falls back to the old balance-
-// seeking min() when mySide is null, matching passesFairness' own
-// symmetric fallback. The exact locked-only combo (nothing added to either
-// side) is ALWAYS verified regardless of its heuristic rank - it's the one
-// trade the caller explicitly asked about, and a coarse heuristic over a
-// big lumpy player-value space has no business silently dropping it.
+// evaluation, and only THOSE real numbers ever get shown or ranked on. The
+// heuristic ranks by TOTAL surplus (both sides summed) when mySide is
+// known, not by how balanced a combo looks - a min()-based rank would
+// systematically bury exactly the deliberately-lopsided-in-my-disfavor
+// combos mutualBenefit now allows through, before they ever reached the
+// real evaluation. Falls back to the old balance-seeking min() when
+// mySide is null, matching mutualBenefit's own symmetric fallback. The
+// exact locked-only combo (nothing added to either side) is ALWAYS
+// verified regardless of its heuristic rank - it's the one trade the
+// caller explicitly asked about, and a coarse heuristic over a big lumpy
+// player-value space has no business silently dropping it.
 //
 // The single-trade detail view (checkbox picker, weekly before/after
 // table) is unaffected - it still runs evaluateTradeWithStreaming, the
 // real lineup-optimizer read, unchanged. This function only drives which
-// trades get SUGGESTED and how they're ranked/filtered against each other.
+// trades get SUGGESTED and how they're ranked against each other - no hard
+// pass/fail bar, same reasoning as trade_targets' own docstring: a side
+// with no genuinely mutual trade available still gets its best option
+// instead of an empty list.
 function tradeSuggestions(opts) {
   var rosterA = opts.rosterA, rosterB = opts.rosterB;
   var lockedA = opts.lockedA || [], lockedB = opts.lockedB || [];
   var players = opts.players, freeAgentsByPos = opts.freeAgentsByPos;
   var weeks = opts.weeks, slots = opts.slots, eligibility = opts.eligibility;
-  var fairnessRatio = opts.fairnessRatio || 0;
   var mySide = opts.mySide || null;
   var rosterSize = opts.rosterSize;
   // Unbounded by default (the whole roster, minus locked players, is fair
@@ -779,11 +807,9 @@ function tradeSuggestions(opts) {
     var rosters = afterRosters(c.giveA, c.giveB, rosterA, rosterB);
     var gainA = positionValueTeamTotal(rosters.afterRosterA, players, freeAgentsByPos, weeks, slots, eligibility, rosterSize) - beforeA;
     var gainB = positionValueTeamTotal(rosters.afterRosterB, players, freeAgentsByPos, weeks, slots, eligibility, rosterSize) - beforeB;
-    if (gainA <= 0 || gainB <= 0) return;
-    if (!passesFairness(gainA, gainB, fairnessRatio, mySide)) return;
-    results.push({ giveA: c.giveA, giveB: c.giveB, gainA: gainA, gainB: gainB });
+    results.push({ giveA: c.giveA, giveB: c.giveB, gainA: gainA, gainB: gainB, mutualBenefit: mutualBenefit(gainA, gainB, mySide) });
   });
-  results.sort(function (x, y) { return y.gainA - x.gainA; });
+  results.sort(function (x, y) { return y.mutualBenefit - x.mutualBenefit; });
   return results.slice(0, maxResults);
 }
 
