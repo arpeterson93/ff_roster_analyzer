@@ -69,9 +69,21 @@ const headerRow = (isCurrentWeek) => `<tr>
     ${isCurrentWeek ? `<th class="stat-col">Weather</th>` : ""}
   </tr>`;
 
+// Slot/Photo/Player stay three SEPARATE cells here (Slot and Photo both
+// empty, label text in Player), not a merged colspan, specifically so this
+// row inherits the exact same per-cell sticky behavior a data row's own
+// .photo-col/.player-td already get (desktop: both frozen; mobile: only
+// .photo-col) - see those rules' own comments. A single merged cell here
+// used to freeze all three columns' combined width as one block, which
+// doesn't match a data row's own Slot-scrolls-away/Photo+Player-frozen
+// split - confirmed live as the totals row visibly drifting out of
+// alignment with the data rows above it once the table was scrolled
+// horizontally, not just at rest.
 function totalsRow(label, total, isCurrentWeek) {
   return `<tr class="totals-row">
-    <td colspan="3" class="slot-col">${label}</td>
+    <td class="slot-col"></td>
+    <td class="photo-col"></td>
+    <td class="player-td">${label}</td>
     <td class="desktop-col"></td>
     ${isCurrentWeek ? `<td class="stat-col"></td>` : ""}
     <td class="stat-col"><strong>${fmt(total, 1)}</strong></td>
