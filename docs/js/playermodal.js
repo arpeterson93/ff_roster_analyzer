@@ -427,6 +427,166 @@ function wirePriceCompRows(scopeEl) {
   });
 }
 
+function weightedMeanJs(values, weights) {
+  const totalW = weights.reduce((s, w) => s + w, 0);
+  return totalW > 0 ? values.reduce((s, v, i) => s + v * weights[i], 0) / totalW : null;
+}
+
+// JS port of engine/faab_estimate.py's _cap_weights - every weight clamped
+// to min(weights)*maxRatio, so no comp (by credibility alone) can ever
+// carry more than maxRatio times ANY other's share of the weighted MEDIAN.
+// See that function's own docstring for why this only ever feeds the
+// median, never the mean.
+function capWeightsJs(weights, maxRatio) {
+  if (weights.length < 2) return weights.slice();
+  const ceiling = Math.min(...weights) * maxRatio;
+  return weights.map((w) => Math.min(w, ceiling));
+}
+
+// JS port of engine/faab_estimate.py's _shrunk_interest_fractions, run
+// fresh over just the CHECKED comps (see wireCompToggles) rather than
+// reusing each comp's own server-computed shrunk_bid_fraction - that value
+// was Bühlmann-shrunk toward a local prior pooled from the FULL k-neighbor
+// set, which is exactly the set changing as comps get unchecked, so a
+// faithful "recalculate interest" has to redo the shrinkage over the new,
+// smaller neighborhood too, not just drop a few already-shrunk numbers
+// from the average.
+function shrunkInterestFractionsJs(comps) {
+  const K = 15.0;
+  const totalWithBid = comps.reduce((s, c) => s + (c.leagues_with_bid || 0), 0);
+  const totalEligible = comps.reduce((s, c) => s + (c.leagues_eligible || 0), 0);
+  return comps.map((c) => {
+    const withBid = c.leagues_with_bid || 0;
+    const eligible = c.leagues_eligible || 0;
+    const otherEligible = totalEligible - eligible;
+    const prior = otherEligible > 0 ? (totalWithBid - withBid) / otherEligible : 0;
+    return (withBid + K * prior) / (eligible + K);
+  });
+}
+
+// price_confidence_samples, reconstructed client-side from just the
+// CHECKED price comps' own already-shipped bid_distribution/weight -
+// see engine/faab_estimate.py's price_confidence_samples, which this
+// matches exactly (same "one event's weight split evenly across its own
+// real wins" expansion), just computed over whichever comps are still
+// checked instead of the full k-neighbor set.
+function priceConfidenceSamplesJs(comps) {
+  const samples = [];
+  for (const c of comps) {
+    const wins = (c.bid_distribution || []).map((v) => v.value);
+    if (!wins.length) continue;
+    const share = c.weight / wins.length;
+    wins.forEach((v) => samples.push([v, share]));
+  }
+  return samples;
+}
+
+// Wires the Price/Interest comp tables' per-row toggles (default checked)
+// to live-recompute the Comp-based card's MED/AVG/INT, the price
+// distribution chart above, and its confidence-bid slider - see those
+// tables' own header tooltips. Pure in-memory DOM state (toggle state
+// itself, read fresh off the DOM on every change): nothing written back to
+// `data`, nothing persisted, so closing and reopening this modal always
+// starts every comp checked again, reading the same server-computed
+// est.comps/est.interest_comps either way - there's no separate "reset"
+// step needed.
+function wireCompToggles(scopeEl, player, data) {
+  const est = (data.faabEstimates || {})[player.id];
+  if (!est) return;
+  const priceComps = est.comps || [];
+  const interestComps = est.interest_comps || [];
+  const priceThin = !!est.single_backing_flag;
+  const sameWeek = est.same_week;
+  const sameWeekSamples = (sameWeek?.bid_distribution || []).map((d) => [d.value, 1]);
+
+  const medEl = scopeEl.querySelector("[data-comp-med]");
+  const avgEl = scopeEl.querySelector("[data-comp-avg]");
+  const intEl = scopeEl.querySelector("[data-comp-int]");
+  const distSection = scopeEl.querySelector("[data-price-dist-section]");
+  // Stashed on the chart's own track element at initial render (see
+  // priceDistSectionHtml) - read once here and reused for every rebuild
+  // rather than re-derived, so the axis never rescales as comps toggle.
+  const axisMax = distSection?.querySelector(".faab-chart-track[data-axis-max]")?.dataset.axisMax;
+
+  const priceCheckboxes = scopeEl.querySelectorAll("[data-price-comp-toggle]");
+  const interestCheckboxes = scopeEl.querySelectorAll("[data-interest-comp-toggle]");
+
+  function checkedPriceComps() {
+    return [...priceCheckboxes].filter((cb) => cb.checked).map((cb) => priceComps[Number(cb.dataset.compIdx)]);
+  }
+
+  // Shared by recomputePrice (the Comp-based card's own MED/AVG) and
+  // recomputeDist (the chart + confidence slider) so both always agree -
+  // same real win-win math either way, never two independently-drifting
+  // reads of the same checked set.
+  function computePriceAggregate(checked) {
+    if (!checked.length) return { avg: null, med: null, samples: [] };
+    const values = checked.map((c) => c.pct_of_remaining_budget);
+    const weights = checked.map((c) => c.weight);
+    const avg = weightedMeanJs(values, weights);
+    const cappedWeights = capWeightsJs(weights, 5.0);
+    const med = weightedPercentileJs(values.map((v, i) => [v, cappedWeights[i]]), 50);
+    return { avg, med, samples: priceConfidenceSamplesJs(checked) };
+  }
+
+  function recomputePrice(agg) {
+    if (!medEl || !avgEl) return;
+    // Masked regardless of which comps are checked - see compBasedCard's
+    // own comment on single_backing_flag. Toggling comps here can't change
+    // how many real distinct bids this estimate actually rests on.
+    if (priceThin) return;
+    medEl.textContent = agg.med === null ? "–" : `${fmt(agg.med * 100, 1)}%`;
+    avgEl.textContent = agg.avg === null ? "–" : `${fmt(agg.avg * 100, 1)}%`;
+  }
+
+  // Rebuilds the exact same histogram+confidence markup priceDistSectionHtml
+  // produced at initial render, off the recomputed (unmasked - this chart
+  // never had single_backing_flag's masking to begin with) avg/med/samples,
+  // then re-wires the confidence slider against the freshly-replaced DOM
+  // node (the OLD slider element, and whatever listener was on it, is gone
+  // once innerHTML overwrites it - nothing left to double-fire).
+  function recomputeDist(agg) {
+    if (!distSection || axisMax === undefined) return;
+    distSection.innerHTML = priceDistSectionHtml(
+      agg.samples, agg.avg, agg.med, Number(axisMax), sameWeekSamples, sameWeek,
+      "<p class=\"muted small\">No comps selected - check at least one Price comp below to see a bid distribution.</p>"
+    );
+    wireFaabConfidenceSlider(scopeEl, player, data, agg.samples);
+  }
+
+  function recomputeInterest() {
+    if (!intEl) return;
+    const checked = [...interestCheckboxes].filter((cb) => cb.checked).map((cb) => interestComps[Number(cb.dataset.compIdx)]);
+    if (!checked.length) {
+      intEl.textContent = "–";
+      return;
+    }
+    const fractions = shrunkInterestFractionsJs(checked);
+    const weights = checked.map((c) => c.weight);
+    const int_ = weightedMeanJs(fractions, weights);
+    intEl.textContent = int_ === null ? "–" : `${fmt(int_ * 100, 0)}%`;
+  }
+
+  priceCheckboxes.forEach((cb) => {
+    // Stopped at the CELL, not just the checkbox: a label-wrapped checkbox
+    // (see the toggle-switch markup) puts the real pointer hit-target on
+    // the label's own span, not the input underneath it - that first click
+    // bubbles span -> label -> td -> tr without ever passing through the
+    // input itself, so a listener on the input alone never saw it and the
+    // row's own click-to-expand still fired (confirmed live). The browser
+    // ALSO forwards a second, synthetic click to the input afterward to
+    // actually toggle it - that one bubbles td -> tr too, so stopping it
+    // here catches both paths in one place.
+    cb.closest(".comp-toggle-cell").addEventListener("click", (e) => e.stopPropagation());
+    cb.addEventListener("change", () => {
+      const agg = computePriceAggregate(checkedPriceComps());
+      recomputePrice(agg);
+      recomputeDist(agg);
+    });
+  });
+  interestCheckboxes.forEach((cb) => cb.addEventListener("change", recomputeInterest));
+}
+
 // {byWeek: Map<week, weeklyEntry>, totals} for the NMD (points-above-
 // replacement) breakdown behind remainingScheduleTable's own Starting/Depth/
 // Replace-by columns - null when there's genuinely nothing to show (see each
@@ -576,6 +736,95 @@ function niceTicksJs(axisMax, targetCount) {
   const ticks = [];
   for (let t = 0; t <= axisMax + 1e-9; t += step) ticks.push(t);
   return ticks;
+}
+
+// The price-comps histogram (binned by k-NN weight) + the confidence-bid
+// slider beneath it - a standalone function (not a closure inside
+// faabEstimateSection) specifically so wireCompToggles can call this exact
+// same renderer again with a recomputed samples/condPriceMean/
+// condPriceMedian whenever a Price comp gets checked/unchecked, rather
+// than maintaining a second, drifting copy of this markup. axisMax is
+// always passed in, never recomputed here, so the chart's horizontal
+// scale stays FIXED as comps get toggled - a rescaling axis on every
+// click would make "did this actually move" far harder to read than a
+// stable one would. condPriceMean/condPriceMedian/samples.length === 0 all
+// degrade gracefully (median/mean markers and the confidence row just
+// don't render) rather than computing against missing data - reachable
+// both from a player with genuinely no price comps at all (the original
+// case) and now from a reader unchecking every comp.
+function priceDistSectionHtml(samples, condPriceMean, condPriceMedian, axisMax, sameWeekSamples, sameWeek, emptyMessage = "") {
+  const xPct = (v) => Math.max(0, Math.min(100, (v / axisMax) * 100));
+  const defaultConfidence = 80;
+  const defaultBid = samples.length ? weightedPercentileJs(samples, defaultConfidence) : null;
+  const sameWeekDefaultBid = sameWeekSamples.length ? weightedPercentileJs(sameWeekSamples, defaultConfidence) : null;
+
+  const ticks = niceTicksJs(axisMax, 5);
+  const gridlines = ticks.map((t) => `<div class="faab-gridline" style="left:${xPct(t).toFixed(2)}%"></div>`).join("");
+  const tickLabels = ticks.map((t) => `<span class="faab-axis-tick" style="left:${xPct(t).toFixed(2)}%">${fmt(t * 100, 0)}%</span>`).join("");
+
+  let bars = "";
+  if (samples.length) {
+    const binWidth = niceStep(axisMax / 10);
+    const binCount = Math.max(1, Math.round(axisMax / binWidth));
+    const binWeights = new Array(binCount).fill(0);
+    samples.forEach(([v, w]) => {
+      binWeights[Math.min(binCount - 1, Math.floor(v / binWidth))] += w;
+    });
+    const maxBinWeight = Math.max(...binWeights, 1e-9);
+    bars = binWeights
+      .map((w, i) => {
+        const lo = fmt(i * binWidth * 100, 0), hi = fmt((i + 1) * binWidth * 100, 0);
+        return `<div class="faab-hist-bar" style="height:${((w / maxBinWeight) * 100).toFixed(1)}%" title="${lo}%–${hi}%"></div>`;
+      })
+      .join("");
+  }
+
+  const hasMedian = condPriceMedian !== null && condPriceMedian !== undefined;
+  const hasMean = condPriceMean !== null && condPriceMean !== undefined;
+
+  return `
+    <div class="faab-dist">
+      <div class="faab-chart-track" data-axis-max="${axisMax}">
+        <div class="faab-chart-inset">
+          ${gridlines}
+          <div class="faab-hist-bars">${bars}</div>
+          ${hasMedian
+            ? `<div class="faab-median-line" style="left:${xPct(condPriceMedian).toFixed(2)}%"></div>
+               <span class="faab-median-tag" style="left:${xPct(condPriceMedian).toFixed(2)}%">med ${fmt(condPriceMedian * 100, 1)}%</span>`
+            : ""}
+          ${hasMean
+            ? `<div class="faab-mean-tick" style="left:${xPct(condPriceMean).toFixed(2)}%"></div>
+               <span class="faab-mean-tag" style="left:${xPct(condPriceMean).toFixed(2)}%">avg ${fmt(condPriceMean * 100, 1)}%</span>`
+            : ""}
+          ${defaultBid !== null ? `<div class="faab-confidence-marker" data-confidence-marker style="left:${xPct(defaultBid).toFixed(2)}%;"></div>` : ""}
+          ${sameWeekDefaultBid !== null ? `<div class="faab-same-week-marker" data-same-week-confidence-marker style="left:${xPct(sameWeekDefaultBid).toFixed(2)}%;"></div>` : ""}
+        </div>
+      </div>
+      <div class="faab-axis-ticks"><div class="faab-chart-inset">${tickLabels}</div></div>
+    </div>
+    ${samples.length
+      ? `
+      <div class="faab-confidence">
+        <div class="faab-confidence-row">
+          <span>Bid for <b data-confidence-pct>${defaultConfidence}%</b> confidence</span>
+          <span class="faab-confidence-bid" data-confidence-bid>${fmt(defaultBid * 100, 1)}%</span>
+        </div>
+        ${sameWeekDefaultBid !== null
+          ? `
+        <div class="faab-confidence-row">
+          <span>Same confidence, this week elsewhere</span>
+          <span class="faab-confidence-bid faab-confidence-bid-same-week" data-same-week-confidence-bid>${fmt(sameWeekDefaultBid * 100, 1)}%</span>
+        </div>
+        `
+          : ""}
+        <input type="range" min="1" max="99" value="${defaultConfidence}" class="faab-confidence-slider" data-confidence-slider>
+        <p class="muted small">Bid that would have won this share of comparable historical auctions. Pooled from ${samples.length} winning prices behind the comps below.${
+          sameWeekDefaultBid !== null ? ` The green marker/row is the same read against ${sameWeekSamples.length} real bid${sameWeekSamples.length === 1 ? "" : "s"} on THIS player, other leagues, this week - not backtested.` : ""
+        }</p>
+      </div>
+    `
+      : emptyMessage}
+  `;
 }
 // Nearby real prices (within `tolerance` of the axis's own domain, ~1/60th
 // of it) collapse into ONE cluster, sized by how many real bids landed
@@ -805,11 +1054,19 @@ function faabEstimateSection(player, data) {
     `;
   }
 
+  // The leading checkbox column (default checked) lets a reader temporarily
+  // exclude individual comps and see MED/AVG(/INT for the interest table
+  // below) recompute live against just the remaining checked ones - see
+  // wireCompToggles. Pure DOM/in-memory state, nothing persisted - closing
+  // the modal and reopening it always starts every comp checked again,
+  // reading straight off the same baked-in est.comps/est.interest_comps
+  // either way.
   const priceComps = (est.comps || [])
     .map((c, i) => {
       const hasDist = (c.bid_distribution || []).length > 1;
       const rowId = `price-comp-${i}`;
       const mainRow = `<tr class="${hasDist ? "clickable-row" : ""}" data-price-comp-row="${rowId}">
+        <td class="comp-toggle-cell"><label class="comp-toggle" title="Include this comp in MED/AVG above"><input type="checkbox" checked data-price-comp-toggle data-comp-idx="${i}" aria-label="Include this comp"><span class="comp-toggle-track"></span></label></td>
         <td class="num">${c.weight_capped !== undefined ? fmt(c.weight_capped * 100, 1) + "%" : "–"} / ${fmt(c.weight * 100, 1)}%</td>
         <td>${escapeHtml(c.name)}<div class="muted small">${c.season} wk${c.week}</div>${oLeagueTag(c.o_league_detail)}</td>
         <td>${fmt(c.pct_of_remaining_budget * 100, 1)}%</td>
@@ -819,7 +1076,7 @@ function faabEstimateSection(player, data) {
         <td>${flagsCellHtml(c.own_injury_flag, c.teammate_position_injury_flag)}</td>
       </tr>`;
       const detailRow = hasDist
-        ? `<tr class="price-comp-detail" data-price-comp-detail="${rowId}" hidden><td colspan="7">${priceCompDistributionHtml(c)}</td></tr>`
+        ? `<tr class="price-comp-detail" data-price-comp-detail="${rowId}" hidden><td colspan="8">${priceCompDistributionHtml(c)}</td></tr>`
         : "";
       return mainRow + detailRow;
     })
@@ -827,7 +1084,8 @@ function faabEstimateSection(player, data) {
 
   const interestComps = (est.interest_comps || [])
     .map(
-      (c) => `<tr>
+      (c, i) => `<tr>
+        <td class="comp-toggle-cell"><label class="comp-toggle" title="Include this comp in INT above"><input type="checkbox" checked data-interest-comp-toggle data-comp-idx="${i}" aria-label="Include this comp"><span class="comp-toggle-track"></span></label></td>
         <td class="num">${fmt(c.weight * 100, 1)}%</td>
         <td>${escapeHtml(c.name)}<div class="muted small">${c.season} wk${c.week}</div>${oLeagueTag(c.o_league_detail)}</td>
         <td>${bidRateCellHtml(c.leagues_with_bid, c.leagues_eligible)}</td>
@@ -879,76 +1137,16 @@ function faabEstimateSection(player, data) {
   // player request. weightedPercentileJs already accepts [value, weight]
   // pairs, so weight=1 per real bid is a direct, no-new-code reuse.
   const sameWeekSamples = (sameWeek?.bid_distribution || []).map((d) => [d.value, 1]);
+  // axisMax computed once here, off the FULL (every-comp-checked) data -
+  // see priceDistSectionHtml's own comment on why this stays fixed rather
+  // than being recomputed every time wireCompToggles calls it again with a
+  // smaller checked subset.
   const distHtml = dist
     ? (() => {
         const sampleValues = samples.map(([v]) => v);
         const sameWeekValues = sameWeekSamples.map(([v]) => v);
         const axisMax = budgetAwareAxisMax(Math.max(dist.max, condPriceMean || 0, condPriceMedian || 0, ...sampleValues, ...sameWeekValues, 0.001), 5);
-        const xPct = (v) => Math.max(0, Math.min(100, (v / axisMax) * 100));
-        const defaultConfidence = 80;
-        const defaultBid = weightedPercentileJs(samples, defaultConfidence);
-        const sameWeekDefaultBid = sameWeekSamples.length ? weightedPercentileJs(sameWeekSamples, defaultConfidence) : null;
-
-        const ticks = niceTicksJs(axisMax, 5);
-        const gridlines = ticks.map((t) => `<div class="faab-gridline" style="left:${xPct(t).toFixed(2)}%"></div>`).join("");
-        const tickLabels = ticks.map((t) => `<span class="faab-axis-tick" style="left:${xPct(t).toFixed(2)}%">${fmt(t * 100, 0)}%</span>`).join("");
-
-        let bars = "";
-        if (samples.length) {
-          const binWidth = niceStep(axisMax / 10);
-          const binCount = Math.max(1, Math.round(axisMax / binWidth));
-          const binWeights = new Array(binCount).fill(0);
-          samples.forEach(([v, w]) => {
-            binWeights[Math.min(binCount - 1, Math.floor(v / binWidth))] += w;
-          });
-          const maxBinWeight = Math.max(...binWeights, 1e-9);
-          bars = binWeights
-            .map((w, i) => {
-              const lo = fmt(i * binWidth * 100, 0), hi = fmt((i + 1) * binWidth * 100, 0);
-              return `<div class="faab-hist-bar" style="height:${((w / maxBinWeight) * 100).toFixed(1)}%" title="${lo}%–${hi}%"></div>`;
-            })
-            .join("");
-        }
-
-        return `
-          <div class="faab-dist">
-            <div class="faab-chart-track" data-axis-max="${axisMax}">
-              <div class="faab-chart-inset">
-                ${gridlines}
-                <div class="faab-hist-bars">${bars}</div>
-                <div class="faab-median-line" style="left:${xPct(condPriceMedian).toFixed(2)}%"></div>
-                <span class="faab-median-tag" style="left:${xPct(condPriceMedian).toFixed(2)}%">med ${fmt(condPriceMedian * 100, 1)}%</span>
-                <div class="faab-mean-tick" style="left:${xPct(condPriceMean).toFixed(2)}%"></div>
-                <span class="faab-mean-tag" style="left:${xPct(condPriceMean).toFixed(2)}%">avg ${fmt(condPriceMean * 100, 1)}%</span>
-                ${samples.length ? `<div class="faab-confidence-marker" data-confidence-marker style="left:${xPct(defaultBid).toFixed(2)}%;"></div>` : ""}
-                ${sameWeekDefaultBid !== null ? `<div class="faab-same-week-marker" data-same-week-confidence-marker style="left:${xPct(sameWeekDefaultBid).toFixed(2)}%;"></div>` : ""}
-              </div>
-            </div>
-            <div class="faab-axis-ticks"><div class="faab-chart-inset">${tickLabels}</div></div>
-          </div>
-          ${samples.length
-            ? `
-            <div class="faab-confidence">
-              <div class="faab-confidence-row">
-                <span>Bid for <b data-confidence-pct>${defaultConfidence}%</b> confidence</span>
-                <span class="faab-confidence-bid" data-confidence-bid>${fmt(defaultBid * 100, 1)}%</span>
-              </div>
-              ${sameWeekDefaultBid !== null
-                ? `
-              <div class="faab-confidence-row">
-                <span>Same confidence, this week elsewhere</span>
-                <span class="faab-confidence-bid faab-confidence-bid-same-week" data-same-week-confidence-bid>${fmt(sameWeekDefaultBid * 100, 1)}%</span>
-              </div>
-              `
-                : ""}
-              <input type="range" min="1" max="99" value="${defaultConfidence}" class="faab-confidence-slider" data-confidence-slider>
-              <p class="muted small">Bid that would have won this share of comparable historical auctions. Pooled from ${samples.length} winning prices behind the comps below.${
-                sameWeekDefaultBid !== null ? ` The green marker/row is the same read against ${sameWeekSamples.length} real bid${sameWeekSamples.length === 1 ? "" : "s"} on THIS player, other leagues, this week - not backtested.` : ""
-              }</p>
-            </div>
-          `
-            : ""}
-        `;
+        return priceDistSectionHtml(samples, condPriceMean, condPriceMedian, axisMax, sameWeekSamples, sameWeek);
       })()
     : "";
 
@@ -984,9 +1182,9 @@ function faabEstimateSection(player, data) {
     <div class="faab-method-card">
       <div class="faab-method-label">Comp-based</div>
       <div class="faab-method-values faab-method-values-triple">
-        <div class="faab-method-value"><span class="faab-method-num" ${priceThin ? 'title="Rests on a single real historical bid - too thin to trust"' : ""}>${priceThin ? "–" : pctOrDash(condPriceByMethod.comp_based_median, 1)}</span><span class="faab-method-sub">MED</span></div>
-        <div class="faab-method-value"><span class="faab-method-num" ${priceThin ? 'title="Rests on a single real historical bid - too thin to trust"' : ""}>${priceThin ? "–" : pctOrDash(condPriceByMethod.comp_based_mean, 1)}</span><span class="faab-method-sub">AVG</span></div>
-        <div class="faab-method-value"><span class="faab-method-num">${pctOrDash(bidProb.comp_based_median, 0)}</span><span class="faab-method-sub">INT</span></div>
+        <div class="faab-method-value"><span class="faab-method-num" data-comp-med ${priceThin ? 'title="Rests on a single real historical bid - too thin to trust"' : ""}>${priceThin ? "–" : pctOrDash(condPriceByMethod.comp_based_median, 1)}</span><span class="faab-method-sub">MED</span></div>
+        <div class="faab-method-value"><span class="faab-method-num" data-comp-avg ${priceThin ? 'title="Rests on a single real historical bid - too thin to trust"' : ""}>${priceThin ? "–" : pctOrDash(condPriceByMethod.comp_based_mean, 1)}</span><span class="faab-method-sub">AVG</span></div>
+        <div class="faab-method-value"><span class="faab-method-num" data-comp-int>${pctOrDash(bidProb.comp_based_median, 0)}</span><span class="faab-method-sub">INT</span></div>
       </div>
     </div>
   `;
@@ -1072,17 +1270,17 @@ function faabEstimateSection(player, data) {
   return `
     <p class="muted small">% of your league's starting budget</p>
     <div class="faab-method-grid">${methodCards}</div>
-    ${distHtml}
+    <div data-price-dist-section>${distHtml}</div>
 
     ${thisPlayerSection}
 
     ${sameWeekDistHtml}
 
     <h3>Price comps</h3>
-    <div class="table-wrap"><table><thead><tr><th title="This comp's share of the total weight behind the price estimates above - MED first, then AVG. MED's weight is capped so no single comp can carry more than 5x any other's; AVG's isn't. Comps are already listed highest-weight-first (by AVG).">WT (MED/AVG)</th><th>Player</th><th>% of budget</th><th>Recent pts</th><th>USAGE %</th><th>Rank</th><th>Flags</th></tr></thead><tbody>${priceComps || `<tr><td colspan="7" class="muted small">No comparable winning bids found.</td></tr>`}</tbody></table></div>
+    <div class="table-wrap"><table><thead><tr><th title="Uncheck a comp to temporarily exclude it from MED/AVG above - resets when this modal closes."></th><th title="This comp's share of the total weight behind the price estimates above - MED first, then AVG. MED's weight is capped so no single comp can carry more than 5x any other's; AVG's isn't. Comps are already listed highest-weight-first (by AVG).">WT (MED/AVG)</th><th>Player</th><th>% of budget</th><th>Recent pts</th><th>USAGE %</th><th>Rank</th><th>Flags</th></tr></thead><tbody>${priceComps || `<tr><td colspan="8" class="muted small">No comparable winning bids found.</td></tr>`}</tbody></table></div>
 
     <h3>Interest comps</h3>
-    <div class="table-wrap"><table><thead><tr><th title="This comp's share of the total weight behind the weighted-average bid_probability above - every comp's weight sums to 100%. Derived from 1/(distance+0.05), so a closer comp counts for more. Comps are already listed highest-weight-first.">Weight</th><th>Player</th><th title="Of the leagues we have real data for this exact player/week (a real bid, or roster data confirming he was a genuine free agent there), how many actually saw a bid - not weighted, one binary count per league.">Leagues bid</th><th>Recent pts</th><th>USAGE %</th><th>Rank</th><th>Flags</th></tr></thead><tbody>${interestComps || `<tr><td colspan="7" class="muted small">No comparable situations found.</td></tr>`}</tbody></table></div>
+    <div class="table-wrap"><table><thead><tr><th title="Uncheck a comp to temporarily exclude it from INT above - resets when this modal closes."></th><th title="This comp's share of the total weight behind the weighted-average bid_probability above - every comp's weight sums to 100%. Derived from 1/(distance+0.05), so a closer comp counts for more. Comps are already listed highest-weight-first.">Weight</th><th>Player</th><th title="Of the leagues we have real data for this exact player/week (a real bid, or roster data confirming he was a genuine free agent there), how many actually saw a bid - not weighted, one binary count per league.">Leagues bid</th><th>Recent pts</th><th>USAGE %</th><th>Rank</th><th>Flags</th></tr></thead><tbody>${interestComps || `<tr><td colspan="8" class="muted small">No comparable situations found.</td></tr>`}</tbody></table></div>
 
     ${teamInterestSection(est.team_interest, data)}
   `;
@@ -1350,12 +1548,17 @@ function wirePlayerModalTabs(scopeEl) {
 // Scoped the same way wirePlayerModalTabs is (compare mode has two
 // independent sliders on screen at once). Looks est back up from
 // data.faabEstimates rather than threading it through return values, the
-// same lookup faabEstimateSection itself does.
-function wireFaabConfidenceSlider(scopeEl, player, data) {
+// same lookup faabEstimateSection itself does. samplesOverride (optional) -
+// wireCompToggles' own recomputeDist passes the samples it just rebuilt
+// off the checked-only comp subset, re-wiring this same slider against a
+// freshly-replaced DOM node (priceDistSectionHtml's own output) rather
+// than the full, every-comp-checked est.price_confidence_samples this
+// falls back to otherwise.
+function wireFaabConfidenceSlider(scopeEl, player, data, samplesOverride) {
   const slider = scopeEl.querySelector("[data-confidence-slider]");
   if (!slider) return;
   const est = (data.faabEstimates || {})[player.id];
-  const samples = est?.price_confidence_samples || [];
+  const samples = samplesOverride || est?.price_confidence_samples || [];
   const dist = est?.distribution;
   if (!dist) return;
   // Same equal-weighted reuse of weightedPercentileJs as faabEstimateSection's
@@ -1417,6 +1620,7 @@ export function openPlayerModal(player, data) {
   wireFaabConfidenceSlider(scope, player, data);
   wireGameLogRows(scope);
   wirePriceCompRows(scope);
+  wireCompToggles(scope, player, data);
   wireCompareTrigger(modalBox, player, data);
   wireWatchStar(modalBox, player, data);
 }
@@ -1444,6 +1648,8 @@ export function openComparePlayerModal(playerA, playerB, data) {
   wireFaabConfidenceSlider(modalContent.querySelector('[data-compare-col="b"]'), playerB, data);
   modalContent.querySelectorAll(".compare-col").forEach((col) => wireGameLogRows(col));
   modalContent.querySelectorAll(".compare-col").forEach((col) => wirePriceCompRows(col));
+  wireCompToggles(modalContent.querySelector('[data-compare-col="a"]'), playerA, data);
+  wireCompToggles(modalContent.querySelector('[data-compare-col="b"]'), playerB, data);
   wireWatchStar(modalContent.querySelector('[data-compare-col="a"]'), playerA, data);
   wireWatchStar(modalContent.querySelector('[data-compare-col="b"]'), playerB, data);
   modalContent.querySelectorAll(".compare-side-btn").forEach((btn) => {

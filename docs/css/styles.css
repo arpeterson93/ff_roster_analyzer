@@ -1347,6 +1347,25 @@ details[open] summary { margin-bottom: 8px; }
 .faab-method-num { display: block; font-size: 17px; font-weight: 600; }
 .faab-method-sub { display: block; font-size: 10.5px; color: var(--ink-500); text-transform: uppercase; letter-spacing: 0.03em; }
 
+/* Price/Interest comps' leading toggle column (see wireCompToggles) -
+   narrow and centered so it reads as a toggle rail, not a real data
+   column competing with WT/Player/etc for width. A real checkbox
+   underneath (keyboard/screen-reader semantics, :checked drives the
+   recompute listeners unchanged) - just visually hidden in favor of a
+   switch-style track+knob, same pattern as any "checkbox styled as a
+   toggle" component. */
+.comp-toggle-cell { width: 28px; text-align: center; }
+.comp-toggle { position: relative; display: inline-block; width: 28px; height: 16px; vertical-align: middle; cursor: pointer; }
+.comp-toggle input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.comp-toggle-track { position: absolute; inset: 0; border-radius: 999px; background: color-mix(in srgb, var(--ink-500) 35%, transparent); transition: background 0.15s; }
+.comp-toggle-track::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--card); box-shadow: var(--shadow); transition: transform 0.15s;
+}
+.comp-toggle input:checked + .comp-toggle-track { background: var(--accent); }
+.comp-toggle input:checked + .comp-toggle-track::after { transform: translateX(12px); }
+.comp-toggle input:focus-visible + .comp-toggle-track { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 /* Player modal's own small tab bar (Overview / FAAB Lab) - visually related
    to the page-level nav.tabs but deliberately a separate, smaller class:
    this one lives inside a fixed-width .modal-box rather than a full-width
