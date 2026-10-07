@@ -328,28 +328,36 @@ function statsXfpts(p, statsWeek, currentWeek) {
   return weekEntryFor(p, statsWeek).actual?.xfp_points ?? null;
 }
 
+// FPTS/xFPTS: flat columns right after Star/Rank/Player/Team, before the
+// grouped stat block - leftmost among the "stats" columns rather than
+// trailing after Usage%, so they're visible without scrolling.
+function statsLeadingColumns(data, filters) {
+  const cw = data.meta.current_week;
+  const sw = filters.statsWeek;
+  const fpts = { key: "_fpts", label: "FPTS", fmt: (_v, p) => fmtScore(statsFpts(p, sw, cw)) };
+  // No ffopportunity model for K/DST (see engine/expected_points.py) - xFPTS
+  // simply doesn't exist for either, same reasoning statsUsageColumns
+  // already uses to drop the whole Usage group for those positions.
+  if (filters.position === "K" || filters.position === "DST") return [fpts];
+  const xfpts = { key: "_xfpts", label: "xFPTS", title: "Expected fantasy points - see the implementation plan's D2", fmt: (_v, p) => fmtScore(statsXfpts(p, sw, cw)) };
+  return [fpts, xfpts];
+}
+
 // The trailing single-value columns after the grouped stat block (which is
 // rendered directly via statCellsHtml, not through this column-def list -
 // see renderStatsTable). Snap %/Att %/Tgt % are skill-position usage
 // concepts with no K/DST equivalent - dropped entirely (not just blanked)
 // once the position filter narrows to one of those, matching the player
 // modal's own K/DST game log, which never had a usage row either.
-function statsTrailingColumns(data, filters) {
+function statsUsageColumns(data, filters) {
+  if (filters.position === "K" || filters.position === "DST") return [];
   const cw = data.meta.current_week;
   const sw = filters.statsWeek;
-  const fpts = { key: "_fpts", label: "FPTS", fmt: (_v, p) => fmtScore(statsFpts(p, sw, cw)) };
-  // No ffopportunity model for K/DST (see engine/expected_points.py) - xFPTS
-  // simply doesn't exist for either, same reasoning Snap%/Att%/Tgt%/AirYd%
-  // already use to drop the whole Usage group for those positions.
-  if (filters.position === "K" || filters.position === "DST") return [fpts];
-  const xfpts = { key: "_xfpts", label: "xFPTS", title: "Expected fantasy points - see the implementation plan's D2", fmt: (_v, p) => fmtScore(statsXfpts(p, sw, cw)) };
   return [
     { key: "_snap_pct", label: "Snap%", fmt: (_v, p) => fmtPct(snapPct(p, sw, cw)) },
     { key: "_att_pct", label: "Att%", title: "RB carry share only", fmt: (_v, p) => fmtPct(attPct(p, sw, cw)) },
     { key: "_tgt_pct", label: "Tgt%", fmt: (_v, p) => fmtPct(tgtPct(p, sw, cw)) },
     { key: "_air_yard_pct", label: "AirYd%", fmt: (_v, p) => fmtPct(airYardPct(p, sw, cw)) },
-    fpts,
-    xfpts,
   ];
 }
 
@@ -413,8 +421,8 @@ function sortValue(p, key, data, filters) {
   // since the key set is large and position-dependent; statsForWeek's own
   // stat dict is authoritative for whatever key the active block set uses.
   // A combined column (the C/A key is a 2-element array, not a string)
-  // never reaches here - see statsTrailingColumns/renderStatsTable, which
-  // never marks it as sortable in the first place.
+  // never reaches here - see renderStatsTable, which never marks it as
+  // sortable in the first place.
   if (typeof key === "string") {
     const statVal = statsForWeek(p, filters.statsWeek, cw)?.[key];
     if (statVal !== undefined) return statVal;
@@ -536,7 +544,8 @@ function renderFlatTable(wrap, data, filters, watched, cols) {
 function renderStatsTable(wrap, container, data, filters, watched) {
   const cw = data.meta.current_week;
   const common = commonColumns(data, watched);
-  const trailing = statsTrailingColumns(data, filters);
+  const leading = statsLeadingColumns(data, filters);
+  const trailing = statsUsageColumns(data, filters);
   const blocks = statsBlocksFor(filters.position);
   const flatColumns = blocks.flatMap(([, cols]) => cols);
   const blockEnds = blockEndIndices(blocks);
@@ -548,14 +557,13 @@ function renderStatsTable(wrap, container, data, filters, watched) {
   // OWN content (PASSING/RUSHING/etc) sliding fully visible over the frozen
   // Player column on mobile instead of hiding behind it, since nothing in
   // row 1 was actually frozen there to hide it (confirmed live).
-  const topLead = common.map((c) => `<th${c.className ? ` class="${c.className}"` : ""}></th>`).join("");
+  const topLead = [...common, ...leading].map((c) => `<th${c.className ? ` class="${c.className}"` : ""}></th>`).join("");
   const topGroups = blocks.map(([group, cols]) => `<th colspan="${cols.length}" class="block-end">${escapeHtml(group)}</th>`).join("");
   // Snap%/Att%/Tgt%/AirYd% (present together, or not at all - see
-  // statsTrailingColumns) get their own "Usage" group label spanning all
-  // four, same as the player modal's Game Log; FPTS/xFPTS stay their own
-  // unlabeled trailing columns either way.
-  const hasUsage = trailing.some((c) => c.key === "_snap_pct");
-  const topTrail = hasUsage ? `<th colspan="4" class="block-end">Usage</th><th></th><th></th>` : trailing.map(() => "<th></th>").join("");
+  // statsUsageColumns) get their own "Usage" group label spanning all four,
+  // same as the player modal's Game Log.
+  const hasUsage = trailing.length > 0;
+  const topTrail = hasUsage ? `<th colspan="4" class="block-end">Usage</th>` : "";
   // Every column sorts by its own stat key EXCEPT the combined C/A column
   // (an array key, "completions"+"attempts" - no single sensible sort
   // value), which stays a plain unclickable header.
@@ -569,12 +577,12 @@ function renderStatsTable(wrap, container, data, filters, watched) {
     .join("");
   // The Usage group's own boundary (see topTrail above) needs the same
   // continuous line through the label row and every body row, not just the
-  // top group-header cell - AirYd% is Usage's last column either way (Snap%/
-  // Att%/Tgt%/AirYd%/FPTS/xFPTS is a fixed order - see statsTrailingColumns).
+  // top group-header cell - AirYd% is Usage's last column (Snap%/Att%/Tgt%/
+  // AirYd% is a fixed order - see statsUsageColumns).
   const isTrailingBlockEnd = (c) => hasUsage && c.key === "_air_yard_pct";
   const header = `
     <tr class="group-header-row">${topLead}${topGroups}${topTrail}</tr>
-    <tr>${common.map((c) => sortableThHtml(c)).join("")}${bottomLabels}${trailing.map((c) => sortableThHtml(isTrailingBlockEnd(c) ? { ...c, className: "block-end" } : c)).join("")}</tr>
+    <tr>${common.map((c) => sortableThHtml(c)).join("")}${leading.map((c) => sortableThHtml(c)).join("")}${bottomLabels}${trailing.map((c) => sortableThHtml(isTrailingBlockEnd(c) ? { ...c, className: "block-end" } : c)).join("")}</tr>
   `;
 
   const body = rows
@@ -587,9 +595,10 @@ function renderStatsTable(wrap, container, data, filters, watched) {
           return c.rawTd ? value : `<td>${value}</td>`;
         })
         .join("");
+      const leadingCells = leading.map((c) => `<td>${c.fmt(undefined, p)}</td>`).join("");
       const statCells = statCellsHtml(statsForWeek(p, filters.statsWeek, cw), flatColumns, blockEnds);
       const trailingCells = trailing.map((c) => `<td${isTrailingBlockEnd(c) ? ` class="block-end"` : ""}>${c.fmt(undefined, p)}</td>`).join("");
-      return `<tr data-player-id="${p.id}" class="clickable-row ${isYours ? "your-team-row" : ""}">${commonCells}${statCells}${trailingCells}</tr>`;
+      return `<tr data-player-id="${p.id}" class="clickable-row ${isYours ? "your-team-row" : ""}">${commonCells}${leadingCells}${statCells}${trailingCells}</tr>`;
     })
     .join("");
   wrap.innerHTML = `<table><thead>${header}</thead><tbody>${body}</tbody></table>`;

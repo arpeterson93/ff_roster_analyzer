@@ -8,10 +8,10 @@ function opponentLabel(wk) {
 }
 
 function render(position, weekDetail, expandedWeek) {
-  const { top, bottom, flatColumns, blockEnds } = groupedHeaderHtml(blocksForPosition(position), ["", "Wk", "Opp"]);
+  const { top, bottom, flatColumns, blockEnds } = groupedHeaderHtml(blocksForPosition(position), ["", "Wk", "Opp", "FPts"]);
   const weeks = Object.keys(weekDetail)
     .map(Number)
-    .sort((a, b) => b - a);
+    .sort((a, b) => a - b);
 
   const rows = weeks
     .map((w) => {
@@ -21,10 +21,10 @@ function render(position, weekDetail, expandedWeek) {
       const expanded = expandable && expandedWeek === w;
       const arrow = expandable ? (expanded ? "▼" : "▶") : "";
       const rowClass = expandable ? "clickable-row" : "";
-      const summaryRow = `<tr class="${rowClass}" data-week="${w}"><td class="muted small">${arrow}</td><td>${w}</td><td>${opponentLabel(wk)}</td>${statCellsHtml(wk.stats, flatColumns, blockEnds)}<td><strong>${fmt(wk.points, 1)}</strong></td></tr>`;
+      const summaryRow = `<tr class="${rowClass}" data-week="${w}"><td class="muted small">${arrow}</td><td>${w}</td><td>${opponentLabel(wk)}</td><td><strong>${fmt(wk.points, 1)}</strong></td>${statCellsHtml(wk.stats, flatColumns, blockEnds)}</tr>`;
       if (!expanded) return summaryRow;
       const playerRows = players
-        .map((p) => `<tr class="muted small"><td></td><td>${escapeHtml(p.name)}</td><td></td>${statCellsHtml(p.stats, flatColumns, blockEnds)}<td>${fmt(p.points, 1)}</td></tr>`)
+        .map((p) => `<tr class="muted small"><td></td><td>${escapeHtml(p.name)}</td><td></td><td>${fmt(p.points, 1)}</td>${statCellsHtml(p.stats, flatColumns, blockEnds)}</tr>`)
         .join("");
       return summaryRow + playerRows;
     })

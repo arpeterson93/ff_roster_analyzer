@@ -1,7 +1,8 @@
-import { fmt, escapeHtml } from "./state.js";
-import { POSITION_COLOR, opponentCellHtml, teamLabel, playerPhotoHtml, weeklyProjection, colorForRatio, ratioForRank, snapPct, attPct, tgtPct, airYardPct } from "./colors.js";
+import { fmt, escapeHtml, getYourTeam } from "./state.js";
+import { POSITION_COLOR, opponentCellHtml, teamLabel, playerPhotoHtml, weeklyProjection, colorForRatio, ratioForRank, snapPct, attPct, tgtPct, airYardPct, seasonTotalPoints, seasonAvgPoints } from "./colors.js";
 import { openModal, closeModal } from "./modal.js";
 import { blocksForPosition, groupedHeaderHtml, statCellsHtml } from "./statcolumns.js";
+import { loadWatchlist, setWatched } from "./watchlist.js";
 
 // Bar-per-play chart (x = elapsed game time, y = points scored on THAT
 // play) plus a top-plays table, for weeks with a per-play breakdown (see
@@ -308,13 +309,10 @@ function gameLogTable(player, data) {
   // width - doesn't need horizontal scroll to see every completed game's
   // stats (see _blockHasData above).
   const positionBlocks = blocksForPosition(player.position).filter((block) => _blockHasData(block, playedWeeks));
-  const { top, bottom, flatColumns, blockEnds } = groupedHeaderHtml([...positionBlocks, ...extraBlocks], ["Wk", "Opp"]);
-  // groupedHeaderHtml is shared with pointsagainstmodal.js and only ever
-  // builds ONE fixed trailing column (FPts) - xFPTS is a second trailing
-  // column specific to this page, so it's appended here rather than widening
-  // that shared function for every one of its callers.
-  const topWithXfp = top.replace(/<\/tr>$/, "<th></th></tr>");
-  const bottomWithXfp = bottom.replace(/<\/tr>$/, "<th>xFPts</th></tr>");
+  // FPts/xFPts are lead columns (left of the stat blocks, right after
+  // Wk/Opp) rather than trailing after them - see groupedHeaderHtml's own
+  // comment.
+  const { top, bottom, flatColumns, blockEnds } = groupedHeaderHtml([...positionBlocks, ...extraBlocks], ["Wk", "Opp", "FPts", "xFPts"]);
   const colCount = flatColumns.length + 4;
   const rows = playedWeeks
     .map((w) => {
@@ -335,7 +333,7 @@ function gameLogTable(player, data) {
             _air_yard_pct: fmtUsagePct(airYardPct(player, w.week, currentWeek)),
           }
         : w.actual.stats;
-      const mainRow = `<tr class="game-log-row ${hasDetail ? "clickable-row" : ""}" data-week="${w.week}"><td>${w.week}</td><td>${opponentCellHtml(w)}</td>${statCellsHtml(stats, flatColumns, blockEnds)}<td><strong>${fpts}</strong></td><td class="muted">${xfpts}</td></tr>`;
+      const mainRow = `<tr class="game-log-row ${hasDetail ? "clickable-row" : ""}" data-week="${w.week}"><td>${w.week}</td><td>${opponentCellHtml(w)}</td><td><strong>${fpts}</strong></td><td class="muted">${xfpts}</td>${statCellsHtml(stats, flatColumns, blockEnds)}</tr>`;
       const detailRow = hasDetail
         ? `<tr class="game-log-detail" data-week-detail="${w.week}" hidden><td colspan="${colCount}">${playLogDetailHtml(scoringPlays, incompletions, weekDetail?.game_duration_min, zeroPointPlays, expectedPlays)}</td></tr>`
         : "";
@@ -343,7 +341,7 @@ function gameLogTable(player, data) {
     })
     .join("");
   if (!rows) return `<p class="muted small">No games played yet this season.</p>`;
-  return `<div class="table-wrap"><table class="game-log-stats-table">${topWithXfp}${bottomWithXfp}<tbody>${rows}</tbody></table></div>`;
+  return `<div class="table-wrap"><table class="game-log-stats-table">${top}${bottom}<tbody>${rows}</tbody></table></div>`;
 }
 
 // Bars/markers are positioned by percent-of-elapsed-time, so two plays
@@ -1156,6 +1154,39 @@ function scheduleRankPillHtml(rank, avgIndex, timeframeLabel) {
 // sticky headers, one per column, sharing one scrolling ancestor) so
 // openPlayerModal can hand the header to openModal's separate non-scrolling
 // slot instead - see that function's own comment for why.
+// Reuses Rankings' own ★/☆ watch-star convention (see rankings.js's
+// commonColumns) - unwatched by default until wireWatchStar's async
+// loadWatchlist resolves and corrects it, same load-then-correct pattern
+// Rankings itself uses. Hidden entirely once no "your team" is picked (no
+// identity to key a watchlist entry on - see watchlist.js's loadWatchlist).
+function watchStarHtml(player, data) {
+  if (getYourTeam(data.meta.slug) === null) return "";
+  return `<span class="watch-star player-modal-watch-star" data-watch-toggle data-player-id="${player.id}" title="Add to watch list">☆</span>`;
+}
+
+function setStarState(star, watched) {
+  star.classList.toggle("watched", watched);
+  star.textContent = watched ? "★" : "☆";
+  star.title = watched ? "Remove from watch list" : "Add to watch list";
+}
+
+// scopeEl is the header's own containing element - modalBox for
+// openPlayerModal (the header lives in openModal's separate non-scrolling
+// slot there, not .modal-content), or one .compare-col for
+// openComparePlayerModal (each side has its own independent header/star).
+function wireWatchStar(scopeEl, player, data) {
+  const star = scopeEl.querySelector(`[data-watch-toggle][data-player-id="${player.id}"]`);
+  if (!star) return;
+  const yourTeamId = getYourTeam(data.meta.slug);
+  if (yourTeamId === null) return;
+  loadWatchlist(data.meta.slug, yourTeamId).then((set) => setStarState(star, set.has(player.id)));
+  star.addEventListener("click", () => {
+    const nowWatched = !star.classList.contains("watched");
+    setStarState(star, nowWatched);
+    setWatched(data.meta.slug, yourTeamId, player.id, nowWatched);
+  });
+}
+
 function playerModalHeaderHtml(player, data, { showCompareTrigger = true } = {}) {
   const color = POSITION_COLOR[player.position] || "#888";
   const team = player.fantasy_team_id !== null ? data.teamsById.get(player.fantasy_team_id) : null;
@@ -1164,7 +1195,7 @@ function playerModalHeaderHtml(player, data, { showCompareTrigger = true } = {})
       ${playerPhotoHtml(player, "player-photo-lg")}
       <div>
         <h2><span class="pos-tag" style="background:${color}">${player.position}</span> ${escapeHtml(player.name)} <span class="muted small">${escapeHtml(player.nfl_team || "")}</span></h2>
-        <p class="muted small">${team ? escapeHtml(teamLabel(team)) : "Free agent"} · Bye ${player.bye ?? "–"}</p>
+        <p class="muted small">${watchStarHtml(player, data)}${team ? escapeHtml(teamLabel(team)) : "Free agent"} · Bye ${player.bye ?? "–"}</p>
       </div>
       ${
         showCompareTrigger
@@ -1176,6 +1207,30 @@ function playerModalHeaderHtml(player, data, { showCompareTrigger = true } = {})
       }
     </div>
   `;
+}
+
+// Same null-safe "–" fallback rankings.js's own fmtOrDash uses - kept as a
+// separate copy here rather than exported from state.js/colors.js since
+// it's only this file's stat-grid cards that need it.
+function fmtOrDash(v, d = 1) {
+  return v === null || v === undefined ? "–" : fmt(v, d);
+}
+
+// "RK" (year-to-date) rank card value: where this player's actual points
+// scored so far this season ranks among every other player at the SAME
+// position - the actual-performance twin of ros_pos_rank (forward-looking
+// projection) and week_pos_rank (single week), computed client-side since
+// the pipeline only ever ranks ROS/weekly projections, not a running season
+// total. null (renders "–") for a player with no played weeks yet.
+function seasonPointsRankForPosition(player, data) {
+  const cw = data.meta.current_week;
+  const totals = data.players
+    .filter((p) => p.position === player.position)
+    .map((p) => ({ id: p.id, total: seasonTotalPoints(p, cw) }))
+    .filter((p) => p.total !== null)
+    .sort((a, b) => b.total - a.total);
+  const idx = totals.findIndex((p) => p.id === player.id);
+  return idx === -1 ? null : idx + 1;
 }
 
 function playerModalBodyHtml(player, data, { showCompareTrigger = true } = {}) {
@@ -1192,7 +1247,7 @@ function playerModalBodyHtml(player, data, { showCompareTrigger = true } = {}) {
         <div class="stat-label">Ranks</div>
         <div class="faab-method-values">
           <div class="faab-method-value"><span class="faab-method-num">${player.ros_pos_rank ?? "–"}</span><span class="faab-method-sub">ROS</span></div>
-          <div class="faab-method-value"><span class="faab-method-num">${player.week_pos_rank ?? "–"}</span><span class="faab-method-sub">Weekly</span></div>
+          <div class="faab-method-value"><span class="faab-method-num">${player.week_pos_rank ?? "–"}</span><span class="faab-method-sub">WK</span></div>
         </div>
       </div>
       <div class="stat-tile">
@@ -1202,7 +1257,21 @@ function playerModalBodyHtml(player, data, { showCompareTrigger = true } = {}) {
           <div class="faab-method-value"><span class="faab-method-num">${scheduleRankPillHtml(player.playoff_schedule_rank, player.playoff_schedule_index, "Fantasy playoff")}</span><span class="faab-method-sub">Playoff</span></div>
         </div>
       </div>
-      <div class="stat-tile"><div class="stat-label">Value</div><div class="stat-value">${player.value_delta === undefined || player.value_delta === null ? "–" : fmt(player.value_delta, 1)}</div></div>
+      <div class="stat-tile">
+        <div class="stat-label">Perf</div>
+        <div class="faab-method-values">
+          <div class="faab-method-value"><span class="faab-method-num">${seasonPointsRankForPosition(player, data) ?? "–"}</span><span class="faab-method-sub" title="Total fantasy points scored so far this season, ranked at the position">RK</span></div>
+          <div class="faab-method-value"><span class="faab-method-num">${fmtOrDash(seasonAvgPoints(player, data.meta.current_week))}</span><span class="faab-method-sub" title="Average fantasy points per game actually played this season">AVG</span></div>
+        </div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-label">Value</div>
+        <div class="faab-method-values faab-method-values-triple">
+          <div class="faab-method-value"><span class="faab-method-num">${fmtOrDash(player.value_delta)}</span><span class="faab-method-sub">Total</span></div>
+          <div class="faab-method-value"><span class="faab-method-num">${fmtOrDash(player.starting_value)}</span><span class="faab-method-sub">Start</span></div>
+          <div class="faab-method-value"><span class="faab-method-num">${fmtOrDash(player.depth_value)}</span><span class="faab-method-sub">Depth</span></div>
+        </div>
+      </div>
     </div>
     <div class="modal-tabs">
       ${tabs.map((t, i) => `<button class="modal-tab-btn${i === 0 ? " active" : ""}" data-modal-tab="${t.key}">${t.label}</button>`).join("")}
@@ -1349,6 +1418,7 @@ export function openPlayerModal(player, data) {
   wireGameLogRows(scope);
   wirePriceCompRows(scope);
   wireCompareTrigger(modalBox, player, data);
+  wireWatchStar(modalBox, player, data);
 }
 
 // Side-by-side on a wide screen (see .compare-grid/.modal-overlay-wide in
@@ -1374,6 +1444,8 @@ export function openComparePlayerModal(playerA, playerB, data) {
   wireFaabConfidenceSlider(modalContent.querySelector('[data-compare-col="b"]'), playerB, data);
   modalContent.querySelectorAll(".compare-col").forEach((col) => wireGameLogRows(col));
   modalContent.querySelectorAll(".compare-col").forEach((col) => wirePriceCompRows(col));
+  wireWatchStar(modalContent.querySelector('[data-compare-col="a"]'), playerA, data);
+  wireWatchStar(modalContent.querySelector('[data-compare-col="b"]'), playerB, data);
   modalContent.querySelectorAll(".compare-side-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       modalContent.querySelectorAll(".compare-side-btn").forEach((b) => b.classList.toggle("active", b === btn));

@@ -871,6 +871,7 @@ thead .sticky-col-first { z-index: 2; }
 
 .watch-star { cursor: pointer; font-size: 15px; color: var(--ink-500); }
 .watch-star.watched { color: #d6a000; }
+.player-modal-watch-star { margin-right: 4px; }
 
 /* Blue rather than accent green - accent is already the hover/selected/link
    color everywhere, so a green own-team wash blended into those. Blue reads
@@ -1287,16 +1288,19 @@ details[open] summary { margin-bottom: 8px; }
 
 /* Compact stat summary at the top of the player modal - a grid of tiles
    instead of a narrow label/value column, so it uses the modal's full width.
-   Exactly 3 equal columns (Ranks/Schedule/Value - always this same count,
-   see playermodal.js), not auto-fit, so all 3 stay on one line even on a
-   narrow phone instead of wrapping to 2+1 - see the conversation this was
-   built from. minmax(0, 1fr), not plain 1fr, so a column can still shrink
-   below its own content's min-content width rather than forcing the whole
-   grid (and the modal) wider than the viewport - same reasoning as
-   .compare-grid's own minmax(0, 1fr). */
+   Exactly 4 equal columns (Ranks/Schedule/Perf/Value - always this same
+   count, see playermodal.js), not auto-fit, so all 4 stay on one line on a
+   wide screen instead of wrapping to an unbalanced 3+1 - see the
+   conversation this was built from. minmax(0, 1fr), not plain 1fr, so a
+   column can still shrink below its own content's min-content width rather
+   than forcing the whole grid (and the modal) wider than the viewport -
+   same reasoning as .compare-grid's own minmax(0, 1fr). Narrow-phone 2x2
+   override lives in the @media (max-width: 700px) block below - 4-across
+   gets too cramped for Value's own 3-value row once each column drops
+   below ~80px. */
 .player-stat-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   margin: 12px 0;
 }
@@ -1426,6 +1430,17 @@ details[open] summary { margin-bottom: 8px; }
 .compare-search-result:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 
 @media (max-width: 700px) {
+  /* 4-across gets too cramped on a phone (Value's own 3-value row in
+     particular has nowhere left to breathe) - 2x2 instead, same minmax(0,
+     1fr) shrink-below-content reasoning as the wide-screen rule. Tighter
+     tile padding/gap and a smaller number size claw back enough width for
+     Value's 3 values and Schedule's "Playoff" sub-label to still read
+     comfortably at this column width. */
+  .player-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .stat-tile { padding: 8px 6px; }
+  .stat-tile .faab-method-values { gap: 10px; }
+  .stat-tile .faab-method-values-triple { gap: 6px; }
+  .stat-tile .faab-method-num { font-size: 15px; }
   .modal-tab-btn { padding: 8px 10px; font-size: 12px; }
   /* padding lives on .modal-content now (see the other mobile rule above,
      unscoped so it already covers this wide/compare variant too). */

@@ -72,9 +72,11 @@ export function blockEndIndices(blocks) {
 }
 
 // Grouped <thead> markup (two <tr>s: block headers, then column labels) for
-// a table whose first N columns are `leadColumns` (e.g. Wk/Opp) and last
-// column is FPts. extraBlocks (e.g. the player modal Game Log's Usage
-// block, skill positions only) appends after position's own blocks.
+// a table whose first N columns are `leadColumns` (e.g. Wk/Opp/FPts - FPts
+// stays a lead column, left of the stat blocks, rather than trailing after
+// them, so it's visible without scrolling). extraBlocks (e.g. the player
+// modal Game Log's Usage block, skill positions only) appends after
+// position's own blocks.
 // `blocks` is the full block list to render (position's own stat blocks
 // plus any extras, e.g. playermodal.js's Usage block) - callers resolve
 // this themselves (usually via blocksForPosition(position), optionally
@@ -99,8 +101,8 @@ export function groupedHeaderHtml(blocks, leadColumns) {
     )
     .join("");
   return {
-    top: `<tr class="group-header-row">${lead}${groupRow}<th></th></tr>`,
-    bottom: `<tr>${leadColumns.map((l) => `<th>${escapeAttr(l)}</th>`).join("")}${labelRow}<th>FPts</th></tr>`,
+    top: `<tr class="group-header-row">${lead}${groupRow}</tr>`,
+    bottom: `<tr>${leadColumns.map((l) => `<th>${escapeAttr(l)}</th>`).join("")}${labelRow}</tr>`,
     flatColumns: blocks.flatMap(([, cols]) => cols),
     blockEnds: ends,
   };
