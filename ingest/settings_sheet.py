@@ -16,13 +16,25 @@ logger = logging.getLogger(__name__)
 
 SHEET_TAB_NAME = "Settings"
 
-# key -> (dotted path into cfg["valuation"] or cfg["sim"], caster)
+def _projection_source_caster(v: str) -> str:
+    source = v.strip().lower()
+    if source not in ("espn", "sleeper"):
+        raise ValueError(f"projection_source must be 'espn' or 'sleeper', got {v!r}")
+    return source
+
+
+# key -> (dotted path into cfg["valuation"]/cfg["sim"]/cfg top-level, caster)
 _SETTINGS_SCHEMA: dict[str, tuple[tuple[str, ...], type]] = {
     "matchup_dampening": (("valuation", "matchup_dampening"), float),
     "pa_basis": (("valuation", "pa_basis"), str),
     "pa_l5_weight": (("valuation", "pa_l5_weight"), float),
     "pa_prior_season_weeks": (("valuation", "pa_prior_season_weeks"), int),
     "division_winners_first": (("sim", "division_winners_first"), lambda v: str(v).strip().lower() in ("true", "1", "yes")),
+    # Which source feeds ROS/weekly player projections - see
+    # ingest/sleeper_client.py. Lives at cfg's top level (not nested under
+    # valuation/sim) since engine/pipeline.py reads it directly off cfg, not
+    # through val_cfg/sim_cfg.
+    "projection_source": (("projection_source",), _projection_source_caster),
 }
 
 _TRUE_STRINGS = ("true", "1", "yes")

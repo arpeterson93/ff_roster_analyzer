@@ -1,11 +1,12 @@
-"""Cross-platform player id resolution: gsis_id (preferred) -> fp:<id> -> espn:<id>,
-with a name+position fallback for players missing from the DynastyProcess map
-(mostly rookie kickers). DST ids are always dst:<canonical NFL team abbrev>."""
+"""Cross-platform player id resolution: gsis_id (preferred) -> fp:<id> -> espn:<id> ->
+sleeper:<id>, with a name+position fallback for players missing from the
+DynastyProcess map (mostly rookie kickers). DST ids are always
+dst:<canonical NFL team abbrev>."""
 from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ingest import nfl_data as nd
 
@@ -40,7 +41,7 @@ def _canon_pos(pos: str | None) -> str | None:
 @dataclass
 class Resolution:
     id: str
-    source: str  # "gsis" | "fp" | "espn" | "name_fallback" | "unmapped"
+    source: str  # "gsis" | "fp" | "espn" | "sleeper" | "name_fallback" | "unmapped"
 
 
 @dataclass
@@ -50,6 +51,10 @@ class IdMap:
     by_espn: dict[int, dict]
     by_name_pos: dict[tuple[str, str], dict]
     ambiguous_name_pos: set[tuple[str, str]]
+    # Defaulted (and last) so existing callers that construct an IdMap
+    # directly by keyword (every test fixture that pre-dates Sleeper support)
+    # don't all need updating just to add an empty map they don't care about.
+    by_sleeper: dict[str, dict] = field(default_factory=dict)
 
     def resolve(
         self,
@@ -57,6 +62,7 @@ class IdMap:
         fp_id: int | None = None,
         espn_id: int | None = None,
         gsis_id: str | None = None,
+        sleeper_id: str | None = None,
         name: str | None = None,
         pos: str | None = None,
         team: str | None = None,
@@ -74,6 +80,8 @@ class IdMap:
             record, source = self.by_fp[fp_id], "gsis"
         elif espn_id is not None and espn_id in self.by_espn:
             record, source = self.by_espn[espn_id], "gsis"
+        elif sleeper_id and sleeper_id in self.by_sleeper:
+            record, source = self.by_sleeper[sleeper_id], "gsis"
         elif name and pos:
             key = (merge_name(name), pos)
             if key in self.by_name_pos:
@@ -96,6 +104,8 @@ class IdMap:
             return Resolution(id=f"fp:{fp_id}", source="fp")
         if espn_id is not None:
             return Resolution(id=f"espn:{espn_id}", source="espn")
+        if sleeper_id:
+            return Resolution(id=f"sleeper:{sleeper_id}", source="sleeper")
         if name:
             return Resolution(id=f"unmapped:{merge_name(name)}:{pos or ''}", source="unmapped")
         return Resolution(id="unmapped:unknown", source="unmapped")
@@ -106,6 +116,7 @@ def build_id_map() -> IdMap:
     by_gsis: dict[str, dict] = {}
     by_fp: dict[int, dict] = {}
     by_espn: dict[int, dict] = {}
+    by_sleeper: dict[str, dict] = {}
     name_pos_groups: dict[tuple[str, str], list[dict]] = {}
 
     for row in frame.iter_rows(named=True):
@@ -113,6 +124,7 @@ def build_id_map() -> IdMap:
             "gsis_id": row.get("gsis_id"),
             "fantasypros_id": row.get("fantasypros_id"),
             "espn_id": row.get("espn_id"),
+            "sleeper_id": row.get("sleeper_id"),
             "name": row.get("name"),
             "position": _canon_pos(row.get("position")),
             "team": row.get("team"),
@@ -123,6 +135,13 @@ def build_id_map() -> IdMap:
             by_fp[int(record["fantasypros_id"])] = record
         if record["espn_id"] is not None:
             by_espn[int(record["espn_id"])] = record
+        # Sleeper's own ids are numeric but travel as JSON strings everywhere
+        # they're actually looked up (ingest/sleeper_client.py's weekly
+        # projection responses are keyed by string) - stored as str here so
+        # resolve()'s sleeper_id lookup never has to guess which type the
+        # caller passed.
+        if record["sleeper_id"] is not None:
+            by_sleeper[str(int(record["sleeper_id"]))] = record
         if record["name"] and record["position"]:
             key = (merge_name(record["name"]), record["position"])
             name_pos_groups.setdefault(key, []).append(record)
@@ -142,6 +161,7 @@ def build_id_map() -> IdMap:
         by_gsis=by_gsis,
         by_fp=by_fp,
         by_espn=by_espn,
+        by_sleeper=by_sleeper,
         by_name_pos=by_name_pos,
         ambiguous_name_pos=ambiguous,
     )

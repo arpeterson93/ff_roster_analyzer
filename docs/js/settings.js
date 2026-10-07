@@ -8,6 +8,7 @@ const FIELDS = [
   { key: "pa_l5_weight", label: "Last-5-weeks weight (when basis = blend)", type: "percent", help: "How much of the blended points-allowed basis comes from the last 5 weeks vs. the full season." },
   { key: "pa_prior_season_weeks", label: "Weeks until matchup index fully trusts the current season", type: "number", min: 0, max: 17, help: "How many current-season weeks it takes for the matchup index to fully switch over from last season's points-allowed numbers to this season's. 0 = trust the current season immediately, even in week 1." },
   { key: "division_winners_first", label: "Seed division winners first", type: "bool", help: "If your league has divisions, guarantee division winners the top seeds ahead of wildcards." },
+  { key: "projection_source", label: "Projection source", type: "select", options: ["espn", "sleeper"], help: "Which source feeds ROS/weekly player projections. Sleeper's own point totals aren't used directly - projected stats are run through this league's real scoring rules, same as a real game's stat line would be." },
 ];
 
 function fieldControl(field, value) {
