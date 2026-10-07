@@ -437,25 +437,26 @@ function sortableThHtml(c) {
 
 // ---------- row filtering (shared by every tab) ----------
 
-function filteredSortedRows(data, filters, watched) {
+function filteredSortedRows(data, filters, watched, targeted) {
   const search = filters.search.trim().toLowerCase();
   const yourTeamId = getYourTeam(data.meta.slug);
   let rows = data.players.filter((p) => {
     if (search && !p.name.toLowerCase().includes(search)) return false;
     // My Team is additive, not exclusive: with Ownership (Available/Owned)
-    // and/or Watch List also set, show their (AND'd, same as before) match
-    // OR My Team's roster - e.g. Available + My Team shows free agents plus
-    // your own players, not just whichever filter "wins".
-    if (filters.myTeamOnly || filters.ownership !== "all" || filters.watchedOnly) {
+    // and/or Watch List/Target also set, show their (AND'd, same as before)
+    // match OR My Team's roster - e.g. Available + My Team shows free
+    // agents plus your own players, not just whichever filter "wins".
+    if (filters.myTeamOnly || filters.ownership !== "all" || filters.watchedOnly || filters.targetOnly) {
       const isMyTeam = filters.myTeamOnly && p.fantasy_team_id === yourTeamId;
       const ownershipOk =
         filters.ownership === "available" ? p.fantasy_team_id === null
         : filters.ownership === "owned" ? p.fantasy_team_id !== null
         : true;
       const passesAvailWatch =
-        (filters.ownership !== "all" || filters.watchedOnly) &&
+        (filters.ownership !== "all" || filters.watchedOnly || filters.targetOnly) &&
         ownershipOk &&
-        (!filters.watchedOnly || watched.has(p.id));
+        (!filters.watchedOnly || watched.has(p.id)) &&
+        (!filters.targetOnly || targeted.has(p.id));
       if (!isMyTeam && !passesAvailWatch) return false;
     }
     if (filters.team !== "ALL" && p.nfl_team !== filters.team) return false;
@@ -517,8 +518,8 @@ function wireTableInteractions(wrap, data, watched, onResort) {
 // `rawTd: true` (Schedule's weekly heat cells) returns its OWN complete
 // <td ...> (background color, data attributes) instead of the plain
 // wrapper every other column gets - see colors.js's rosCellHtml.
-function renderFlatTable(wrap, data, filters, watched, cols) {
-  const rows = filteredSortedRows(data, filters, watched);
+function renderFlatTable(wrap, data, filters, watched, targeted, cols) {
+  const rows = filteredSortedRows(data, filters, watched, targeted);
   const header = cols.map((c) => sortableThHtml(c)).join("");
   const body = rows
     .slice(0, 300)
@@ -541,7 +542,7 @@ function renderFlatTable(wrap, data, filters, watched, cols) {
 // the single-row generic header above - built directly here instead,
 // reusing the exact same sortableThHtml markup for the columns that ARE
 // sortable so click-to-sort still behaves identically.
-function renderStatsTable(wrap, container, data, filters, watched) {
+function renderStatsTable(wrap, container, data, filters, watched, targeted) {
   const cw = data.meta.current_week;
   const common = commonColumns(data, watched);
   const leading = statsLeadingColumns(data, filters);
@@ -549,7 +550,7 @@ function renderStatsTable(wrap, container, data, filters, watched) {
   const blocks = statsBlocksFor(filters.position);
   const flatColumns = blocks.flatMap(([, cols]) => cols);
   const blockEnds = blockEndIndices(blocks);
-  const rows = filteredSortedRows(data, filters, watched);
+  const rows = filteredSortedRows(data, filters, watched, targeted);
 
   // Carries each common column's own className (Player's "rankings-player-col"
   // in particular) onto its row-1 placeholder too, not just its row-2 label
@@ -609,18 +610,18 @@ function renderStatsTable(wrap, container, data, filters, watched) {
   if (groupHeaderRow) container.style.setProperty("--rankings-group-header-h", `${groupHeaderRow.getBoundingClientRect().height}px`);
 }
 
-function render(container, data, filters, watched) {
+function render(container, data, filters, watched, targeted) {
   const wrap = container.querySelector("#rankings-table-wrap");
-  const rerender = () => render(container, data, filters, watched);
+  const rerender = () => render(container, data, filters, watched, targeted);
 
   if (filters.tab === "overview") {
-    renderFlatTable(wrap, data, filters, watched, [...commonColumns(data, watched), ...overviewColumns(data)]);
+    renderFlatTable(wrap, data, filters, watched, targeted, [...commonColumns(data, watched), ...overviewColumns(data)]);
   } else if (filters.tab === "schedule") {
-    renderFlatTable(wrap, data, filters, watched, [...commonColumns(data, watched), ...scheduleColumns(data)]);
+    renderFlatTable(wrap, data, filters, watched, targeted, [...commonColumns(data, watched), ...scheduleColumns(data)]);
   } else if (filters.tab === "projections") {
-    renderFlatTable(wrap, data, filters, watched, [...commonColumns(data, watched), ...projectionsColumns(data)]);
+    renderFlatTable(wrap, data, filters, watched, targeted, [...commonColumns(data, watched), ...projectionsColumns(data)]);
   } else {
-    renderStatsTable(wrap, container, data, filters, watched);
+    renderStatsTable(wrap, container, data, filters, watched, targeted);
   }
   wireTableInteractions(wrap, data, watched, rerender);
 }
@@ -632,8 +633,9 @@ export function renderRankings(container, data, slug) {
   const weekOptions = [];
   for (let w = 1; w <= data.meta.current_week; w++) weekOptions.push(w);
 
-  const filters = { tab: "overview", position: "ALL", ownership: "all", team: "ALL", watchedOnly: false, myTeamOnly: false, search: "", statsWeek: "season" };
+  const filters = { tab: "overview", position: "ALL", ownership: "all", team: "ALL", watchedOnly: false, targetOnly: false, myTeamOnly: false, search: "", statsWeek: "season" };
   let watched = new Set();
+  let targeted = new Set();
 
   function draw() {
     container.innerHTML = `
@@ -641,16 +643,17 @@ export function renderRankings(container, data, slug) {
         <button class="mobile-filters-toggle" type="button" id="rankings-filters-toggle">Filters ▾</button>
         <div class="select-row rankings-filters" id="rankings-filters">
           <input type="search" id="rankings-search" class="filter-search" placeholder="Search players..." autocomplete="off" value="${escapeHtml(filters.search)}" />
-          <select id="rankings-pos-filter">${positions.map((p) => `<option value="${p}">${p}</option>`).join("")}</select>
-          <select id="rankings-team-filter">${nflTeams.map((t) => `<option value="${t}">${t}</option>`).join("")}</select>
-          ${filters.tab === "stats" ? `<select id="rankings-stats-week" class="filter-stats-week"><option value="season">Season</option>${weekOptions.map((w) => `<option value="${w}">Week ${w}</option>`).join("")}</select>` : ""}
-          ${yourTeamId !== null ? `<label class="filter-checkbox"><input type="checkbox" id="rankings-myteam-only" /> My Team</label>` : ""}
-          <select id="rankings-ownership-filter">
+          <span class="filter-group"><label class="filter-label">Position</label><select id="rankings-pos-filter">${positions.map((p) => `<option value="${p}">${p}</option>`).join("")}</select></span>
+          <span class="filter-group"><label class="filter-label">Team</label><select id="rankings-team-filter">${nflTeams.map((t) => `<option value="${t}">${t}</option>`).join("")}</select></span>
+          ${filters.tab === "stats" ? `<span class="filter-group filter-stats-week"><label class="filter-label">Week</label><select id="rankings-stats-week"><option value="season">Season</option>${weekOptions.map((w) => `<option value="${w}">Week ${w}</option>`).join("")}</select></span>` : ""}
+          <span class="filter-group"><label class="filter-label">Status</label><select id="rankings-ownership-filter">
             <option value="all">All</option>
             <option value="available">Available</option>
             <option value="owned">Owned</option>
-          </select>
+          </select></span>
+          ${yourTeamId !== null ? `<label class="filter-checkbox"><input type="checkbox" id="rankings-myteam-only" /> My Team</label>` : ""}
           ${yourTeamId !== null ? `<label class="filter-checkbox"><input type="checkbox" id="rankings-watched-only" /> Watch List</label>` : ""}
+          ${yourTeamId !== null ? `<label class="filter-checkbox"><input type="checkbox" id="rankings-target-only" /> Target</label>` : ""}
         </div>
         <div class="modal-tabs" id="rankings-tabs">
           ${TABS.map((t) => `<button class="modal-tab-btn${filters.tab === t.key ? " active" : ""}" data-rankings-tab="${t.key}">${t.label}</button>`).join("")}
@@ -677,7 +680,7 @@ export function renderRankings(container, data, slug) {
       tableWrapEl.classList.toggle("name-col-scrolled", tableWrapEl.scrollLeft > 0);
     });
 
-    render(container, data, filters, watched);
+    render(container, data, filters, watched, targeted);
 
     container.querySelector("#rankings-filters-toggle").addEventListener("click", () => {
       const filtersEl2 = container.querySelector("#rankings-filters");
@@ -695,38 +698,46 @@ export function renderRankings(container, data, slug) {
     });
     container.querySelector("#rankings-search").addEventListener("input", (e) => {
       filters.search = e.target.value;
-      render(container, data, filters, watched);
+      render(container, data, filters, watched, targeted);
     });
     container.querySelector("#rankings-pos-filter").value = filters.position;
     container.querySelector("#rankings-pos-filter").addEventListener("change", (e) => {
       filters.position = e.target.value;
-      render(container, data, filters, watched);
+      render(container, data, filters, watched, targeted);
     });
     container.querySelector("#rankings-team-filter").value = filters.team;
     container.querySelector("#rankings-team-filter").addEventListener("change", (e) => {
       filters.team = e.target.value;
-      render(container, data, filters, watched);
+      render(container, data, filters, watched, targeted);
     });
     const myTeamOnlyEl = container.querySelector("#rankings-myteam-only");
     if (myTeamOnlyEl) {
       myTeamOnlyEl.checked = filters.myTeamOnly;
       myTeamOnlyEl.addEventListener("change", (e) => {
         filters.myTeamOnly = e.target.checked;
-        render(container, data, filters, watched);
+        render(container, data, filters, watched, targeted);
       });
     }
     const ownershipEl = container.querySelector("#rankings-ownership-filter");
     ownershipEl.value = filters.ownership;
     ownershipEl.addEventListener("change", (e) => {
       filters.ownership = e.target.value;
-      render(container, data, filters, watched);
+      render(container, data, filters, watched, targeted);
     });
     const watchedOnlyEl = container.querySelector("#rankings-watched-only");
     if (watchedOnlyEl) {
       watchedOnlyEl.checked = filters.watchedOnly;
       watchedOnlyEl.addEventListener("change", (e) => {
         filters.watchedOnly = e.target.checked;
-        render(container, data, filters, watched);
+        render(container, data, filters, watched, targeted);
+      });
+    }
+    const targetOnlyEl = container.querySelector("#rankings-target-only");
+    if (targetOnlyEl) {
+      targetOnlyEl.checked = filters.targetOnly;
+      targetOnlyEl.addEventListener("change", (e) => {
+        filters.targetOnly = e.target.checked;
+        render(container, data, filters, watched, targeted);
       });
     }
     const statsWeekEl = container.querySelector("#rankings-stats-week");
@@ -734,7 +745,7 @@ export function renderRankings(container, data, slug) {
       statsWeekEl.value = filters.statsWeek;
       statsWeekEl.addEventListener("change", (e) => {
         filters.statsWeek = e.target.value === "season" ? "season" : Number(e.target.value);
-        render(container, data, filters, watched);
+        render(container, data, filters, watched, targeted);
       });
     }
   }
@@ -744,7 +755,11 @@ export function renderRankings(container, data, slug) {
   if (yourTeamId !== null) {
     loadWatchlist(slug, yourTeamId).then((set) => {
       watched = set;
-      render(container, data, filters, watched);
+      render(container, data, filters, watched, targeted);
+    });
+    loadWatchlist(slug, yourTeamId, "target").then((set) => {
+      targeted = set;
+      render(container, data, filters, watched, targeted);
     });
   }
 }

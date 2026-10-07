@@ -239,20 +239,32 @@ editing the sheet directly. Either way, a change takes effect on the next
 `update` workflow manually), not instantly - the site doesn't recompute live
 in the browser.
 
-## Watch list sheet (synced Rankings watch list)
+## Watch list sheet (synced Rankings watch list + Player Modal target list)
 
-The Rankings tab's ★ watch-list column works out of the box with no setup -
-it just saves to `localStorage` in that one browser. To make it follow you
-across devices/browsers, sync it through a Google Sheet the same way the
+The Rankings tab's ★ watch-list column and the Player Modal's ★ watch
+star/🎯 target toggle work out of the box with no setup - they just save to
+`localStorage` in that one browser. To make them follow you across
+devices/browsers, sync them through a Google Sheet the same way the
 Settings sheet works, with one difference: the site reads this sheet
 **live** from the browser (not once a day at pipeline build time), since a
-watch-list toggle should show up elsewhere right away.
+toggle should show up elsewhere right away.
+
+Both lists share one sheet/tab - a `list` column (`watch` or `target`)
+distinguishes which list a row belongs to, rather than a second sheet/
+deployment. Target is a second, shorter list for players you might actually
+move on (trade, bench, cut) - can include your own roster, unlike a typical
+pickup list - toggled only from the Player Modal (the 🎯 next to the star);
+Rankings gets a "Target" filter checkbox to narrow down to it, not a column
+of its own.
 
 **One-time setup (optional):**
 
 1. Create a Google Sheet with a tab named exactly `Watchlist` and header row
-   `league_slug | team_id | player_id`. One row per watched player per team;
-   leave it empty otherwise, the site creates rows as you click ★.
+   `league_slug | team_id | player_id | list`. One row per (player, list)
+   per team; leave it empty otherwise, the site creates rows as you click
+   the star/bullseye. A row with a blank `list` cell (or a sheet that
+   hasn't added the column at all yet) is treated as `watch` - no backfill
+   needed on an already-deployed sheet.
 2. Share it as "Anyone with the link can view" (read unauthenticated via the
    public CSV export endpoint, same as the Settings sheet).
 3. Put the sheet's id (the long string in its URL between `/d/` and `/edit`)
@@ -261,12 +273,15 @@ watch-list toggle should show up elsewhere right away.
    paste in `tools/apps-script/watchlist_sync.gs`, then Deploy → New
    deployment → type "Web app" → Execute as "Me" → Who has access "Anyone" →
    Deploy. Copy the resulting Web App URL into `WATCHLIST_WEBAPP_URL` in
-   `docs/js/watchlistConfig.js`.
+   `docs/js/watchlistConfig.js`. Already deployed from before Target
+   existed? Paste the updated script into the same Apps Script project and
+   use Manage deployments → edit → new version → Deploy instead of a fresh
+   deployment, so the URL (and `WATCHLIST_WEBAPP_URL`) doesn't change.
 
 There's no login, so "your team" (the same per-browser pick used everywhere
-else on the site) is what a watch list is keyed on - pick the same team on
-each device/browser to see the same list. Without steps 3-4, the ★ column
-still works, just local to that one browser.
+else on the site) is what a list is keyed on - pick the same team on each
+device/browser to see the same lists. Without steps 3-4, both toggles still
+work, just local to that one browser.
 
 **Real current seed vs. simulated odds:** the Standings page's Seed column
 is `engine.standings.compute_current_seeds`' deterministic read of the real

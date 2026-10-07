@@ -640,7 +640,7 @@ function remainingScheduleTable(player, data) {
     const rows = weeks
       .map((w) => `<tr><td>${w.week}</td><td>${opponentCellHtml(w)}</td><td>${fmt(weeklyProjection(player, w.week, currentWeek), 1)}</td></tr>`)
       .join("");
-    return `<table><thead><tr><th>Wk</th><th>Opp</th><th>Proj</th></tr></thead><tbody>${rows}</tbody></table>`;
+    return `<table class="remaining-schedule-table"><thead><tr><th>Wk</th><th>Opp</th><th>Proj</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
   const rows = weeks
     .map((w) => {
@@ -651,8 +651,11 @@ function remainingScheduleTable(player, data) {
       return `<tr><td>${w.week}</td><td>${opponentCellHtml(w)}</td><td>${fmt(weeklyProjection(player, w.week, currentWeek), 1)}</td><td>${starting}</td><td>${depth}</td><td>${replaceBy}</td></tr>`;
     })
     .join("");
+  // -full (only on the variant that actually has a Replace By column) - see
+  // styles.css's own comment on why that column's VALUES stay left-justified
+  // while every other header/value in this table centers.
   return `
-    <table>
+    <table class="remaining-schedule-table remaining-schedule-table-full">
       <thead><tr><th>Wk</th><th>Opp</th><th>Proj</th><th>Starting</th><th>Depth</th><th>Replace by</th></tr></thead>
       <tbody>${rows}</tbody>
       <tfoot><tr class="totals-row"><td colspan="3">Total</td><td>${fmt(nmd.totals.starting, 1)}</td><td>${fmt(nmd.totals.depth, 1)}</td><td><strong>${fmt(nmd.totals.delta, 1)}</strong></td></tr></tfoot>
@@ -1385,6 +1388,42 @@ function wireWatchStar(scopeEl, player, data) {
   });
 }
 
+// Target list: a second, shorter player list for guys you might actually
+// move on (trade away, bench, cut) rather than Watch List's wide net - can
+// include your own rostered players, unlike a typical "pickup" list, since
+// the whole point is tracking players to act on, not just watch. Same
+// backing mechanism as the watch star (watchlist.js's loadWatchlist/
+// setWatched, just with listName="target" - see that module's own header
+// comment on how one sheet holds both lists), but deliberately has no
+// Rankings-table column of its own - toggled only here, in the modal;
+// Rankings only gets a filter to narrow down to it (see rankings.js's
+// "Target" checkbox). A single 🎯 glyph throughout (no second "empty"
+// glyph the way ☆/★ pairs) - .targeted in styles.css handles the on/off
+// look via opacity instead.
+function targetToggleHtml(player, data) {
+  if (getYourTeam(data.meta.slug) === null) return "";
+  return `<span class="target-toggle" data-target-toggle data-player-id="${player.id}" title="Add to target list">🎯</span>`;
+}
+
+function setTargetState(el, targeted) {
+  el.classList.toggle("targeted", targeted);
+  el.title = targeted ? "Remove from target list" : "Add to target list";
+}
+
+// Same scoping/pattern as wireWatchStar - see that function's own comment.
+function wireTargetToggle(scopeEl, player, data) {
+  const el = scopeEl.querySelector(`[data-target-toggle][data-player-id="${player.id}"]`);
+  if (!el) return;
+  const yourTeamId = getYourTeam(data.meta.slug);
+  if (yourTeamId === null) return;
+  loadWatchlist(data.meta.slug, yourTeamId, "target").then((set) => setTargetState(el, set.has(player.id)));
+  el.addEventListener("click", () => {
+    const nowTargeted = !el.classList.contains("targeted");
+    setTargetState(el, nowTargeted);
+    setWatched(data.meta.slug, yourTeamId, player.id, nowTargeted, "target");
+  });
+}
+
 function playerModalHeaderHtml(player, data, { showCompareTrigger = true } = {}) {
   const color = POSITION_COLOR[player.position] || "#888";
   const team = player.fantasy_team_id !== null ? data.teamsById.get(player.fantasy_team_id) : null;
@@ -1393,7 +1432,7 @@ function playerModalHeaderHtml(player, data, { showCompareTrigger = true } = {})
       ${playerPhotoHtml(player, "player-photo-lg")}
       <div>
         <h2><span class="pos-tag" style="background:${color}">${player.position}</span> ${escapeHtml(player.name)} <span class="muted small">${escapeHtml(player.nfl_team || "")}</span></h2>
-        <p class="muted small">${watchStarHtml(player, data)}${team ? escapeHtml(teamLabel(team)) : "Free agent"} · Bye ${player.bye ?? "–"}</p>
+        <p class="muted small">${watchStarHtml(player, data)}${targetToggleHtml(player, data)}${team ? escapeHtml(teamLabel(team)) : "Free agent"} · Bye ${player.bye ?? "–"}</p>
       </div>
       ${
         showCompareTrigger
@@ -1623,6 +1662,7 @@ export function openPlayerModal(player, data) {
   wireCompToggles(scope, player, data);
   wireCompareTrigger(modalBox, player, data);
   wireWatchStar(modalBox, player, data);
+  wireTargetToggle(modalBox, player, data);
 }
 
 // Side-by-side on a wide screen (see .compare-grid/.modal-overlay-wide in
@@ -1652,6 +1692,8 @@ export function openComparePlayerModal(playerA, playerB, data) {
   wireCompToggles(modalContent.querySelector('[data-compare-col="b"]'), playerB, data);
   wireWatchStar(modalContent.querySelector('[data-compare-col="a"]'), playerA, data);
   wireWatchStar(modalContent.querySelector('[data-compare-col="b"]'), playerB, data);
+  wireTargetToggle(modalContent.querySelector('[data-compare-col="a"]'), playerA, data);
+  wireTargetToggle(modalContent.querySelector('[data-compare-col="b"]'), playerB, data);
   modalContent.querySelectorAll(".compare-side-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       modalContent.querySelectorAll(".compare-side-btn").forEach((b) => b.classList.toggle("active", b === btn));

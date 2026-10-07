@@ -162,13 +162,28 @@ th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--bord
    rather than a "center" class repeated on every table's own header row. */
 th { color: var(--ink-500); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; cursor: pointer; text-align: center; }
 /* Player Modal's Game Log (actual completed games - see playermodal.js's
-   gameLogTable) and the Points-Against-by-team modal (pointsagainstmodal.js)
-   both center their DATA cells too, not just headers - every column in
-   either table is a stat value/week/opponent badge, none of them reads
-   worse centered the way a long identifying name column would, so this is
-   scoped to just these two tables rather than the sitewide th/td default
-   above. */
-.game-log-stats-table td, .points-against-table td { text-align: center; }
+   gameLogTable), the Points-Against-by-team modal (pointsagainstmodal.js),
+   and the Remaining Schedule table (also playermodal.js) all center their
+   DATA cells too, not just headers - every column in any of the three is a
+   stat value/week/opponent badge, none of them reads worse centered the
+   way a long identifying name column would, so this is scoped to just
+   these tables rather than the sitewide th/td default above. */
+.game-log-stats-table td, .points-against-table td, .remaining-schedule-table td { text-align: center; }
+/* ...except Remaining Schedule's own Replace By column specifically - a
+   real player name (plus his own projected points in parens) reads as an
+   identifying label, not a stat, so it stays left-justified like any other
+   name column on the site. header AND tfoot's own total, not just tbody's
+   values - leaving the header centered above left-justified values (or the
+   bold total centered while every real value above it isn't) reads as a
+   misaligned column at a glance, even though every row still has the
+   right number of cells (confirmed live - exactly that mismatch was
+   getting reported as "the total row looks offset by a column").
+   -full (see remainingScheduleTable's own comment) keeps this off the
+   simpler no-replacement-data variant, whose last column (Proj) is a real
+   number and should stay centered throughout like every other column. */
+.remaining-schedule-table-full thead th:last-child,
+.remaining-schedule-table-full tbody td:last-child,
+.remaining-schedule-table-full tfoot td:last-child { text-align: left; }
 /* Grouped stat-column headers (Passing/Rushing/Receiving/Ret/etc - see
    docs/js/statcolumns.js's groupedHeaderHtml) span multiple sub-columns via
    colspan - center them over that span instead of the site-wide left
@@ -314,24 +329,20 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
   background: var(--card);
   border-right: 1px solid var(--border);
 }
-/* The totals row's Slot+Player cells are one merged colspan=2 cell instead
-   of two, and - unlike data rows - stays frozen as a whole (there's no
-   separate Player-only cell to pin here, and leaving the "Starters total"/
-   "Bench total" label to scroll away while every other row's name stays
-   pinned would look broken) - so it needs its own position:sticky rather
-   than inheriting Player's, plus its own tinted background (see the
-   site-wide .totals-row rule) since the plain sticky background above
-   would otherwise paint over that tint. Mixed against the OPAQUE --card,
-   not transparent like the site-wide rule mixes against - a sticky cell
-   has to stay fully opaque or the scrolled-under stat columns show/collide
-   through it instead of being hidden behind it the way a frozen column is
-   supposed to work (see the conversation this was fixed from - the totals
-   row's numbers were bleeding through the label before this). */
-#tab-startsit .lineup-table .totals-row .slot-col {
-  position: sticky;
-  left: 0;
-  z-index: 1;
-  border-right: 1px solid var(--border);
+/* The totals row's Photo/Player cells (see startsit.js's totalsRow - three
+   separate real cells now, not a merged colspan, specifically so they
+   inherit .photo-col/.player-td's own sticky rules above UNCHANGED rather
+   than needing a parallel sticky rule of their own that could drift out of
+   sync with them again) still need their own tinted background: the
+   site-wide .totals-row tint mixes against TRANSPARENT, which would let
+   scrolled-under stat columns show/collide through a sticky cell instead of
+   being hidden behind it the way a frozen column is supposed to work (see
+   the conversation this was fixed from - the totals row's numbers were
+   bleeding through the label before this) - so this mixes against the
+   OPAQUE --card instead, same as .photo-col/.player-td's own plain
+   background further up, just tinted to match the rest of this row. */
+#tab-startsit .lineup-table .totals-row .photo-col,
+#tab-startsit .lineup-table .totals-row .player-td {
   background: color-mix(in srgb, var(--accent) 5%, var(--card));
 }
 /* Same reasoning for a streamed row's own amber tint (see .streamed-row) -
@@ -784,6 +795,12 @@ thead .sticky-col-first { z-index: 2; }
 
 .select-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
 .select-row select { padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--ink-900); }
+/* Rankings' Position/Team/Status/Week selects - a small label stacked
+   above the select (unlike .trade-select-group's side-by-side label),
+   so what each dropdown actually filters on reads at a glance instead of
+   needing to be inferred from its own option list. */
+.filter-group { display: flex; flex-direction: column; gap: 2px; }
+.filter-label { font-size: 10px; color: var(--ink-500); text-transform: uppercase; letter-spacing: 0.03em; }
 /* Trade Calculator's Team A/Team B/Sort label+select pairs - grouped into
    one flex item each (see tradeui.js) so a pair never splits across lines
    on its own; the mobile rule below forces one full-width group per line. */
@@ -872,6 +889,13 @@ thead .sticky-col-first { z-index: 2; }
 .watch-star { cursor: pointer; font-size: 15px; color: var(--ink-500); }
 .watch-star.watched { color: #d6a000; }
 .player-modal-watch-star { margin-right: 4px; }
+
+/* Target list toggle (see playermodal.js's targetToggleHtml) - one glyph
+   throughout, unlike watch-star's ☆/★ pair, since there's no obvious
+   "empty bullseye" counterpart - dimmed/grayscale when off, full color
+   when on, same on/off weighting the star's own color swap gives. */
+.target-toggle { cursor: pointer; font-size: 14px; margin-right: 4px; opacity: 0.35; filter: grayscale(1); }
+.target-toggle.targeted { opacity: 1; filter: none; }
 
 /* Blue rather than accent green - accent is already the hover/selected/link
    color everywhere, so a green own-team wash blended into those. Blue reads
@@ -1167,7 +1191,13 @@ details[open] summary { margin-bottom: 8px; }
      site-wide, non-mobile ".photo-col"/".player-td" rules above). .photo-col
      itself stays sticky here (inherited, not overridden) since it's what's
      supposed to keep showing regardless of scroll position. */
-  #tab-startsit .lineup-table .player-td, #tab-startsit .lineup-table .totals-row .slot-col {
+  /* .totals-row .player-td named explicitly too, matching (not just
+     exceeding) the desktop .totals-row .photo-col/.player-td tint rule's
+     own specificity - without this, that higher-specificity tint rule
+     would keep winning here regardless of this block's later position in
+     the file, leaving the totals row's label cell stuck tinted+sticky on
+     mobile instead of resetting like every other .player-td does. */
+  #tab-startsit .lineup-table .player-td, #tab-startsit .lineup-table .totals-row .player-td {
     position: static; background: none; border-right: none;
   }
   #tab-startsit .lineup-table .streamed-row .player-td { background: none; }
