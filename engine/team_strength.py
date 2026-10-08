@@ -534,14 +534,23 @@ def _mutual_benefit(gain_self: float, gain_partner: float) -> float:
     wildly lopsided" case a plain min() can't tell apart from a real
     mutual win (confirmed live: a 19:1 split like that was actually
     OUTRANKING more balanced trades before this fix, the exact case the
-    original fairness_ratio filter existed to reject). Not a real win-win
-    (either side <= 0) falls back to min(gain_self, gain_partner) instead -
-    always <= 0, so every non-win-win ranks below every genuine win-win,
-    and there's no division anywhere, so a zero-gain candidate can never
-    divide-by-zero crash the way the old ratio check once did."""
-    if gain_self > 0 and gain_partner > 0:
-        return gain_self * gain_partner
-    return min(gain_self, gain_partner)
+    original fairness_ratio filter existed to reject). A mixed-sign
+    candidate (one side up, one down) ALSO multiplies - gain_self *
+    gain_partner is already <= 0 there (positive * negative), and growing
+    with how lopsided the exchange is punishes a huge windfall on a
+    negligible cost to the other side harder than min() would: min() only
+    looks at the worse side's raw number, so (50, -0.05) and (3, -0.1)
+    would tie-ish on "barely hurts them," even though the first is a much
+    bigger giveaway in proportion. Only a genuine lose-lose (both <= 0)
+    falls back to min(gain_self, gain_partner) instead - multiplying two
+    negatives would flip the sign positive and make a trade that's bad for
+    both sides look like a win-win. min() there keeps the score <= 0, so
+    every lose-lose still ranks below every genuine win-win, and there's no
+    division anywhere, so a zero-gain candidate can never divide-by-zero
+    crash the way the old ratio check once did."""
+    if gain_self < 0 and gain_partner < 0:
+        return min(gain_self, gain_partner)
+    return gain_self * gain_partner
 
 
 def trade_targets(

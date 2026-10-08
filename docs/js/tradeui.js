@@ -181,7 +181,7 @@ function rosterTransactionsHtml(transactions, playersById) {
 // message actually paint before the synchronous search blocks the main
 // thread - without it the browser would freeze straight from the click with
 // no feedback at all until the search finishes.
-function generateSuggestions(suggestionsEl, data, state, rostA, rostB, freeAgentsByPos, playersById, draw, mySide) {
+function generateSuggestions(suggestionsEl, data, state, rostA, rostB, freeAgentsByPos, playersById, draw) {
   suggestionsEl.innerHTML = `<p class="muted small">Generating suggestions...</p>`;
   setTimeout(() => {
     const players = buildPlayersMap(data);
@@ -193,7 +193,6 @@ function generateSuggestions(suggestionsEl, data, state, rostA, rostB, freeAgent
       players, freeAgentsByPos, weeks,
       slots: data.meta.slots, eligibility: data.meta.slot_eligibility,
       rosterSize: data.meta.roster_size,
-      mySide,
     });
     state.suggestions = suggestions;
     suggestionsEl.innerHTML = suggestionsTableHtml(suggestions, playersById);
@@ -332,12 +331,6 @@ export function renderTrade(container, data) {
     const teamB = data.teamsById.get(state.teamB);
     const rostA = rosterIds(data, state.teamA).map((id) => playersById.get(id)).filter(Boolean);
     const rostB = rosterIds(data, state.teamB).map((id) => playersById.get(id)).filter(Boolean);
-    // Which side (if either) is the viewer's own team - the suggestion
-    // search's mutualBenefit score only forgives a LOW/negative gain on
-    // whichever side this is (see docs/js/trade.js's mutualBenefit); null
-    // when neither picker is your team (comparing two other teams' rosters
-    // has no "me" to grant that unbounded call to).
-    const mySide = state.teamA === yourTeamId ? "a" : state.teamB === yourTeamId ? "b" : null;
 
     container.innerHTML = `
       <div class="card">
@@ -411,10 +404,10 @@ export function renderTrade(container, data) {
       draw();
     });
     container.querySelector("#trade-suggest-refresh").addEventListener("click", () => {
-      generateSuggestions(container.querySelector("#trade-suggestions"), data, state, rostA, rostB, freeAgentsByPos, playersById, draw, mySide);
+      generateSuggestions(container.querySelector("#trade-suggestions"), data, state, rostA, rostB, freeAgentsByPos, playersById, draw);
     });
     if (regenerateSuggestions) {
-      generateSuggestions(container.querySelector("#trade-suggestions"), data, state, rostA, rostB, freeAgentsByPos, playersById, draw, mySide);
+      generateSuggestions(container.querySelector("#trade-suggestions"), data, state, rostA, rostB, freeAgentsByPos, playersById, draw);
     } else {
       wireSuggestionRows(container.querySelector("#trade-suggestions"), state.suggestions, state, draw);
     }
