@@ -130,6 +130,40 @@ def points_against_detail(
     return result
 
 
+def with_remaining_schedule(
+    detail: dict[str, dict[int, dict]],
+    teams: list[str],
+    weeks: list[int],
+    opponent: dict[tuple[str, int], str | None],
+    is_home: dict[tuple[str, int], bool | None],
+) -> dict[str, dict[int, dict]]:
+    """Appends a schedule-only row - {"points": None, "opponent", "home",
+    "stats": {}, "players": []} - for every week in `weeks` a team doesn't
+    already have a real (played) entry for, so the Points Against modal's
+    completed weeks are followed by the rest of the team's season schedule
+    instead of just stopping (see docs/js/pointsagainstmodal.js, which
+    already renders a None points/empty stats/players row as blank cells
+    with no frontend changes needed - fmt(None) and statCellsHtml's missing-
+    key fallback already do that). A bye week (opponent is None) still gets
+    its own row - skipping it would leave an unexplained gap in the week
+    numbering - and renders as "BYE" client-side. Mutates and returns
+    `detail` in place; a team absent from `detail` entirely (no games
+    played yet) still gets one via setdefault."""
+    for team in teams:
+        weeks_for_team = detail.setdefault(team, {})
+        for w in weeks:
+            if w in weeks_for_team:
+                continue
+            weeks_for_team[w] = {
+                "points": None,
+                "opponent": opponent.get((team, w)),
+                "home": is_home.get((team, w)),
+                "stats": {},
+                "players": [],
+            }
+    return detail
+
+
 def dst_points_against_detail(
     team_stats_df: pl.DataFrame,
     schedules_df: pl.DataFrame,

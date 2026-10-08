@@ -1,7 +1,7 @@
 import polars as pl
 import pytest
 
-from engine.points_against import dst_points_against_detail, points_against_detail, stat_columns
+from engine.points_against import dst_points_against_detail, points_against_detail, stat_columns, with_remaining_schedule
 from engine.scoring import ScoringRules
 
 REY_SCORING = ScoringRules.from_espn([{"id": 42, "abbr": "REY", "points": 0.1}, {"id": 43, "abbr": "RETD", "points": 6}])
@@ -138,3 +138,28 @@ def test_dst_position_specific_fields_used():
     assert "points_allowed" in columns
     assert "def_sacks" in columns
     assert "receiving_yards" not in columns
+
+
+def test_with_remaining_schedule_appends_future_weeks_only():
+    # Week 1 already has a real played entry; weeks 2-3 don't yet exist.
+    detail = {"NYG": {1: {"points": 10.0, "opponent": "DAL", "home": True, "stats": {}, "players": []}}}
+    opponent = {("NYG", 1): "DAL", ("NYG", 2): "PHI", ("NYG", 3): "WAS"}
+    is_home = {("NYG", 1): True, ("NYG", 2): False, ("NYG", 3): True}
+    result = with_remaining_schedule(detail, ["NYG"], [1, 2, 3], opponent, is_home)
+    assert result["NYG"][1] == {"points": 10.0, "opponent": "DAL", "home": True, "stats": {}, "players": []}
+    assert result["NYG"][2] == {"points": None, "opponent": "PHI", "home": False, "stats": {}, "players": []}
+    assert result["NYG"][3] == {"points": None, "opponent": "WAS", "home": True, "stats": {}, "players": []}
+
+
+def test_with_remaining_schedule_bye_week_gets_a_null_opponent_row():
+    detail = {}
+    opponent = {("NYG", 2): None}
+    is_home = {("NYG", 2): None}
+    result = with_remaining_schedule(detail, ["NYG"], [2], opponent, is_home)
+    assert result["NYG"][2]["opponent"] is None
+
+
+def test_with_remaining_schedule_adds_a_team_missing_from_detail_entirely():
+    detail = {}
+    result = with_remaining_schedule(detail, ["NYG"], [5], {("NYG", 5): "DAL"}, {("NYG", 5): True})
+    assert result["NYG"][5]["opponent"] == "DAL"

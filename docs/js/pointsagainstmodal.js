@@ -3,7 +3,11 @@ import { openModal } from "./modal.js";
 import { blocksForPosition, groupedHeaderHtml, statCellsHtml } from "./statcolumns.js";
 
 function opponentLabel(wk) {
-  if (!wk.opponent) return `<span class="muted">-</span>`;
+  // Only actually reachable for a remaining-schedule row - a real completed
+  // week always has an opponent (see engine/points_against.py) - so this is
+  // a future bye week, same "BYE" convention colors.js uses for the ROS
+  // schedule cells elsewhere on the site.
+  if (!wk.opponent) return `<span class="muted">BYE</span>`;
   return (wk.home === false ? "@" : "") + escapeHtml(wk.opponent);
 }
 

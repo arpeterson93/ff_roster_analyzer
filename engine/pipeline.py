@@ -52,7 +52,7 @@ from engine.play_log import (
     build_game_play_index, game_durations_by_game_id, incomplete_targets_for_player,
     scoring_plays_for_player, zero_point_plays_for_player,
 )
-from engine.points_against import dst_points_against_detail, points_against_detail
+from engine.points_against import dst_points_against_detail, points_against_detail, with_remaining_schedule
 from engine.scoring import ScoringRules
 from engine import standings_stage
 from engine.xfp_play_log import expected_plays_for_player
@@ -1148,6 +1148,13 @@ def run_league(
             "current": dst_points_against_detail(current_team_stats, schedules_current, is_home, season, dst_rules),
             "prior": dst_points_against_detail(prior_team_stats, prior_schedules, prior_is_home, prior_season, dst_rules),
         }
+    # Rest-of-season schedule rows (current season only - the prior season's
+    # already fully played) beneath each team's real completed weeks, so the
+    # Points Against modal doesn't just stop at "now" - see
+    # with_remaining_schedule's own docstring for the row shape.
+    remaining_weeks = list(range(current_week, final_week + 1))
+    for pos_detail in points_against.values():
+        with_remaining_schedule(pos_detail["current"], all_nfl_teams, remaining_weeks, opponent, is_home)
     _log_checkpoint("recent_results_done")
 
     # --- player universe: every rostered player + every fetched free agent ---
