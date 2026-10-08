@@ -221,25 +221,22 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
    compare view's own headers never get that move, so they still need this
    clearance; without it .compare-btn's own margin-left:auto would push it
    flush against the modal's right edge, directly under the X. */
-/* position:sticky here is now only load-bearing for the compare view's own
-   two per-column headers, which still render inline inside .modal-content
-   (the scrolling element - see modal.js's openModal) rather than through
-   its separate .modal-header-slot. For openPlayerModal's single-player
-   view, this header lives IN that separate non-scrolling slot instead
-   (see .modal-header-slot's own comment for why - a real scroll-position
-   recalculation lag, not a clipping/scroll-container mistake), where
-   position:sticky is simply inert (nothing around it ever scrolls, so it
-   never has anything to "stick" against) - kept on the shared class rather
-   than split into a header-slot-only vs. compare-only variant, since an
-   inert sticky is harmless and one rule serving both keeps them visually
-   identical. Needs its own solid background (this section sits ABOVE
-   everything else that scrolls underneath it once stuck, including
-   .player-stat-grid/the comp tables in the compare-view case) and a
-   z-index above ordinary content. The bottom border reads as a deliberate
-   divider either way. */
+/* No more position:sticky - both openPlayerModal (single-player) AND
+   openComparePlayerModal now render this header into modal.js's own
+   separate non-scrolling .modal-header-slot rather than sticky-positioning
+   it INSIDE .modal-content (the scrolling element). The compare view used
+   to be the one remaining case that still did the latter (two independent
+   per-column sticky headers) - see .modal-header-slot's own comment for
+   the real touch-scroll recalculation-lag bug that was the actual reason
+   to avoid position:sticky here at all, not just a clipping/scroll-
+   container mistake a sticky fix could patch over. Still needs its own
+   solid background - this section sits ABOVE .player-stat-grid/the comp
+   tables once scrolled, even without sticky, since header slot and content
+   are two stacked siblings, not overlapping. The bottom border reads as a
+   deliberate divider either way. */
 .player-modal-header {
   display: flex; align-items: center; gap: 12px; padding-right: 36px;
-  position: sticky; top: 0; z-index: 5; background: var(--card);
+  background: var(--card);
   margin-bottom: 4px; padding-bottom: 10px; border-bottom: 1px solid var(--border);
 }
 /* The close button, moved into this header (see openPlayerModal) so it's
@@ -247,7 +244,7 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
    positioned sibling that the header's own solid background then hid -
    :has() scopes this to ONLY that case (a .modal-header-actions wrapper,
    itself only ever rendered alongside an embedded .modal-close - see
-   playerModalContentHtml), leaving the compare view's own headers (which
+   playerModalHeaderHtml), leaving the compare view's own headers (which
    never get that wrapper at all) on the base rule's padding-right above. */
 .player-modal-header:has(.player-modal-header-actions) { padding-right: 4px; }
 /* Groups +Compare and the close button so they can sit right next to each
@@ -1043,10 +1040,11 @@ details[open] summary { margin-bottom: 8px; }
    hasn't caught up to yet. A plain, non-sticky header that's simply never
    part of the scrolling box at all has no such recalculation to lag -
    it's always exactly where it is. See playermodal.js's openPlayerModal
-   for the one caller that actually uses headerHtml today; every other
-   caller (the points-against modal, and the compare view's own two
-   per-column headers) keeps the old sticky-inside-.modal-content
-   behavior, unchanged - .modal-header-slot stays empty for them. */
+   AND openComparePlayerModal, both of which pass headerHtml (the compare
+   view's two headers go in side by side there, mirroring the body's own
+   .compare-grid/.compare-col below). Every OTHER caller (just the
+   points-against modal today) has no frozen header at all and leaves
+   .modal-header-slot empty. */
 .modal-box {
   background: var(--card);
   border-radius: var(--radius);
@@ -1478,6 +1476,55 @@ details[open] summary { margin-bottom: 8px; }
 .compare-search-result { padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; }
 .compare-search-result:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 
+/* Trends tab (docs/js/trends.js): an added-player pill (border/swatch color
+   is that player's own series color, shared with the chart - see
+   PLAYER_COLORS there) sitting inline with the search box that adds more,
+   reusing .compare-search-results/.compare-search-result above for the
+   dropdown itself rather than a third copy of that look. */
+.trend-player-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+/* Search box is its own row above .trend-player-row (docs/js/trends.js) so
+   its position never shifts as more pills get added below it. */
+.trend-player-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--border); border-radius: 999px; padding: 4px 6px 4px 10px; font-size: 13px;
+}
+.trend-player-swatch { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.trend-player-remove {
+  border: none; background: transparent; cursor: pointer; color: var(--ink-500); font-size: 14px; line-height: 1; padding: 2px;
+}
+.trend-player-remove:hover { color: var(--ink-900); }
+.trend-player-search { position: relative; max-width: 360px; margin-bottom: 10px; }
+.trend-player-search input[type="search"] {
+  width: 100%; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--card); color: var(--ink-900);
+}
+.trend-player-search .compare-search-results {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 4; background: var(--card);
+  border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); padding: 4px;
+}
+/* One row per metric (checkbox + chart-type/axis selects) - a plain table,
+   same convention as every other config list on the site (Trade
+   Calculator's roster pickers, FAAB Lab's comp tables) rather than a new
+   widget. */
+.trend-metric-table select { font-size: 12.5px; padding: 2px 4px; }
+.trend-chart-wrap { position: relative; height: 420px; margin-top: 12px; }
+/* Metric-customization <details> (docs/js/trends.js) - collapsible so the
+   player-pill "legend" row right below it can sit close to the chart
+   instead of always pushed down by a full config table. */
+.trend-config { margin-bottom: 12px; border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; }
+.trend-config summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+.trend-config[open] summary { margin-bottom: 8px; }
+/* My Team/Watch List/Targets section header inside the player-add dropdown
+   (docs/js/trends.js's pickerSections/renderPickerPanel) - same dropdown
+   shell as .compare-search-results, just with these labeled dividers
+   between its sections instead of one flat list. */
+.trend-picker-section-label { padding: 4px 8px 2px; text-transform: uppercase; letter-spacing: 0.04em; font-size: 10px; }
+/* Metric table's own per-row style sample (docs/js/trends.js's
+   styleSwatchHtml) - border-bottom-style/-color are set inline per row;
+   this base rule only supplies the width/thickness those two longhands
+   leave alone. */
+.trend-style-swatch { display: inline-block; width: 28px; height: 0; border-bottom: 2px solid var(--ink-500); vertical-align: middle; }
+
 @media (max-width: 700px) {
   /* 4-across gets too cramped on a phone (Value's own 3-value row in
      particular has nowhere left to breathe) - 2x2 instead, same minmax(0,
@@ -1507,7 +1554,7 @@ details[open] summary { margin-bottom: 8px; }
      fit both horizontally next to a player name that's already tight on a
      narrow phone - see the conversation this was built from. order:-1 on
      .modal-close (not DOM order, which has +Compare first - see
-     playerModalContentHtml) puts the close button on top specifically,
+     playerModalHeaderHtml) puts the close button on top specifically,
      +Compare underneath it; align-items:flex-end is this column's own
      CROSS-axis (horizontal, once flex-direction is column) alignment, so
      both stay flush against the row's right edge stacked on top of each

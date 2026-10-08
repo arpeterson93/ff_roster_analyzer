@@ -267,7 +267,10 @@ function playLogDetailHtml(plays, incompletions = [], gameDurationMin = 60, zero
 // under snap_counts' SPECIAL-TEAMS snaps, not offense_snaps, and neither K
 // nor DST has carries/targets at all, so neither gets this block.
 const USAGE_BLOCK = ["Usage", [["_snap_pct", "Snap%"], ["_att_pct", "Att%"], ["_tgt_pct", "Tgt%"], ["_air_yard_pct", "AirYd%"]]];
-const _USAGE_POSITIONS = new Set(["QB", "RB", "WR", "TE"]);
+// Exported for docs/js/metrics.js's own Trends-tab metric registry, which
+// gates Snap%/Att%/Tgt%/AirYd% to the same positions this Game Log block
+// already does - one shared Set rather than two copies drifting apart.
+export const USAGE_POSITIONS = new Set(["QB", "RB", "WR", "TE"]);
 
 function fmtUsagePct(v) {
   return v === null || v === undefined ? "-" : `${Math.round(v * 100)}%`;
@@ -300,7 +303,7 @@ function _blockHasData(block, weeks) {
 }
 
 function gameLogTable(player, data) {
-  const extraBlocks = _USAGE_POSITIONS.has(player.position) ? [USAGE_BLOCK] : [];
+  const extraBlocks = USAGE_POSITIONS.has(player.position) ? [USAGE_BLOCK] : [];
   const currentWeek = data.meta.current_week;
   const playsByWeek = (data.gameLogPlays || {})[player.id] || {};
   const playedWeeks = (player.weekly || []).filter((w) => w.actual);
@@ -1289,7 +1292,7 @@ function faabEstimateSection(player, data) {
   `;
 }
 
-// Tab is labeled "Game Log" (see playerModalContentHtml) - this used to be
+// Tab is labeled "Game Log" (see playerModalBodyHtml) - this used to be
 // two separate tabs (Weekly Projections, Week-to-Week NMD/Value), merged
 // into one per the conversation this was built from: a player's actual
 // stats and his remaining schedule/roster-value are all "what happened/will
@@ -1344,17 +1347,19 @@ function scheduleRankPillHtml(rank, avgIndex, timeframeLabel) {
 // content twice, side by side, rather than reimplementing it.
 // showCompareTrigger also gates the embedded .modal-close button below -
 // both are single-player-view-only. Rendering our OWN close button inside
-// the sticky .player-modal-header (rather than relying on the shared modal
+// the frozen .player-modal-header (rather than relying on the shared modal
 // shell's external one - see modal.js) is what lets openPlayerModal keep a
 // real, clickable X inside the frozen section instead of it sitting hidden
 // behind the header's own solid background (see styles.css's .player-
 // modal-header > .modal-close). The compare view keeps using the shared
 // external button, untouched - see openPlayerModal vs openComparePlayerModal.
-// Split out from playerModalContentHtml (which still just concatenates
-// header+body for the compare view's own per-column usage - two independent
-// sticky headers, one per column, sharing one scrolling ancestor) so
-// openPlayerModal can hand the header to openModal's separate non-scrolling
-// slot instead - see that function's own comment for why.
+// Header and body are built separately (not concatenated into one string)
+// so each caller can hand ONLY the header half to openModal's separate
+// non-scrolling headerHtml slot and keep the body half in the ordinary
+// scrolling .modal-content - openComparePlayerModal builds both players'
+// headers into one side-by-side block for that slot, mirroring the same
+// .compare-grid/.compare-col structure the body halves use below it (see
+// that function's own comment).
 // Reuses Rankings' own ★/☆ watch-star convention (see rankings.js's
 // commonColumns) - unwatched by default until wireWatchStar's async
 // loadWatchlist resolves and corrects it, same load-then-correct pattern
@@ -1373,8 +1378,9 @@ function setStarState(star, watched) {
 
 // scopeEl is the header's own containing element - modalBox for
 // openPlayerModal (the header lives in openModal's separate non-scrolling
-// slot there, not .modal-content), or one .compare-col for
-// openComparePlayerModal (each side has its own independent header/star).
+// slot there, not .modal-content), or one of that SAME slot's two
+// .compare-col halves for openComparePlayerModal (each side has its own
+// independent header/star - see that function's own comment).
 function wireWatchStar(scopeEl, player, data) {
   const star = scopeEl.querySelector(`[data-watch-toggle][data-player-id="${player.id}"]`);
   if (!star) return;
@@ -1515,10 +1521,6 @@ function playerModalBodyHtml(player, data, { showCompareTrigger = true } = {}) {
     </div>
     ${tabs.map((t, i) => `<div class="modal-tabpanel${i === 0 ? " active" : ""}" data-modal-panel="${t.key}">${t.html}</div>`).join("")}
   `;
-}
-
-function playerModalContentHtml(player, data, opts = {}) {
-  return playerModalHeaderHtml(player, data, opts) + playerModalBodyHtml(player, data, opts);
 }
 
 // Hidden until "+ Compare" is clicked (see wireCompareTrigger) - a plain
@@ -1669,20 +1671,43 @@ export function openPlayerModal(player, data) {
 // styles.css); on a narrow one the same markup collapses to one column at a
 // time behind the .compare-side-btn toggle instead - same content either
 // way, CSS alone decides which layout renders it.
+//
+// Both players' headers now go into openModal's own separate non-scrolling
+// headerHtml slot - the SAME fix openPlayerModal uses for the single-player
+// view (see modal.js's openModal/.modal-header-slot for the real touch-
+// scroll bug a position:sticky header can't fully avoid). This used to keep
+// both headers position:sticky INSIDE .modal-content instead (the one
+// remaining case that comment used to carve out as still needing it); now
+// nothing does, and .player-modal-header's sticky positioning is dead
+// everywhere (see that rule's own comment in styles.css). The header half
+// reuses the body's own .compare-grid/.compare-col classes so the vertical
+// divider between the two players' name blocks lines up exactly with the
+// one between their stat grids below - and so the SAME .compare-side-btn
+// toggle (also moved up here, always visible instead of scrolling away)
+// can flip both halves' visibility together, by just collecting every
+// .compare-col under modalBox rather than only modalContent's.
 export function openComparePlayerModal(playerA, playerB, data) {
-  const html = `
+  const headerHtml = `
     <div class="compare-toggle">
       <button class="compare-side-btn active" data-compare-side="a">${escapeHtml(playerA.name)}</button>
       <button class="compare-side-btn" data-compare-side="b">${escapeHtml(playerB.name)}</button>
     </div>
     <div class="compare-grid">
-      <div class="compare-col active" data-compare-col="a">${playerModalContentHtml(playerA, data, { showCompareTrigger: false })}</div>
-      <div class="compare-col" data-compare-col="b">${playerModalContentHtml(playerB, data, { showCompareTrigger: false })}</div>
+      <div class="compare-col active" data-compare-col="a">${playerModalHeaderHtml(playerA, data, { showCompareTrigger: false })}</div>
+      <div class="compare-col" data-compare-col="b">${playerModalHeaderHtml(playerB, data, { showCompareTrigger: false })}</div>
     </div>
   `;
-  openModal(html, { wide: true });
+  const bodyHtml = `
+    <div class="compare-grid">
+      <div class="compare-col active" data-compare-col="a">${playerModalBodyHtml(playerA, data, { showCompareTrigger: false })}</div>
+      <div class="compare-col" data-compare-col="b">${playerModalBodyHtml(playerB, data, { showCompareTrigger: false })}</div>
+    </div>
+  `;
+  openModal(bodyHtml, { wide: true, headerHtml });
 
+  const modalBox = document.querySelector(".modal-box");
   const modalContent = document.querySelector(".modal-content");
+  const headerSlot = modalBox.querySelector(".modal-header-slot");
   modalContent.querySelectorAll(".compare-col").forEach((col) => wirePlayerModalTabs(col));
   wireFaabConfidenceSlider(modalContent.querySelector('[data-compare-col="a"]'), playerA, data);
   wireFaabConfidenceSlider(modalContent.querySelector('[data-compare-col="b"]'), playerB, data);
@@ -1690,14 +1715,16 @@ export function openComparePlayerModal(playerA, playerB, data) {
   modalContent.querySelectorAll(".compare-col").forEach((col) => wirePriceCompRows(col));
   wireCompToggles(modalContent.querySelector('[data-compare-col="a"]'), playerA, data);
   wireCompToggles(modalContent.querySelector('[data-compare-col="b"]'), playerB, data);
-  wireWatchStar(modalContent.querySelector('[data-compare-col="a"]'), playerA, data);
-  wireWatchStar(modalContent.querySelector('[data-compare-col="b"]'), playerB, data);
-  wireTargetToggle(modalContent.querySelector('[data-compare-col="a"]'), playerA, data);
-  wireTargetToggle(modalContent.querySelector('[data-compare-col="b"]'), playerB, data);
-  modalContent.querySelectorAll(".compare-side-btn").forEach((btn) => {
+  // Watch-star/target-toggle render as part of the HEADER block (see
+  // playerModalHeaderHtml), which now lives in headerSlot, not modalContent.
+  wireWatchStar(headerSlot.querySelector('[data-compare-col="a"]'), playerA, data);
+  wireWatchStar(headerSlot.querySelector('[data-compare-col="b"]'), playerB, data);
+  wireTargetToggle(headerSlot.querySelector('[data-compare-col="a"]'), playerA, data);
+  wireTargetToggle(headerSlot.querySelector('[data-compare-col="b"]'), playerB, data);
+  modalBox.querySelectorAll(".compare-side-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
-      modalContent.querySelectorAll(".compare-side-btn").forEach((b) => b.classList.toggle("active", b === btn));
-      modalContent.querySelectorAll(".compare-col").forEach((c) => c.classList.toggle("active", c.dataset.compareCol === btn.dataset.compareSide));
+      modalBox.querySelectorAll(".compare-side-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      modalBox.querySelectorAll(".compare-col").forEach((c) => c.classList.toggle("active", c.dataset.compareCol === btn.dataset.compareSide));
     });
   });
 }

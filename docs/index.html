@@ -30,6 +30,7 @@
       <button data-tab="matchups">Matchups</button>
       <button data-tab="schedule">Schedule</button>
       <button data-tab="standings">Standings</button>
+      <button data-tab="trends">Trends</button>
       <button data-tab="settings">Settings</button>
     </nav>
   </div>
@@ -41,6 +42,7 @@
   <section class="tabpanel" id="tab-matchups"></section>
   <section class="tabpanel" id="tab-schedule"></section>
   <section class="tabpanel" id="tab-standings"></section>
+  <section class="tabpanel" id="tab-trends"></section>
   <section class="tabpanel" id="tab-settings"></section>
 
   <footer id="app-footer" class="app-footer">
@@ -48,6 +50,13 @@
   </footer>
 
   <script src="js/trade.js"></script>
+  <!-- Trends tab's chart rendering (docs/js/trends.js) - the one external
+       dependency on this otherwise framework-free site, since every other
+       graphic here is hand-rolled divs/CSS and none needed a flexible
+       multi-series, dual-axis, mixed line/bar chart before. UMD build, no
+       build step, loaded as a plain global (window.Chart) same as this
+       site's own non-module scripts. -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
   <script type="module" src="js/app.js"></script>
 </body>
 </html>

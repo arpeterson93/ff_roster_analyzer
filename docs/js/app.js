@@ -8,6 +8,7 @@ import { renderMatchups } from "./matchups.js";
 import { renderTrade } from "./tradeui.js";
 import { renderSchedule } from "./schedule.js";
 import { renderSettings } from "./settings.js";
+import { renderTrends } from "./trends.js";
 
 const VIEWS = {
   strength: renderStrength,
@@ -17,6 +18,7 @@ const VIEWS = {
   matchups: renderMatchups,
   standings: renderStandings,
   schedule: renderSchedule,
+  trends: renderTrends,
   settings: renderSettings,
 };
 
