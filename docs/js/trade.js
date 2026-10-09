@@ -5,6 +5,13 @@
 
 var EVEN_THRESHOLD_PER_WEEK = 1.0;
 
+// K/DST are almost never actually traded in practice, so the auto-generated
+// suggestion pool below excludes them - same reasoning as engine/team_
+// strength.py's trade_targets (_AUTO_TRADE_EXCLUDED_POSITIONS). A locked
+// player bypasses this pool entirely (see tradeSuggestions), so manually
+// building a trade around a K/DST is still possible, just never auto-picked.
+var AUTO_TRADE_EXCLUDED_POSITIONS = { K: true, DST: true };
+
 function expandSlots(slots) {
   // slots: {label: count} -> [{instance, base}], numbered when count > 1.
   var DISPLAY_LABEL = { "D/ST": "DST", "RB/WR/TE": "FLEX", "RB/WR": "FLEX", "WR/TE": "FLEX" };
@@ -776,8 +783,9 @@ function tradeSuggestions(opts) {
 
   var lockedASet = {}; lockedA.forEach(function (id) { lockedASet[id] = true; });
   var lockedBSet = {}; lockedB.forEach(function (id) { lockedBSet[id] = true; });
-  var poolA = topNByRosTotal(rosterA.filter(function (id) { return !lockedASet[id]; }), players, poolSize);
-  var poolB = topNByRosTotal(rosterB.filter(function (id) { return !lockedBSet[id]; }), players, poolSize);
+  var isAutoEligible = function (id) { return !(players[id] && AUTO_TRADE_EXCLUDED_POSITIONS[players[id].position]); };
+  var poolA = topNByRosTotal(rosterA.filter(function (id) { return !lockedASet[id] && isAutoEligible(id); }), players, poolSize);
+  var poolB = topNByRosTotal(rosterB.filter(function (id) { return !lockedBSet[id] && isAutoEligible(id); }), players, poolSize);
 
   var giveAOptions = sideOptions(lockedA, poolA, maxPerSide);
   var giveBOptions = sideOptions(lockedB, poolB, maxPerSide);

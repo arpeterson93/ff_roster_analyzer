@@ -417,18 +417,22 @@ def test_pickups_does_not_credit_a_bystander_for_a_candidate_leaving_the_wire():
 # --- trade_targets fairness ratio: both sides > 0 alone lets through wildly
 # lopsided "trades" - see the conversation this was built from. Now scored
 # by position_value_team_total (points above replacement), not a lineup-
-# total delta - a "change of scenery" shape: a_k2 is genuinely good but
-# buried on the bench behind a_k1 (discounted 50% as depth), while B has NO
-# kicker at all, so receiving a_k2 makes him B's full-value STARTER;
+# total delta - a "change of scenery" shape: a_te2 is genuinely good but
+# buried on the bench behind a_te1 (discounted 50% as depth), while B has NO
+# tight end at all, so receiving a_te2 makes him B's full-value STARTER;
 # symmetrically, b_rb2 is a real RB but buried behind a dominant b_rb1
 # (discounted depth), becoming pure discounted depth on A's side too (A's
 # own a_rb1 is even bigger, so it never displaces him as starter either).
-_TRADE_SLOTS = {"RB": 1, "K": 1}
-_TRADE_ELIGIBILITY = {"RB": {"RB"}, "K": {"K"}}
+# Uses TE rather than K/DST so these candidates survive trade_targets' own
+# K/DST auto-exclusion (see _AUTO_TRADE_EXCLUDED_POSITIONS) - the dynamic
+# under test (a bench piece becoming a full-value starter elsewhere) is
+# unaffected by which non-excluded position it's tested with.
+_TRADE_SLOTS = {"RB": 1, "TE": 1}
+_TRADE_ELIGIBILITY = {"RB": {"RB"}, "TE": {"TE"}}
 _TRADE_WEEKS = [1, 2]
 _TRADE_FA = {
     "RB": [PlayerCtx(id="fa_rb", position="RB", ros_total=10.0, weekly={1: 5.0, 2: 5.0})],
-    "K": [PlayerCtx(id="fa_k", position="K", ros_total=2.0, weekly={1: 1.0, 2: 1.0})],
+    "TE": [PlayerCtx(id="fa_te", position="TE", ros_total=2.0, weekly={1: 1.0, 2: 1.0})],
 }
 
 
@@ -436,46 +440,46 @@ def _wk(pid, pos, weekly: dict) -> PlayerCtx:
     return PlayerCtx(id=pid, position=pos, ros_total=sum(weekly.values()), weekly=weekly)
 
 
-def _trade_setup(a_k2_ppw: float, b_rb2_ppw: float):
+def _trade_setup(a_te2_ppw: float, b_rb2_ppw: float):
     """My team (A): a dominant RB1 (a_rb1=20, never displaced) and a
-    dominant starting kicker (a_k1=10, never displaced by a_k2), plus a_k2 -
-    a real bench kicker (tunable ppw) I'd give away, discounted 50% as
-    depth behind a_k1. Partner (B): a dominant RB1 (b_rb1=15, never
+    dominant starting TE (a_te1=10, never displaced by a_te2), plus a_te2 -
+    a real bench TE (tunable ppw) I'd give away, discounted 50% as
+    depth behind a_te1. Partner (B): a dominant RB1 (b_rb1=15, never
     displaced by b_rb2) plus b_rb2 - a real bench RB (tunable ppw),
-    discounted 50% as depth behind b_rb1 - and NO rostered kicker at all,
-    so a_k2 would become B's own full-value STARTER if traded there."""
+    discounted 50% as depth behind b_rb1 - and NO rostered TE at all,
+    so a_te2 would become B's own full-value STARTER if traded there."""
     players = {
         "a_rb1": _wk("a_rb1", "RB", {1: 20.0, 2: 20.0}),
-        "a_k1": _wk("a_k1", "K", {1: 10.0, 2: 10.0}),
-        "a_k2": _wk("a_k2", "K", {1: a_k2_ppw, 2: a_k2_ppw}),
+        "a_te1": _wk("a_te1", "TE", {1: 10.0, 2: 10.0}),
+        "a_te2": _wk("a_te2", "TE", {1: a_te2_ppw, 2: a_te2_ppw}),
         "b_rb1": _wk("b_rb1", "RB", {1: 15.0, 2: 15.0}),
         "b_rb2": _wk("b_rb2", "RB", {1: b_rb2_ppw, 2: b_rb2_ppw}),
     }
-    team_a = ["a_rb1", "a_k1", "a_k2"]
+    team_a = ["a_rb1", "a_te1", "a_te2"]
     team_b = ["b_rb1", "b_rb2"]
     return players, team_a, team_b
 
 
 def test_trade_targets_mutual_benefit_rewards_balance_over_raw_gain_self():
-    # Same a_k2 given away either way; b_rb2_ppw controls how BALANCED the
+    # Same a_te2 given away either way; b_rb2_ppw controls how BALANCED the
     # trade is. ppw=8.9: my gain (1.9) dwarfs the partner's (0.1) - lopsided
     # despite a healthy gain_self. ppw=8.0: the two gains are comparable.
     # mutual_benefit (the Nash product gain_self * gain_partner - see
     # _mutual_benefit) must reward the more balanced version even though
     # its gain_self is nearly identical.
-    lopsided_players, team_a, team_b = _trade_setup(a_k2_ppw=3.0, b_rb2_ppw=8.9)
+    lopsided_players, team_a, team_b = _trade_setup(a_te2_ppw=3.0, b_rb2_ppw=8.9)
     lopsided = trade_targets(
         team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=lopsided_players,
         free_agents_by_pos=_TRADE_FA, weeks=_TRADE_WEEKS, slots=_TRADE_SLOTS,
         eligibility=_TRADE_ELIGIBILITY, max_trade_targets=20,
     )
-    balanced_players, team_a, team_b = _trade_setup(a_k2_ppw=3.0, b_rb2_ppw=8.0)
+    balanced_players, team_a, team_b = _trade_setup(a_te2_ppw=3.0, b_rb2_ppw=8.0)
     balanced = trade_targets(
         team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=balanced_players,
         free_agents_by_pos=_TRADE_FA, weeks=_TRADE_WEEKS, slots=_TRADE_SLOTS,
         eligibility=_TRADE_ELIGIBILITY, max_trade_targets=20,
     )
-    match = lambda results: [r for r in results if r["give"] == ["a_k2"] and r["get"] == ["b_rb2"]][0]
+    match = lambda results: [r for r in results if r["give"] == ["a_te2"] and r["get"] == ["b_rb2"]][0]
     lopsided_match, balanced_match = match(lopsided), match(balanced)
     assert balanced_match["mutual_benefit"] > lopsided_match["mutual_benefit"]
     # Never excluded outright despite being lopsided - and here it's
@@ -485,17 +489,17 @@ def test_trade_targets_mutual_benefit_rewards_balance_over_raw_gain_self():
 
 
 def test_trade_targets_ranks_a_balanced_trade_above_the_lopsided_one():
-    # Same a_k2, but b_rb2=8.0 (+3 over the RB bar, discounted to +1.5 as
-    # depth) - now my gain and the partner's gain from a_k2's full-value
+    # Same a_te2, but b_rb2=8.0 (+3 over the RB bar, discounted to +1.5 as
+    # depth) - now my gain and the partner's gain from a_te2's full-value
     # promotion are comparable, so mutual_benefit is much higher than the
     # lopsided b_rb2=8.9 version above.
-    players, team_a, team_b = _trade_setup(a_k2_ppw=3.0, b_rb2_ppw=8.0)
+    players, team_a, team_b = _trade_setup(a_te2_ppw=3.0, b_rb2_ppw=8.0)
     results = trade_targets(
         team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=players,
         free_agents_by_pos=_TRADE_FA, weeks=_TRADE_WEEKS, slots=_TRADE_SLOTS,
         eligibility=_TRADE_ELIGIBILITY, max_trade_targets=20,
     )
-    matches = [r for r in results if r["give"] == ["a_k2"] and r["get"] == ["b_rb2"]]
+    matches = [r for r in results if r["give"] == ["a_te2"] and r["get"] == ["b_rb2"]]
     assert len(matches) == 1
     assert matches[0]["gain_self"] > 0
     assert matches[0]["gain_partner"] > 0
@@ -516,7 +520,7 @@ def test_trade_targets_never_returns_an_empty_list_when_candidates_exist():
     # options - same lopsided-only setup as the ranking test above, but
     # asserting the LIST ITSELF isn't empty, not just that one entry ranks
     # low.
-    players, team_a, team_b = _trade_setup(a_k2_ppw=3.0, b_rb2_ppw=8.9)
+    players, team_a, team_b = _trade_setup(a_te2_ppw=3.0, b_rb2_ppw=8.9)
     results = trade_targets(
         team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=players,
         free_agents_by_pos=_TRADE_FA, weeks=_TRADE_WEEKS, slots=_TRADE_SLOTS,
@@ -761,9 +765,9 @@ def test_position_value_team_total_roster_size_none_skips_constraints():
 
 def test_trade_targets_roster_size_changes_the_candidates_gain():
     # Direct wiring check (see _apply_roster_constraints' own tests for the
-    # underlying mechanism): giving away a_k2 leaves team A with only ONE
-    # kicker (a_k1) - no gap yet, so this isn't the "position dump" case by
-    # itself, but the roster is already AT the cap, so a_k2 leaving and
+    # underlying mechanism): giving away a_te2 leaves team A with only ONE
+    # TE (a_te1) - no gap yet, so this isn't the "position dump" case by
+    # itself, but the roster is already AT the cap, so a_te2 leaving and
     # b_rb3 arriving keeps count unchanged... until b_rb3 (RB depth, since
     # a_rb1 already starts) and the still-thin bench interact with the cap
     # differently than the unconstrained model assumes. Empirically: this
@@ -771,22 +775,24 @@ def test_trade_targets_roster_size_changes_the_candidates_gain():
     # unconstrained, but a real win for both sides once roster_size is
     # applied - confirming roster_size actually changes trade_targets' real
     # output, not just a cosmetic pass-through.
-    slots = {"RB": 1, "K": 1}
-    eligibility = {"RB": {"RB"}, "K": {"K"}}
+    # Uses TE rather than K/DST so a_te2 survives trade_targets' own K/DST
+    # auto-exclusion (see _AUTO_TRADE_EXCLUDED_POSITIONS).
+    slots = {"RB": 1, "TE": 1}
+    eligibility = {"RB": {"RB"}, "TE": {"TE"}}
     weeks = [1, 2]
     free_agents = {
         "RB": [PlayerCtx(id="fa_rb", position="RB", ros_total=10.0, weekly={1: 5.0, 2: 5.0})],
-        "K": [PlayerCtx(id="fa_k", position="K", ros_total=2.0, weekly={1: 1.0, 2: 1.0})],
+        "TE": [PlayerCtx(id="fa_te", position="TE", ros_total=2.0, weekly={1: 1.0, 2: 1.0})],
     }
     players = {
         "a_rb1": _wk("a_rb1", "RB", {1: 20.0, 2: 20.0}),
-        "a_k1": _wk("a_k1", "K", {1: 10.0, 2: 10.0}),
-        "a_k2": _wk("a_k2", "K", {1: 3.0, 2: 3.0}),
+        "a_te1": _wk("a_te1", "TE", {1: 10.0, 2: 10.0}),
+        "a_te2": _wk("a_te2", "TE", {1: 3.0, 2: 3.0}),
         "b_rb1": _wk("b_rb1", "RB", {1: 15.0, 2: 15.0}),
         "b_rb2": _wk("b_rb2", "RB", {1: 12.0, 2: 12.0}),
         "b_rb3": _wk("b_rb3", "RB", {1: 9.0, 2: 9.0}),
     }
-    team_a = ["a_rb1", "a_k1", "a_k2"]
+    team_a = ["a_rb1", "a_te1", "a_te2"]
     team_b = ["b_rb1", "b_rb2", "b_rb3"]
 
     unconstrained = trade_targets(
@@ -799,12 +805,137 @@ def test_trade_targets_roster_size_changes_the_candidates_gain():
         free_agents_by_pos=free_agents, weeks=weeks, slots=slots, eligibility=eligibility,
         max_trade_targets=20, roster_size=3, two_for_one_pool_size=3,
     )
-    match = lambda results: [r for r in results if r["give"] == ["a_k2"] and r["get"] == ["b_rb3"]]
+    match = lambda results: [r for r in results if r["give"] == ["a_te2"] and r["get"] == ["b_rb3"]]
     unconstrained_match = match(unconstrained)
     assert len(unconstrained_match) == 1
     # sanity check: this candidate is a real loser for at least one side
     # unconstrained (the old fairness filter would have excluded it)
     assert unconstrained_match[0]["gain_self"] <= 0 or unconstrained_match[0]["gain_partner"] <= 0
     assert match(constrained) == [
-        {"partner_team_id": 2, "give": ["a_k2"], "get": ["b_rb3"], "gain_self": 2.0, "gain_partner": 4.0, "mutual_benefit": 8.0}
+        {"partner_team_id": 2, "give": ["a_te2"], "get": ["b_rb3"], "gain_self": 2.0, "gain_partner": 4.0, "mutual_benefit": 8.0}
     ]
+
+
+def test_trade_targets_excludes_k_and_dst_from_automated_suggestions():
+    # a_k1/b_dst1 would be a huge mutual win if swapped (each side goes
+    # from a true zero at a whole position to a strong starter there) - a
+    # trade a team would genuinely want recommended by the raw numbers
+    # alone. It must never appear as a give or a get: K/DST are almost
+    # never actually traded in practice, so the auto-generator excludes
+    # them from its candidate pool entirely (see
+    # _AUTO_TRADE_EXCLUDED_POSITIONS), however good the number looks. The
+    # RB-for-RB combo is a true no-op (identical ppw) and is only here to
+    # prove the K/DST exclusion isn't just coincidentally emptying the
+    # whole list - something still comes back.
+    slots = {"RB": 1, "K": 1, "DST": 1}
+    eligibility = {"RB": {"RB"}, "K": {"K"}, "DST": {"DST"}}
+    weeks = [1, 2]
+    players = {
+        "a_rb1": _wk("a_rb1", "RB", {1: 5.0, 2: 5.0}),
+        "a_k1": _wk("a_k1", "K", {1: 10.0, 2: 10.0}),
+        "b_rb1": _wk("b_rb1", "RB", {1: 5.0, 2: 5.0}),
+        "b_dst1": _wk("b_dst1", "DST", {1: 10.0, 2: 10.0}),
+    }
+    team_a = ["a_rb1", "a_k1"]
+    team_b = ["b_rb1", "b_dst1"]
+    results = trade_targets(
+        team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=players,
+        free_agents_by_pos={}, weeks=weeks, slots=slots, eligibility=eligibility,
+        max_trade_targets=20,
+    )
+    assert results != []
+    excluded = {"a_k1", "b_dst1"}
+    for r in results:
+        assert not excluded.intersection(r["give"])
+        assert not excluded.intersection(r["get"])
+
+
+def test_trade_targets_diversity_cap_limits_repeat_receive_side_players():
+    # b_star is the ONLY player on the partner roster, so every single raw
+    # candidate (1-for-1 and 2-for-1 alike) necessarily "get"s him - without
+    # a cap, one standout player could flood the whole suggestion list with
+    # minor variations of the same offer for him.
+    slots = {"RB": 1}
+    eligibility = {"RB": {"RB"}}
+    weeks = [1]
+    players = {
+        "a1": _wk("a1", "RB", {1: 5.0}),
+        "a2": _wk("a2", "RB", {1: 8.0}),
+        "a3": _wk("a3", "RB", {1: 11.0}),
+        "a4": _wk("a4", "RB", {1: 14.0}),
+        "a5": _wk("a5", "RB", {1: 17.0}),
+        "b_star": _wk("b_star", "RB", {1: 30.0}),
+    }
+    team_a = ["a1", "a2", "a3", "a4", "a5"]
+    team_b = ["b_star"]
+
+    uncapped = trade_targets(
+        team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=players,
+        free_agents_by_pos={}, weeks=weeks, slots=slots, eligibility=eligibility,
+        max_trade_targets=20, diversity_cap=20,
+    )
+    # Sanity check: there really are more than 2 raw candidates here for a
+    # cap of 2 to actually have something to trim.
+    assert len(uncapped) > 2
+
+    capped = trade_targets(
+        team_id=1, team_player_ids=team_a, other_teams={2: team_b}, players=players,
+        free_agents_by_pos={}, weeks=weeks, slots=slots, eligibility=eligibility,
+        max_trade_targets=20, diversity_cap=2,
+    )
+    assert len(capped) == 2
+    assert all(r["get"] == ["b_star"] for r in capped)
+    # The two survivors are the two BEST (by mutual_benefit) of the
+    # uncapped list - diversity_cap trims the ranked list, it doesn't
+    # re-rank it.
+    assert capped == sorted(uncapped, key=lambda r: r["mutual_benefit"], reverse=True)[:2]
+
+
+def test_trade_targets_guarantees_at_least_one_candidate_per_partner():
+    # A deliberately tiny max_trade_targets (1) means a flat global top
+    # list would only ever surface whichever partner happens to have the
+    # single best trade - any OTHER partner would never appear at all,
+    # even though "what can I get from this specific team" is exactly what
+    # browsing trade targets per-partner is for. Every partner with at
+    # least one surviving (post-diversity-cap) candidate must get its own
+    # best one included, regardless of how low that candidate ranks
+    # globally.
+    slots = {"RB": 1, "TE": 1}
+    eligibility = {"RB": {"RB"}, "TE": {"TE"}}
+    weeks = [1, 2]
+    players = {
+        "m_rb1": _wk("m_rb1", "RB", {1: 20.0, 2: 20.0}),
+        "m_te1": _wk("m_te1", "TE", {1: 10.0, 2: 10.0}),
+        "m_te2": _wk("m_te2", "TE", {1: 3.0, 2: 3.0}),
+        "p2_rb1": _wk("p2_rb1", "RB", {1: 15.0, 2: 15.0}),
+        "p2_rb2": _wk("p2_rb2", "RB", {1: 8.0, 2: 8.0}),
+        "p3_rb1": _wk("p3_rb1", "RB", {1: 15.0, 2: 15.0}),
+        "p3_rb2": _wk("p3_rb2", "RB", {1: 4.0, 2: 4.0}),
+    }
+    mine = ["m_rb1", "m_te1", "m_te2"]
+    partner2 = ["p2_rb1", "p2_rb2"]
+    partner3 = ["p3_rb1", "p3_rb2"]
+
+    full = trade_targets(
+        team_id=1, team_player_ids=mine, other_teams={2: partner2, 3: partner3}, players=players,
+        free_agents_by_pos={}, weeks=weeks, slots=slots, eligibility=eligibility, max_trade_targets=20,
+    )
+    best_by_partner = {}
+    for r in full:
+        best_by_partner.setdefault(r["partner_team_id"], r)
+    assert set(best_by_partner) == {2, 3}
+    # The two partners' best trades must actually differ in rank, or a
+    # max_trade_targets=1 slice could coincidentally include both anyway
+    # and this test would pass without exercising the guarantee at all.
+    assert best_by_partner[2]["mutual_benefit"] != best_by_partner[3]["mutual_benefit"]
+
+    capped = trade_targets(
+        team_id=1, team_player_ids=mine, other_teams={2: partner2, 3: partner3}, players=players,
+        free_agents_by_pos={}, weeks=weeks, slots=slots, eligibility=eligibility, max_trade_targets=1,
+    )
+    assert {r["partner_team_id"] for r in capped} == {2, 3}
+    # The global #1 (the higher-mutual_benefit of the two partner bests) is
+    # still in the list - the guarantee adds the left-out partner, it
+    # doesn't bump the genuine top pick.
+    top = max(best_by_partner.values(), key=lambda r: r["mutual_benefit"])
+    assert top in capped

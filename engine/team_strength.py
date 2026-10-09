@@ -553,6 +553,9 @@ def _mutual_benefit(gain_self: float, gain_partner: float) -> float:
     return gain_self * gain_partner
 
 
+_AUTO_TRADE_EXCLUDED_POSITIONS = frozenset({"K", "DST"})
+
+
 def trade_targets(
     team_id: int,
     team_player_ids: list[str],
@@ -566,6 +569,7 @@ def trade_targets(
     candidate_pool_size: int = 10,
     two_for_one_pool_size: int = 6,
     roster_size: int | None = None,
+    diversity_cap: int = 2,
 ) -> list[dict]:
     """1-for-1 swaps with every other team (top `candidate_pool_size` by
     ros_total each side) plus 2-for-1 swaps (top `two_for_one_pool_size` each
@@ -605,10 +609,31 @@ def trade_targets(
     your only bad player at a position for a free win" exploit and missing
     roster-cap check the Trade Calculator's own engine had before its
     matching fix (see the conversation this was built from). None (the
-    default) skips this - unconstrained scoring, the old behavior."""
+    default) skips this - unconstrained scoring, the old behavior.
+
+    K/DST are never offered up by this auto-generator (see top_n below) -
+    in practice they're almost never actually traded, so surfacing them
+    here just crowds out real suggestions with throw-ins nobody would
+    make. Manually building a trade around a K/DST is still possible via
+    the Trade Calculator (docs/js/trade.js's tradeSuggestions), which has
+    no such exclusion for a player explicitly locked in.
+
+    diversity_cap limits how many times the SAME receive-side player
+    ("get") can appear across the returned list - without it, a single
+    standout player can crowd out the top `max_trade_targets` with minor
+    variations of the same offer for him (see _dedup_by_get_diversity).
+
+    The final list is also no longer a flat global top-`max_trade_targets`
+    by mutual_benefit: that alone could starve most partners entirely if
+    a couple of teams happen to have the juiciest trades, leaving someone
+    browsing for "what could I get from team X" with nothing. Every
+    partner with at least one surviving (post-diversity-cap) candidate is
+    guaranteed its own best one, in addition to the global top
+    `max_trade_targets` - see the partner-guarantee step below."""
 
     def top_n(pids: list[str], n: int) -> list[str]:
-        return sorted((p for p in pids if p in players), key=lambda p: players[p].ros_total, reverse=True)[:n]
+        eligible = (p for p in pids if p in players and players[p].position not in _AUTO_TRADE_EXCLUDED_POSITIONS)
+        return sorted(eligible, key=lambda p: players[p].ros_total, reverse=True)[:n]
 
     def team_total(roster: list[str]) -> float:
         return position_value_team_total(roster, players, free_agents_by_pos, weeks, slots, eligibility, roster_size=roster_size)
@@ -651,7 +676,32 @@ def trade_targets(
                 }
             )
     results.sort(key=lambda r: r["mutual_benefit"], reverse=True)
-    return results[:max_trade_targets]
+
+    # Greedily keep candidates in ranked order, skipping (not permanently
+    # dropping - a lower-ranked offer for the same player can still get in
+    # later) any whose "get" player has already hit diversity_cap
+    # elsewhere in the list - caps how many near-duplicate offers for one
+    # standout player can flood the suggestions.
+    get_counts: dict[str, int] = {}
+    diverse = []
+    for r in results:
+        if all(get_counts.get(pid, 0) < diversity_cap for pid in r["get"]):
+            diverse.append(r)
+            for pid in r["get"]:
+                get_counts[pid] = get_counts.get(pid, 0) + 1
+
+    top_overall = diverse[:max_trade_targets]
+    represented_partners = {r["partner_team_id"] for r in top_overall}
+
+    # diverse is still sorted by mutual_benefit, so the first candidate
+    # seen per partner here is that partner's best surviving one.
+    best_by_partner: dict[int, dict] = {}
+    for r in diverse:
+        best_by_partner.setdefault(r["partner_team_id"], r)
+
+    final = top_overall + [best_by_partner[pid] for pid in best_by_partner if pid not in represented_partners]
+    final.sort(key=lambda r: r["mutual_benefit"], reverse=True)
+    return final
 
 
 def _robust_slot_order(slots: dict[str, int], eligibility: dict[str, set[str]]) -> list[tuple[str, str]]:
