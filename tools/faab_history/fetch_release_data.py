@@ -57,7 +57,7 @@ FILES = {
     # .parquet, not .json - see build_training_table.py's COMBINED_OUT_PATH
     # comment (the pooled table's row count makes a plain json.loads OOM a
     # CI runner outright; polars loads/reduces a Parquet file columnar).
-    "combined-training-table.parquet": "26ad257f621e8a9012526262f7aecaee94789b28a332fadb9bd735da1b2c08ed",
+    "combined-training-table.parquet": "f0c04fc085dc3d2bb938f118484bceda1be17d7df3fbdf54b5e2e83bb774bc6d",
     "other-leagues-bids-raw.json": "2ec2b8ffa150b31754dd7d4d4c6fa395d055b3f0b6c8b3b944ad806d6e3e3bee",
     "other-leagues-bids.json": "c35bc7d550b83b28942d538dfccb96ab372b802e5e479b11a7557952ffc0d6de",
     "other-leagues-rostered-by-week.json": "241c2caad0785115dcaa1e6fa4d399f62da6d3a59e5755e631b93b4026c5ff81",

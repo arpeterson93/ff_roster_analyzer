@@ -84,6 +84,7 @@ def test_forward_rank_features_substitutes_ros_rank_during_a_real_blackout():
             # no weekly-rb snapshot for this player at all
         },
         "blackout": {("weekly-rb", 2024, 2): True},
+        "byes": {},
     }
     out = forward_rank_features("00-1", "RB", 2024, 2, idmap, rank_index)
     assert out["ros_rank"] == 80.38
@@ -99,6 +100,7 @@ def test_forward_rank_features_leaves_a_real_individual_gap_alone_outside_blacko
         "week_starts": WEEK_STARTS_2024,
         "snapshots": {("redraft-rb", 555): [(dt.date(2024, 9, 1), 80.38)]},
         "blackout": {("weekly-rb", 2024, 2): False},
+        "byes": {},
     }
     out = forward_rank_features("00-1", "RB", 2024, 2, idmap, rank_index)
     assert out["ros_rank"] == 80.38
@@ -111,6 +113,7 @@ def test_forward_rank_features_stays_none_when_ros_rank_is_also_missing():
         "week_starts": WEEK_STARTS_2024,
         "snapshots": {},  # no coverage of any kind for this player
         "blackout": {("weekly-rb", 2024, 2): True},
+        "byes": {},
     }
     out = forward_rank_features("00-1", "RB", 2024, 2, idmap, rank_index)
     assert out["ros_rank"] is None
@@ -130,9 +133,89 @@ def test_forward_rank_features_uses_the_real_weekly_rank_when_one_exists():
             ("redraft-rb", 555): [(dt.date(2024, 9, 1), 80.38)],
         },
         "blackout": {("weekly-rb", 2024, 2): True},
+        "byes": {},
     }
     out = forward_rank_features("00-1", "RB", 2024, 2, idmap, rank_index)
     assert out["weekly_rank"] == 12.0
+
+
+def test_forward_rank_features_substitutes_ros_rank_when_own_team_is_on_a_bye():
+    # No leaguewide blackout here (blackout: False) - the ONLY reason this
+    # player's weekly rank is missing is his own team's bye that week, the
+    # same kind of structural non-signal the leaguewide blackout rescue
+    # already handles above: FantasyPros has no game to rank him for,
+    # which says nothing about his real caliber, so his ROS rank stands in
+    # instead. Mirrors engine/pipeline.py's faab_weekly_rank, the live
+    # analog of this exact rescue.
+    idmap = _idmap({"00-1": 555})
+    rank_index = {
+        "week_starts": WEEK_STARTS_2024,
+        "snapshots": {("redraft-rb", 555): [(dt.date(2024, 9, 1), 80.38)]},
+        "blackout": {("weekly-rb", 2024, 2): False},
+        "byes": {2024: {"SF": 2}},
+    }
+    out = forward_rank_features("00-1", "RB", 2024, 2, idmap, rank_index, team="SF")
+    assert out["ros_rank"] == 80.38
+    assert out["weekly_rank"] == 80.38  # substituted
+
+
+def test_forward_rank_features_bye_rescue_keys_off_the_exact_week():
+    # Same player/team, but HIS real bye is week 3, not week 2 - the rescue
+    # must check the SPECIFIC week being asked about, not just whether the
+    # team has a bye somewhere in the index at all.
+    idmap = _idmap({"00-1": 555})
+    rank_index = {
+        "week_starts": WEEK_STARTS_2024,
+        "snapshots": {("redraft-rb", 555): [(dt.date(2024, 9, 1), 80.38)]},
+        "blackout": {("weekly-rb", 2024, 2): False},
+        "byes": {2024: {"SF": 3}},
+    }
+    out = forward_rank_features("00-1", "RB", 2024, 2, idmap, rank_index, team="SF")
+    assert out["weekly_rank"] is None
+
+
+def test_forward_rank_features_bye_rescue_requires_a_known_team():
+    # Without a team (the default - see the two call sites in this module
+    # that only ever read ros_rank back out, which never pass one), the
+    # bye rescue can't fire even though the week matches a real bye
+    # somewhere in the index: not knowing the player's team means we
+    # genuinely don't know whether THIS is a bye for him, so the gap is
+    # left alone like any other real individual gap.
+    idmap = _idmap({"00-1": 555})
+    rank_index = {
+        "week_starts": WEEK_STARTS_2024,
+        "snapshots": {("redraft-rb", 555): [(dt.date(2024, 9, 1), 80.38)]},
+        "blackout": {("weekly-rb", 2024, 2): False},
+        "byes": {2024: {"SF": 2}},
+    }
+    out = forward_rank_features("00-1", "RB", 2024, 2, idmap, rank_index)
+    assert out["weekly_rank"] is None
+
+
+def test_enrich_player_week_applies_the_bye_rescue_via_team_that_week():
+    # Integration check that enrich_player_week actually wires its own
+    # team_that_week through to forward_rank_features' `team` kwarg (see
+    # the unit tests above for the rescue logic itself) - a dropped
+    # `team=` at that call site would silently regress to "never rescue,"
+    # which a forward_rank_features-only test can't catch.
+    stats = pl.DataFrame(
+        {"player_id": ["g1"], "week": [2], "position": ["RB"], "team": ["SF"], "carries": [0], "targets": [0], "target_share": [0.0]}
+    )
+    season_index = build_season_index(stats, _EMPTY_INJURIES, _EMPTY_SNAPS, _EMPTY_ROSTERS_WEEKLY)
+    rank_index = {
+        "week_starts": WEEK_STARTS_2024,
+        "snapshots": {("redraft-rb", 555): [(dt.date(2024, 9, 1), 80.38)]},
+        "blackout": {("weekly-rb", 2024, 2): False},
+        "byes": {2024: {"SF": 2}},
+    }
+    enriched = enrich_player_week(
+        gsis_id="g1", position="RB", season=2024, week=2,
+        season_index=season_index,
+        scoring=ScoringRules.from_espn([{"id": 42, "abbr": "REY", "points": 1}]),
+        idmap=_idmap({"g1": 555}), gsis_to_pfr={}, rank_index=rank_index,
+    )
+    assert enriched["team_that_week"] == "SF"
+    assert enriched["weekly_rank"] == 80.38
 
 
 def test_ros_ranked_candidates_returns_gsis_id_to_rank_for_qualifying_players():
@@ -178,6 +261,7 @@ def test_build_no_bid_rows_widens_to_a_ros_ranked_player_with_no_stats_row_at_al
         "week_starts": WEEK_STARTS_2024,
         "snapshots": {("redraft-rb", 777): [(dt.date(2024, 9, 1), 65.0)]},
         "blackout": {},
+        "byes": {},
     }
     rows = build_no_bid_rows(
         league_id=1,
@@ -212,6 +296,7 @@ def test_build_no_bid_rows_does_not_widen_a_player_above_the_ros_rank_ceiling():
         "week_starts": WEEK_STARTS_2024,
         "snapshots": {("redraft-rb", 777): [(dt.date(2024, 9, 1), 150.0)]},  # well above RB's 73 ceiling
         "blackout": {},
+        "byes": {},
     }
     rows = build_no_bid_rows(
         league_id=1,
@@ -244,7 +329,7 @@ def test_enrich_player_week_snap_pct_falls_back_to_two_weeks_prior():
         gsis_id="g1", position="RB", season=2024, week=5,
         season_index=season_index,
         scoring=ScoringRules.from_espn([{"id": 42, "abbr": "REY", "points": 1}]),
-        idmap=_idmap({}), gsis_to_pfr={"g1": "p1"}, rank_index={"snapshots": {}, "week_starts": {}, "blackout": {}},
+        idmap=_idmap({}), gsis_to_pfr={"g1": "p1"}, rank_index={"snapshots": {}, "week_starts": {}, "blackout": {}, "byes": {}},
     )
     assert enriched["snap_pct_prior_week"] == 0.55
 
@@ -270,7 +355,7 @@ def test_enrich_player_week_flags_a_teammate_on_reserve_status_with_no_injury_re
         season_index=season_index,
         scoring=ScoringRules.from_espn([{"id": 42, "abbr": "REY", "points": 1}]),
         idmap=_idmap({}), gsis_to_pfr={"starter": "starter_pfr"},
-        rank_index={"snapshots": {}, "week_starts": {}, "blackout": {}},
+        rank_index={"snapshots": {}, "week_starts": {}, "blackout": {}, "byes": {}},
     )
     assert enriched["teammate_position_injury_flag"] is True
     # He wasn't flagged (by either source) the week before either - week 4
@@ -291,7 +376,7 @@ def test_enrich_player_week_does_not_flag_a_merely_questionable_own_status():
         gsis_id="g1", position="RB", season=2024, week=5,
         season_index=season_index,
         scoring=ScoringRules.from_espn([{"id": 42, "abbr": "REY", "points": 1}]),
-        idmap=_idmap({}), gsis_to_pfr={}, rank_index={"snapshots": {}, "week_starts": {}, "blackout": {}},
+        idmap=_idmap({}), gsis_to_pfr={}, rank_index={"snapshots": {}, "week_starts": {}, "blackout": {}, "byes": {}},
     )
     assert enriched["own_injury_status"] is None
 
@@ -315,7 +400,7 @@ def test_enrich_player_week_does_not_flag_an_ongoing_injury_as_new():
         season_index=season_index,
         scoring=ScoringRules.from_espn([{"id": 42, "abbr": "REY", "points": 1}]),
         idmap=_idmap({}), gsis_to_pfr={"starter": "starter_pfr"},
-        rank_index={"snapshots": {}, "week_starts": {}, "blackout": {}},
+        rank_index={"snapshots": {}, "week_starts": {}, "blackout": {}, "byes": {}},
     )
     assert enriched["teammate_position_injury_flag"] is True
     assert enriched["teammate_position_injury_is_new"] is False
@@ -333,6 +418,7 @@ def test_enrich_player_week_rank_rescues_a_teammate_with_no_recent_snap_data():
         "week_starts": WEEK_STARTS_2024,
         "snapshots": {("redraft-rb", 777): [(dt.date(2024, 9, 1), 50.0)]},  # well under RB's 73 ceiling
         "blackout": {},
+        "byes": {},
     }
     season_index = build_season_index(stats, injuries, _EMPTY_SNAPS, _EMPTY_ROSTERS_WEEKLY)
 

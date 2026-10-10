@@ -301,7 +301,8 @@ _RANK_PAGE_TYPES = [f"weekly-{p}" for p in _RANK_POSITIONS.values()] + [f"redraf
 def build_rank_index(seasons: list[int]) -> dict:
     """{"snapshots": {(page_type, fp_id): sorted [(date, ecr), ...]},
         "week_starts": {(season, week): date of that week's first real
-        game}, "blackout": {(page_type, season, week): bool}}. week_starts
+        game}, "blackout": {(page_type, season, week): bool},
+        "byes": {season: {team: that team's one bye week}}}. week_starts
     is the boundary a rank lookup must stay STRICTLY BEFORE - real leagues
     process FAAB before that week's games even start (see
     pull_o_league_bids.py's own docstring on FAAB timing), so a rank
@@ -309,8 +310,13 @@ def build_rank_index(seasons: list[int]) -> dict:
     bidder deciding that week. blackout flags a genuine leaguewide "nobody
     at this position has a real weekly rank yet this season" window (see
     _compute_weekly_blackouts) - forward_rank_features consults it to
-    substitute ROS rank for a player's own missing weekly rank ONLY during
-    a real blackout, not whenever any one player happens to lack one."""
+    substitute ROS rank for a player's own missing weekly rank during a
+    real blackout OR (see byes, and the SAME team.nfl_week_context this
+    file's own team_that_week values are keyed against - raw nflreadpy
+    schedules/player_stats already share one canonical team-code space, so
+    no _normalize_team_columns crosswalk is needed here) a genuine bye -
+    never whenever any one player simply happens to lack a weekly rank for
+    no structural reason."""
     rankings = nfl.load_ff_rankings("all").filter(pl.col("page_type").is_in(_RANK_PAGE_TYPES))
     snapshots: dict[tuple, list[tuple]] = defaultdict(list)
     for row in rankings.iter_rows(named=True):
@@ -333,6 +339,7 @@ def build_rank_index(seasons: list[int]) -> dict:
         snapshots[key].sort()
 
     week_starts: dict[tuple, dt.date] = {}
+    byes: dict[int, dict[str, int]] = {}
     for season in seasons:
         sched = nfl.load_schedules([season])
         for row in sched.iter_rows(named=True):
@@ -342,8 +349,19 @@ def build_rank_index(seasons: list[int]) -> dict:
             key = (season, row["week"])
             if key not in week_starts or date < week_starts[key]:
                 week_starts[key] = date
+        # Same derivation (ingest.nfl_data.nfl_week_context) the live FAAB
+        # path (engine/pipeline.py's faab_weekly_rank) uses for bye_weeks -
+        # a historical row's bye rescue below must agree with the live
+        # query's own rescue on what counts as a bye, or the two wouldn't
+        # actually be comparable.
+        byes[season] = nd.nfl_week_context(season, sched)[1]
 
-    return {"snapshots": dict(snapshots), "week_starts": week_starts, "blackout": _compute_weekly_blackouts(snapshots, week_starts, seasons)}
+    return {
+        "snapshots": dict(snapshots),
+        "week_starts": week_starts,
+        "blackout": _compute_weekly_blackouts(snapshots, week_starts, seasons),
+        "byes": byes,
+    }
 
 
 # How far before/after a season's own week-1 kickoff to look for that
@@ -428,7 +446,15 @@ def _rank_lookup(rank_index: dict, page_type: str, fp_id: int | None, season: in
     return snaps[idx][1]
 
 
-def forward_rank_features(gsis_id: str | None, position: str | None, season: int, week: int, idmap, rank_index: dict) -> dict:
+def forward_rank_features(
+    gsis_id: str | None, position: str | None, season: int, week: int, idmap, rank_index: dict, team: str | None = None
+) -> dict:
+    """team (the player's own NFL team that week - enrich_player_week's
+    team_that_week) is optional and only used for the bye rescue below; the
+    two call sites that only ever read this dict's ros_rank (teammate_ros_
+    rank and build_no_bid_rows' own ros_rank scan) don't pass it, since a
+    bye can never affect ros_rank - it's a season-long number, not tied to
+    any one week's slate."""
     pos = _RANK_POSITIONS.get(position) if position else None
     fp_id = None
     if gsis_id and pos:
@@ -439,17 +465,28 @@ def forward_rank_features(gsis_id: str | None, position: str | None, season: int
     weekly_page = f"weekly-{pos}"
     weekly_rank = _rank_lookup(rank_index, weekly_page, fp_id, season, week)
     ros_rank = _rank_lookup(rank_index, f"redraft-{pos}", fp_id, season, week)
-    # A real leaguewide blackout (see _compute_weekly_blackouts) means this
-    # player's own missing weekly rank carries no information at all - EVERY
-    # player at this position is unranked right now, stars included, so his
-    # ROS rank is the best available stand-in rather than the flat
-    # MISSING_RANK_SENTINEL every other blacked-out player would also
-    # collapse onto (which would make them all look artificially identical
-    # in feature-vector distance regardless of true talent - see the
-    # conversation this was built from). Left alone outside a real blackout:
-    # one specific player missing the weekly cheat sheet while others at his
-    # position DO have one is real signal, not a data gap.
-    if weekly_rank is None and ros_rank is not None and rank_index["blackout"].get((weekly_page, season, week), False):
+    # Two structural reasons a real weekly rank can be missing despite a
+    # real ROS rank existing, neither of which says anything about the
+    # player's own caliber - rescued the same way, by standing in his ROS
+    # rank instead of the flat MISSING_RANK_SENTINEL a genuinely unranked
+    # player would also collapse onto (which would make the two look
+    # artificially identical in feature-vector distance - see the
+    # conversation this was built from):
+    #   1. A real LEAGUEWIDE blackout (see _compute_weekly_blackouts) -
+    #      EVERY player at this position is unranked right now, stars
+    #      included, so his season-long ROS read is the best stand-in.
+    #   2. HIS team is on a bye this week (see rank_index["byes"], built
+    #      alongside blackout in build_rank_index) - FantasyPros has no
+    #      game to rank him for, which is a schedule fact, not a verdict on
+    #      him. Same rescue engine/pipeline.py's faab_weekly_rank applies
+    #      live, so a historical bye-week row and a live bye-week query are
+    #      actually comparable instead of both just reading "unranked."
+    # Left alone in every OTHER case: one specific player missing the
+    # weekly cheat sheet while others at his position (with a game this
+    # week) DO have one is real signal, not a data gap.
+    is_blackout = rank_index["blackout"].get((weekly_page, season, week), False)
+    is_bye = team is not None and rank_index["byes"].get(season, {}).get(team) == week
+    if weekly_rank is None and ros_rank is not None and (is_blackout or is_bye):
         weekly_rank = ros_rank
     return {"weekly_rank": weekly_rank, "ros_rank": ros_rank}
 
@@ -606,7 +643,7 @@ def enrich_player_week(
         "season_avg_points": season_avg_points,
         "carry_share_prior_week": recent_carry_share(gsis_id, week, season_index.stats_by_player, season_index.team_rb_carries),
         "target_share_prior_week": recent_target_share(gsis_id, week, season_index.stats_by_player),
-        **forward_rank_features(gsis_id, position, season, week, idmap, rank_index),
+        **forward_rank_features(gsis_id, position, season, week, idmap, rank_index, team=team_that_week),
     }
 
 

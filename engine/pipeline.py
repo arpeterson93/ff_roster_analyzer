@@ -432,17 +432,27 @@ def _compute_faab_estimates(
     def faab_weekly_rank(p: dict) -> float | None:
         """This candidate's weekly rank for FAAB purposes only - substitutes
         his own ROS rank when NO player at this position has a real weekly
-        rank yet this week (see position_weekly_blackout above), leaving a
-        real "just not on the weekly cheat sheet while others are" gap
-        alone otherwise - see the conversation this was built from (Dylan
-        Laube, 2026 wk2, and Carson Steele/Jordan Mason/Isaac Guerendo, all
-        real historical comps whose OWN weekly rank was missing purely
-        because their season's weekly rankings hadn't started publishing
-        yet, not because they were individually obscure)."""
+        rank yet this week (see position_weekly_blackout above) OR when THIS
+        player specifically has no game this week (a bye - FantasyPros has
+        nothing to rank him for, which says nothing about his real caliber),
+        leaving a real "just not on the weekly cheat sheet while others are"
+        gap alone otherwise - see the conversation this was built from
+        (Dylan Laube, 2026 wk2, and Carson Steele/Jordan Mason/Isaac
+        Guerendo, all real historical comps whose OWN weekly rank was
+        missing purely because their season's weekly rankings hadn't
+        started publishing yet, not because they were individually obscure;
+        the bye case is the same idea, scoped to one player instead of a
+        whole position - a star on a bye shouldn't k-NN-match against
+        genuinely replacement-level unranked players just because both show
+        up with no weekly rank. See also build_training_table.py's
+        forward_rank_features, which applies the identical bye rescue to
+        the historical training rows this estimate's comps are drawn from)."""
         wk = p.get("week_pos_rank")
         if wk is not None:
             return wk
-        if position_weekly_blackout.get(p["position"]) and p.get("ros_pos_rank") is not None:
+        if p.get("ros_pos_rank") is None:
+            return None
+        if position_weekly_blackout.get(p["position"]) or p.get("bye") == current_week:
             return p["ros_pos_rank"]
         return None
 
