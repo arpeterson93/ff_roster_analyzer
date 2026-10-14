@@ -2,7 +2,7 @@
   "name": "Stackademics",
   "short_name": "Stackademics",
   "description": "Fantasy football roster analytics - points-above-replacement player valuation, trade calculator, start/sit optimizer, matchup grids, waiver/FAAB estimates, and playoff-odds simulation.",
-  "id": "/",
+  "id": "./",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
