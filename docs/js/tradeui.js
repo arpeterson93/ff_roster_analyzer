@@ -91,22 +91,33 @@ function rosterTable(side, playersList, selected, sortMode) {
 // that detail once a suggestion is selected). Clicking a row is wired
 // separately (see wireSuggestionRows) since it needs the live `suggestions`
 // array, not just this HTML.
+// Desktop keeps Team A gives/Team B gives/A gain/B gain as their own columns
+// (".desktop-col"); mobile folds the two "gives" lists and the two gains
+// into stacked divs within one column each (".mobile-col") - same "two
+// renderings, one breakpoint decides" pattern as Team Strength's Trade
+// Targets table (see strength.js's tradeTargetsTable).
 function suggestionsTableHtml(suggestions, playersById) {
   if (!suggestions.length) {
     return `<p class="muted small">No trades found that clear the fairness bar for this pair - try locking a player (check a box above) to search around them, or pick a different partner.</p>`;
   }
   const names = (ids) => ids.map((id) => escapeHtml(playersById.get(id)?.name ?? id)).join(", ");
   const rows = suggestions
-    .map(
-      (s, i) => `<tr class="clickable-row" data-suggestion-index="${i}">
-        <td>${names(s.giveA)}</td>
-        <td>${names(s.giveB)}</td>
-        <td>${s.gainA >= 0 ? "+" : ""}${fmt(s.gainA, 1)}</td>
-        <td>${s.gainB >= 0 ? "+" : ""}${fmt(s.gainB, 1)}</td>
-      </tr>`
-    )
+    .map((s, i) => {
+      const giveA = names(s.giveA);
+      const giveB = names(s.giveB);
+      const gainA = `${s.gainA >= 0 ? "+" : ""}${fmt(s.gainA, 1)}`;
+      const gainB = `${s.gainB >= 0 ? "+" : ""}${fmt(s.gainB, 1)}`;
+      return `<tr class="clickable-row" data-suggestion-index="${i}">
+        <td class="desktop-col">${giveA}</td>
+        <td class="desktop-col">${giveB}</td>
+        <td class="mobile-col small"><div>A gives: ${giveA}</div><div>B gives: ${giveB}</div></td>
+        <td class="desktop-col">${gainA}</td>
+        <td class="desktop-col">${gainB}</td>
+        <td class="mobile-col small"><div>A gain: ${gainA}</div><div>B gain: ${gainB}</div></td>
+      </tr>`;
+    })
     .join("");
-  return `<table><thead><tr><th>Team A gives</th><th>Team B gives</th><th>A gain</th><th>B gain</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table><thead><tr><th class="desktop-col">Team A gives</th><th class="desktop-col">Team B gives</th><th class="mobile-col">Trade</th><th class="desktop-col">A gain</th><th class="desktop-col">B gain</th><th class="mobile-col">Gain</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 // Small "(+1.2)"/"(-1.2)" span next to a value, green/red by sign - dropped
