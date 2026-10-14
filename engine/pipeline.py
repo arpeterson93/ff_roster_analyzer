@@ -50,7 +50,7 @@ from engine.matchups import (
 )
 from engine.play_log import (
     build_game_play_index, game_durations_by_game_id, incomplete_targets_for_player,
-    scoring_plays_for_player, zero_point_plays_for_player,
+    scoring_plays_for_player, scoring_time_index, zero_point_plays_for_player,
 )
 from engine.points_against import dst_points_against_detail, points_against_detail, with_remaining_schedule
 from engine.scoring import ScoringRules
@@ -1405,7 +1405,12 @@ def run_league(
     # zero_point_plays_for_player), but both are still shown, as markers
     # rather than bars, so real usage (a stuffed goal-line carry, a drop)
     # stays visible on the same time axis instead of vanishing entirely.
-    game_log_plays_out: dict[str, dict[str, dict[str, list[dict]]]] = {}
+    # "scoring_time_index"/"expected_scoring_time_index" (see engine/
+    # play_log.py's scoring_time_index) are points-weighted centroids of
+    # when this game's positive production happened - actual and expected
+    # (xFP) respectively, same calc run on each list - or None when there
+    # isn't enough of it to mean anything.
+    game_log_plays_out: dict[str, dict[str, dict]] = {}
     if "pbp" not in skip:
         try:
             pbp_current = nd.play_by_play(season, current_season=season)
@@ -1458,6 +1463,19 @@ def run_league(
                             "plays": scoring_plays, "incompletions": incompletions,
                             "zero_point_plays": zero_point_plays, "game_duration_min": round(duration, 2),
                             "expected_plays": expected_plays,
+                            "scoring_time_index": scoring_time_index(scoring_plays, duration),
+                            # Same calc, run on the EXPECTED per-play list
+                            # (expected_plays_for_player - same {elapsed_min,
+                            # points, ...} shape, so scoring_time_index needs
+                            # no changes to accept it). Lets the frontend
+                            # compare "when the points actually landed" against
+                            # "when this player's own usage/opportunity was
+                            # expected to produce" - actual skewing late while
+                            # expected doesn't is garbage-time VARIANCE (a few
+                            # plays hit); both skewing late means the usage
+                            # itself (targets/carries) came late, e.g. a
+                            # trailing team's game script, not just luck.
+                            "expected_scoring_time_index": scoring_time_index(expected_plays, duration),
                         }
         except Exception:
             logger.warning("play-by-play fetch/processing failed - Game Log per-play breakdown disabled for this build", exc_info=True)

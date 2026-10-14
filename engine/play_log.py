@@ -252,6 +252,53 @@ def zero_point_plays_for_player(plays: list[dict], gsis_id: str, rules: ScoringR
     return out
 
 
+_MIN_POSITIVE_PLAYS_FOR_SCORING_TIME_INDEX = 2
+
+
+def scoring_time_index(scoring_plays: list[dict], game_duration_min: float) -> dict | None:
+    """Points-weighted centroid of WHEN (in this specific game) a player's
+    positive fantasy production happened - a cheap garbage-time smell test
+    on top of scoring_plays_for_player's own output, not a new data fetch.
+    {"centroid_min": elapsed minutes, "centroid_pct": 0-1 fraction of the
+    game's own real length (game_duration_min - see
+    game_durations_by_game_id, already OT-correct), "total_points": the
+    positive-points sum this was weighted by}. 0.5 = weighted right at this
+    game's own halftime regardless of whether it went to OT; noticeably
+    above that means the weighted mass of this player's points skewed
+    late. "total_points" rides along purely as the WEIGHT a caller needs
+    to roll several weeks' centroid_pct values up into one season-level
+    figure (a bigger week should count for more than a token one) - see
+    docs/js/rankings.js's scoringTimeCentroidPct, which averages exactly
+    the same way colors.js's usageShare already does for Snap%/Tgt%/etc
+    (sum of weighted numerator over sum of weight, not a plain average of
+    already-divided per-week percentages).
+
+    Deliberately weights ONLY plays with points > 0 - a lost fumble or a
+    passer's own pick-six carries a NEGATIVE points value in this same
+    list, and including it would let one bad play drag the "when did the
+    good stuff happen" centroid somewhere that has nothing to do with the
+    question being asked here.
+
+    Returns None rather than a noisy/meaningless number: with no positive
+    play to weight (goose egg, or a week that's net negative), or below
+    _MIN_POSITIVE_PLAYS_FOR_SCORING_TIME_INDEX positive plays (a centroid of
+    1-2 plays is just those plays' own timing, not a real "shape of the
+    game" signal), or a non-positive game_duration_min (shouldn't happen in
+    practice, but this file already treats missing/invalid timing as a
+    reason to bail rather than divide by zero - see _elapsed_minutes'
+    callers)."""
+    positive = [p for p in scoring_plays if p["points"] > 0]
+    if len(positive) < _MIN_POSITIVE_PLAYS_FOR_SCORING_TIME_INDEX or not game_duration_min or game_duration_min <= 0:
+        return None
+    total_points = sum(p["points"] for p in positive)
+    centroid_min = sum(p["points"] * p["elapsed_min"] for p in positive) / total_points
+    return {
+        "centroid_min": round(centroid_min, 2),
+        "centroid_pct": round(centroid_min / game_duration_min, 3),
+        "total_points": round(total_points, 2),
+    }
+
+
 def scoring_plays_for_player(plays: list[dict], gsis_id: str, rules: ScoringRules) -> list[dict]:
     """[{elapsed_min, points, label, is_td, role, short_field, yardline}, ...]
     ordered by game time, for every play in `plays` (this player's own

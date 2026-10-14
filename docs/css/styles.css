@@ -538,6 +538,16 @@ thead .sticky-col-first { z-index: 2; }
 }
 .play-chart-qline { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--border); }
 .play-chart-baseline { position: absolute; left: 0; right: 0; height: 1px; background: var(--ink-500); opacity: 0.5; }
+/* Points-weighted "when did the scoring happen" centroid (see engine/
+   play_log.py's scoring_time_index) - dashed and in the accent color so it
+   reads as a distinct reference line from the plain Q1-Q4 dividers above,
+   drawn on top of the bars (later in source order, no explicit z-index
+   needed) since it's meant to be compared against where they land. */
+.play-chart-centroid-line {
+  position: absolute; top: 0; bottom: 0; width: 0;
+  border-left: 1.5px dashed var(--accent); opacity: 0.8;
+}
+.play-chart-centroid-note { margin-top: 2px; }
 .play-bar {
   position: absolute; width: 2.2%; min-width: 3px; max-width: 10px;
   transform: translateX(-50%); background: var(--accent); border-radius: 2px 2px 0 0;

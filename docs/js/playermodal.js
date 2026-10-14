@@ -86,7 +86,13 @@ function tdLabelHtml(p) {
 // playLogDetailHtml itself when the expected-points visual (D4) was added,
 // so both sections get the exact same bar/scaling/short-field treatment
 // rather than a second, drifting copy of this math.
-function _chartAndTableHtml(plays, incompletions, zeroPointPlays, totalMinutes, toChartPct, segments, hasOt) {
+// `sti` (scoring_time_index/expected_scoring_time_index from engine/
+// pipeline.py - see engine/play_log.py's scoring_time_index) is this
+// section's own points-weighted centroid of WHEN its positive production
+// happened, or null when there wasn't enough of it to mean anything - a
+// dashed reference line distinct from the Q1-Q4 dividers, plus a caption
+// using the same game-clock formatting as every other time label here.
+function _chartAndTableHtml(plays, incompletions, zeroPointPlays, totalMinutes, toChartPct, segments, hasOt, sti = null) {
   const positives = plays.filter((p) => p.points > 0).map((p) => p.points);
   const negatives = plays.filter((p) => p.points < 0).map((p) => -p.points);
   const maxPos = Math.max(1, ...positives, 0);
@@ -187,6 +193,17 @@ function _chartAndTableHtml(plays, incompletions, zeroPointPlays, totalMinutes, 
   const axisLabels = segments
     .map((s) => `<span style="left:${toChartPct((s.start + s.end) / 2).toFixed(2)}%">${s.label}</span>`)
     .join("");
+  // Dashed vertical line at the points-weighted centroid - drawn AFTER the
+  // bars/markers (later in DOM = on top, no explicit z-index needed) so it
+  // stays visible crossing over them rather than hiding underneath. The
+  // caption below spells out the same game-clock format every other time
+  // label on this chart already uses, plus the raw % of the game.
+  const centroidLine = sti
+    ? `<div class="play-chart-centroid-line" style="left:${toChartPct(sti.centroid_min).toFixed(2)}%" title="Scoring centroid: ${formatGameClock(sti.centroid_min, totalMinutes)} (${Math.round(sti.centroid_pct * 100)}% through the game)"></div>`
+    : "";
+  const centroidNote = sti
+    ? `<div class="play-chart-centroid-note muted small">Scoring centroid: ${formatGameClock(sti.centroid_min, totalMinutes)} (${Math.round(sti.centroid_pct * 100)}% through the game)</div>`
+    : "";
   return `
     <div class="play-chart-wrap">
       <div class="play-chart-row">
@@ -197,6 +214,7 @@ function _chartAndTableHtml(plays, incompletions, zeroPointPlays, totalMinutes, 
             ${bars}
             ${zeroMarkers}
             ${incompleteMarkers}
+            ${centroidLine}
           </div>
           <div class="play-chart-axis">
             ${axisLabels}
@@ -207,6 +225,7 @@ function _chartAndTableHtml(plays, incompletions, zeroPointPlays, totalMinutes, 
           <div class="play-chart-yaxis-label play-chart-yaxis-zero" style="bottom:${baselinePct}%">0</div>
         </div>
       </div>
+      ${centroidNote}
     </div>
     <table class="play-top-table">
       <thead><tr><th>Time</th><th>Play</th><th class="num">Pts</th></tr></thead>
@@ -225,7 +244,7 @@ function _chartAndTableHtml(plays, incompletions, zeroPointPlays, totalMinutes, 
 // pass/rush play has SOME nonzero expected value (see
 // engine/xfp_play_log.py's module docstring), so it's passed straight
 // through as the whole "plays" list for its own section.
-function playLogDetailHtml(plays, incompletions = [], gameDurationMin = 60, zeroPointPlays = [], expectedPlays = []) {
+function playLogDetailHtml(plays, incompletions = [], gameDurationMin = 60, zeroPointPlays = [], expectedPlays = [], scoringTimeIndex = null, expectedScoringTimeIndex = null) {
   // The axis is 60 minutes (4 real 15-min quarters) unless the game went to
   // OT - then it extends to gameDurationMin (see engine/pipeline.py's
   // game_durations_by_game_id), the REAL end of the game across every play,
@@ -254,9 +273,9 @@ function playLogDetailHtml(plays, incompletions = [], gameDurationMin = 60, zero
   // totalMinutes) only when the game actually went there.
   const segments = [15, 30, 45, 60].map((end, i) => ({ start: i * 15, end, label: `Q${i + 1}` }));
   if (hasOt) segments.push({ start: REGULATION_MIN, end: totalMinutes, label: "OT" });
-  const actualSection = _chartAndTableHtml(plays, incompletions, zeroPointPlays, totalMinutes, toChartPct, segments, hasOt);
+  const actualSection = _chartAndTableHtml(plays, incompletions, zeroPointPlays, totalMinutes, toChartPct, segments, hasOt, scoringTimeIndex);
   const expectedSection = expectedPlays.length
-    ? `<div class="play-chart-section-label muted small">Expected</div>${_chartAndTableHtml(expectedPlays, [], [], totalMinutes, toChartPct, segments, hasOt)}`
+    ? `<div class="play-chart-section-label muted small">Expected</div>${_chartAndTableHtml(expectedPlays, [], [], totalMinutes, toChartPct, segments, hasOt, expectedScoringTimeIndex)}`
     : "";
   return `${actualSection}${expectedSection}`;
 }
@@ -338,7 +357,7 @@ function gameLogTable(player, data) {
         : w.actual.stats;
       const mainRow = `<tr class="game-log-row ${hasDetail ? "clickable-row" : ""}" data-week="${w.week}"><td>${w.week}</td><td>${opponentCellHtml(w)}</td><td><strong>${fpts}</strong></td><td class="muted">${xfpts}</td>${statCellsHtml(stats, flatColumns, blockEnds)}</tr>`;
       const detailRow = hasDetail
-        ? `<tr class="game-log-detail" data-week-detail="${w.week}" hidden><td colspan="${colCount}">${playLogDetailHtml(scoringPlays, incompletions, weekDetail?.game_duration_min, zeroPointPlays, expectedPlays)}</td></tr>`
+        ? `<tr class="game-log-detail" data-week-detail="${w.week}" hidden><td colspan="${colCount}">${playLogDetailHtml(scoringPlays, incompletions, weekDetail?.game_duration_min, zeroPointPlays, expectedPlays, weekDetail?.scoring_time_index, weekDetail?.expected_scoring_time_index)}</td></tr>`
         : "";
       return mainRow + detailRow;
     })

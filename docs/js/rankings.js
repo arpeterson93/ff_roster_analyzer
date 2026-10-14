@@ -328,19 +328,56 @@ function statsXfpts(p, statsWeek, currentWeek) {
   return weekEntryFor(p, statsWeek).actual?.xfp_points ?? null;
 }
 
-// FPTS/xFPTS: flat columns right after Star/Rank/Player/Team, before the
-// grouped stat block - leftmost among the "stats" columns rather than
-// trailing after Usage%, so they're visible without scrolling.
+// Points-weighted centroid of WHEN this player's fantasy production
+// happened, as a 0-1 fraction of the game's own real length (see engine/
+// play_log.py's scoring_time_index, which already normalizes against
+// each game's real OT-inclusive duration). A single week reads that
+// week's own precomputed centroid_pct straight off data.gameLogPlays;
+// "season" rolls every played week's centroid_pct into one figure the
+// SAME WAY colors.js's usageShare rolls up Snap%/Tgt%/etc - sum(centroid_pct
+// * that week's weight) / sum(weight), weighted by each week's own
+// total_points (scoring_time_index's own weight field) so a 30-point week
+// counts for more than a token 3-point one, not a plain average of
+// already-divided per-week percentages. Returns null (never 0) when
+// there's nothing to weight, same as every other stats-tab metric here.
+function scoringTimeCentroidPct(p, statsWeek, currentWeek, gameLogPlays) {
+  const weeks = (gameLogPlays || {})[p.id] || {};
+  if (statsWeek !== "season") {
+    return weeks[String(statsWeek)]?.scoring_time_index?.centroid_pct ?? null;
+  }
+  let num = 0, weight = 0;
+  for (const [wk, detail] of Object.entries(weeks)) {
+    if (Number(wk) >= currentWeek) continue;
+    const sti = detail?.scoring_time_index;
+    if (!sti) continue;
+    num += sti.centroid_pct * sti.total_points;
+    weight += sti.total_points;
+  }
+  return weight > 0 ? num / weight : null;
+}
+
+// FPTS/xFPTS/Scoring Time: flat columns right after Star/Rank/Player/Team,
+// before the grouped stat block - leftmost among the "stats" columns
+// rather than trailing after Usage%, so they're visible without
+// scrolling. Scoring Time is dropped only for DST (no per-play attribution
+// at all - see engine/play_log.py's module docstring); unlike xFPTS it
+// still applies to K (field goals are real timestamped plays), so K keeps
+// it while still losing xFPTS (no ffopportunity model for K/DST - see
+// engine/expected_points.py).
 function statsLeadingColumns(data, filters) {
   const cw = data.meta.current_week;
   const sw = filters.statsWeek;
+  const gameLogPlays = data.gameLogPlays;
   const fpts = { key: "_fpts", label: "FPTS", fmt: (_v, p) => fmtScore(statsFpts(p, sw, cw)) };
-  // No ffopportunity model for K/DST (see engine/expected_points.py) - xFPTS
-  // simply doesn't exist for either, same reasoning statsUsageColumns
-  // already uses to drop the whole Usage group for those positions.
-  if (filters.position === "K" || filters.position === "DST") return [fpts];
+  if (filters.position === "DST") return [fpts];
+  const scoringTime = {
+    key: "_scoring_time", label: "Scoring Time",
+    title: "Points-weighted centroid of WHEN this player's fantasy production happened, as a % of the game's real length (including OT). Near 50% is roughly even, centered around halftime; well above that leans on late-game (possibly garbage-time) production. Needs at least 2 real scoring plays to show a value.",
+    fmt: (_v, p) => fmtPct(scoringTimeCentroidPct(p, sw, cw, gameLogPlays)),
+  };
+  if (filters.position === "K") return [fpts, scoringTime];
   const xfpts = { key: "_xfpts", label: "xFPTS", title: "Expected fantasy points - see the implementation plan's D2", fmt: (_v, p) => fmtScore(statsXfpts(p, sw, cw)) };
-  return [fpts, xfpts];
+  return [fpts, xfpts, scoringTime];
 }
 
 // The trailing single-value columns after the grouped stat block (which is
@@ -406,6 +443,7 @@ function sortValue(p, key, data, filters) {
   if (key === "_air_yard_pct") return airYardPct(p, filters.statsWeek, cw) ?? -Infinity;
   if (key === "_fpts") return statsFpts(p, filters.statsWeek, cw) ?? -Infinity;
   if (key === "_xfpts") return statsXfpts(p, filters.statsWeek, cw) ?? -Infinity;
+  if (key === "_scoring_time") return scoringTimeCentroidPct(p, filters.statsWeek, cw, data.gameLogPlays) ?? -Infinity;
   // Schedule's per-week heat cells ("_wk12_sched", etc.) - same rank-type
   // convention as fp_week_pos_rank_label above (lower rank = better, so a
   // bye/no-data week sorts as Infinity, the worst possible rank, not 0).

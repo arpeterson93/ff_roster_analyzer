@@ -1,6 +1,6 @@
 from engine.play_log import (
     build_game_play_index, game_durations_by_game_id, incomplete_targets_for_player,
-    scoring_plays_for_player, zero_point_plays_for_player,
+    scoring_plays_for_player, scoring_time_index, zero_point_plays_for_player,
 )
 from engine.scoring import ScoringRules
 
@@ -225,6 +225,60 @@ def test_zero_point_plays_exclude_qbs_own_incompletions():
     # row with zero-point markers - only real carries/catches qualify.
     row = _row(passer_player_id="QB1", receiver_player_id="WR1", complete_pass=False, passing_yards=0)
     assert zero_point_plays_for_player([row], "QB1", _RULES) == []
+
+
+def test_scoring_time_index_weights_by_points_and_elapsed_time():
+    plays = [{"points": 1, "elapsed_min": 10}, {"points": 3, "elapsed_min": 50}]
+    sti = scoring_time_index(plays, game_duration_min=60)
+    assert sti["centroid_min"] == 40.0  # (1*10 + 3*50) / 4
+    assert sti["centroid_pct"] == round(40 / 60, 3)
+    assert sti["total_points"] == 4  # the weight a season rollup needs - see docs/js/rankings.js
+
+
+def test_scoring_time_index_total_points_excludes_negative_plays():
+    plays = [{"points": 2, "elapsed_min": 10}, {"points": 2, "elapsed_min": 12}, {"points": -2, "elapsed_min": 58}]
+    sti = scoring_time_index(plays, game_duration_min=60)
+    assert sti["total_points"] == 4  # the -2 play contributes neither to the centroid nor its weight
+
+
+def test_scoring_time_index_excludes_negative_point_plays():
+    # Without the exclusion, the late pick-six-equivalent (-2 at min 58)
+    # would drag the centroid toward the end of the game instead of
+    # reflecting only where the POSITIVE production actually happened.
+    plays = [{"points": 2, "elapsed_min": 10}, {"points": 2, "elapsed_min": 12}, {"points": -2, "elapsed_min": 58}]
+    sti = scoring_time_index(plays, game_duration_min=60)
+    assert sti["centroid_min"] == 11.0  # (2*10 + 2*12) / 4, the -2 play dropped entirely
+
+
+def test_scoring_time_index_is_none_with_fewer_than_two_positive_plays():
+    # A single play's own timing isn't a "shape of the game" signal.
+    plays = [{"points": 6, "elapsed_min": 55}]
+    assert scoring_time_index(plays, game_duration_min=60) is None
+
+
+def test_scoring_time_index_is_none_with_no_positive_plays():
+    plays = [{"points": -2, "elapsed_min": 20}, {"points": 0, "elapsed_min": 40}]
+    assert scoring_time_index(plays, game_duration_min=60) is None
+
+
+def test_scoring_time_index_is_none_with_no_plays_at_all():
+    assert scoring_time_index([], game_duration_min=60) is None
+
+
+def test_scoring_time_index_is_none_with_non_positive_duration():
+    plays = [{"points": 2, "elapsed_min": 10}, {"points": 2, "elapsed_min": 12}]
+    assert scoring_time_index(plays, game_duration_min=0) is None
+
+
+def test_scoring_time_index_pct_accounts_for_overtime_duration():
+    # Same centroid_min, but normalized against a game that ran long (OT)
+    # should read as a SMALLER fraction of the game than it would in a
+    # 60-minute game - the whole point of normalizing by the real duration
+    # rather than a flat 60.
+    plays = [{"points": 2, "elapsed_min": 45}, {"points": 2, "elapsed_min": 45}]
+    sti_regulation = scoring_time_index(plays, game_duration_min=60)
+    sti_overtime = scoring_time_index(plays, game_duration_min=70)
+    assert sti_overtime["centroid_pct"] < sti_regulation["centroid_pct"]
 
 
 def test_build_game_play_index_groups_by_every_relevant_id_column():
