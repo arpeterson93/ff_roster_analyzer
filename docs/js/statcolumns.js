@@ -21,9 +21,13 @@ const OFFENSE_BLOCKS = {
 };
 OFFENSE_BLOCKS.TE = OFFENSE_BLOCKS.WR;
 
+// Each kicking column is a "made/attempts" ratio cell (same Array-key
+// mechanism as PASSING_BLOCK's C/A). fg_att_* is derived (made + missed + blocked) in
+// engine/points_against.py's with_kick_attempts; pat_att is raw nflverse.
+// PAT has no group header of its own - its column label already says PAT.
 const KICKER_BLOCKS = [
-  ["FG Made", [["fg_made_0_19", "0-19"], ["fg_made_20_29", "20-29"], ["fg_made_30_39", "30-39"], ["fg_made_40_49", "40-49"], ["fg_made_50_59", "50-59"], ["fg_made_60_", "60+"]]],
-  ["PAT", [["pat_made", "Made"]]],
+  ["FG", [[["fg_made_0_19", "fg_att_0_19"], "0-19"], [["fg_made_20_29", "fg_att_20_29"], "20-29"], [["fg_made_30_39", "fg_att_30_39"], "30-39"], [["fg_made_40_49", "fg_att_40_49"], "40-49"], [["fg_made_50_59", "fg_att_50_59"], "50-59"], [["fg_made_60_", "fg_att_60_"], "60+"]]],
+  [null, [[["pat_made", "pat_att"], "PAT"]]],
 ];
 
 // `xpr` (a defense returning a blocked/missed PAT for 2) has no nflverse

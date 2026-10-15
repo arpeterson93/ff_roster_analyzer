@@ -35,13 +35,58 @@ OFFENSE_BLOCK_ORDER = {
 }
 OFFENSE_BLOCK_ORDER["TE"] = OFFENSE_BLOCK_ORDER["WR"]
 
+# Distance buckets nflverse reports kicks in (suffix of fg_made_*/fg_missed_*).
+KICK_BUCKETS = ["0_19", "20_29", "30_39", "40_49", "50_59", "60_"]
+
+# The frontend shows each kicking column as "made/attempts" (see docs/js/
+# statcolumns.js's KICKER_BLOCKS), so every made field is paired with an
+# attempts field here. Attempts are NOT a raw nflverse column - they're
+# derived (made + missed + blocked) by with_kick_attempts below. Only the KEY SET
+# matters to the frontend (label/group are never sent), so each pair is
+# listed as two consecutive columns.
 KICKER_BLOCKS = [
-    ("FG Made", [
-        ("fg_made_0_19", "0-19"), ("fg_made_20_29", "20-29"), ("fg_made_30_39", "30-39"),
-        ("fg_made_40_49", "40-49"), ("fg_made_50_59", "50-59"), ("fg_made_60_", "60+"),
+    ("FG", [
+        (key, label)
+        for bucket, label in zip(KICK_BUCKETS, ["0-19", "20-29", "30-39", "40-49", "50-59", "60+"])
+        for key in (f"fg_made_{bucket}", f"fg_att_{bucket}")
     ]),
-    ("PAT", [("pat_made", "Made")]),
+    ("PAT", [("pat_made", "PAT"), ("pat_att", "PAT Att")]),
 ]
+
+
+_BUCKET_CEILINGS = [(20, "0_19"), (30, "20_29"), (40, "30_39"), (50, "40_49"), (60, "50_59")]
+
+
+def _blocked_by_bucket(row: dict) -> dict[str, int]:
+    """Blocked FGs per distance bucket. nflverse has no per-bucket blocked
+    column (and fg_blocked_distance is a SUM when a kicker had 2+ blocks), so
+    this buckets each distance in the ';'-separated fg_blocked_list."""
+    out: dict[str, int] = {}
+    for part in str(row.get("fg_blocked_list") or "").split(";"):
+        try:
+            dist = float(part)
+        except ValueError:
+            continue
+        bucket = next((b for ceiling, b in _BUCKET_CEILINGS if dist < ceiling), "60_")
+        out[bucket] = out.get(bucket, 0) + 1
+    return out
+
+
+def with_kick_attempts(row: dict) -> dict:
+    """Copy of `row` with fg_att_<bucket> (made + missed + blocked per
+    distance bucket) filled in - a blocked kick is an attempt (and a miss).
+    pat_att is already a real nflverse column, passed through as-is."""
+    out = dict(row)
+    blocked = _blocked_by_bucket(row)
+    for bucket in KICK_BUCKETS:
+        made, missed = row.get(f"fg_made_{bucket}"), row.get(f"fg_missed_{bucket}")
+        # None (not 0) when nothing is reported, so a non-kicker's row still
+        # renders "-" rather than a misleading 0/0 - same as fg_made_*.
+        if made is None and missed is None and bucket not in blocked:
+            out[f"fg_att_{bucket}"] = None
+        else:
+            out[f"fg_att_{bucket}"] = (made or 0) + (missed or 0) + blocked.get(bucket, 0)
+    return out
 
 # `xpr` (a defense returning a blocked/missed PAT for 2) has no nflverse
 # team_stats column - always reported as None; see dst_points_against_detail.
@@ -114,7 +159,7 @@ def points_against_detail(
                 "players": [],
             },
         )
-        row_stats = dict(row)
+        row_stats = with_kick_attempts(row)
         row_stats["two_pt_conversions"] = _two_pt_conversions(row)
         bucket["points"] += pts
         for f in fields:

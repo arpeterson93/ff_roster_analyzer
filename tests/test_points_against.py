@@ -88,7 +88,7 @@ def test_kicker_fields_are_distance_brackets():
     rows = [{
         "season": 2025, "season_type": "REG", "position": "K", "player_id": "k1", "player_display_name": "K1",
         "team": "SEA", "opponent_team": "DAL", "week": 1,
-        "fg_made_0_19": 1, "fg_made_50_59": 1, "pat_made": 3,
+        "fg_made_0_19": 1, "fg_made_50_59": 1, "fg_missed_50_59": 1, "fg_blocked_list": "36;44;62", "pat_made": 3, "pat_att": 4,
     }]
     df = pl.DataFrame(rows)
     scoring = ScoringRules.from_espn([{"id": 60, "abbr": "FG0", "points": 3}, {"id": 61, "abbr": "PAT", "points": 1}])
@@ -98,6 +98,14 @@ def test_kicker_fields_are_distance_brackets():
     assert stats["fg_made_50_59"] == 1
     assert stats["pat_made"] == 3
     assert "fg_made" not in stats
+    # attempts = made + missed per bucket; pat_att passes straight through
+    assert stats["fg_att_50_59"] == 2
+    assert stats["fg_att_0_19"] == 1
+    # blocked kicks count as attempts, bucketed by their own distance
+    assert stats["fg_att_30_39"] == 1
+    assert stats["fg_att_40_49"] == 1
+    assert stats["fg_att_60_"] == 1
+    assert stats["pat_att"] == 4
 
 
 def test_dst_points_against_detail_keyed_by_offense_faced():

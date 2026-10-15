@@ -164,13 +164,26 @@ export function seasonAvgXfp(p, currentWeek) {
   return played.reduce((sum, w) => sum + w.actual.xfp_points, 0) / played.length;
 }
 
+// Rankings Stats tab week selector value -> the first week of the range it
+// covers, or null when it is a single specific week (a number). "season" is
+// every week played so far; "last:N" is the N weeks before currentWeek (a
+// bye inside that window just means fewer games, not an earlier start).
+export function statsWindowStart(statsWeek, currentWeek) {
+  if (typeof statsWeek === "number") return null;
+  if (typeof statsWeek === "string" && statsWeek.startsWith("last:")) {
+    const n = Math.max(1, Number(statsWeek.slice(5)) || 1);
+    return Math.max(1, currentWeek - n);
+  }
+  return 1;
+}
+
 // Total (not averaged) actual fantasy points scored so far this season -
 // Rankings' Stats tab uses this for its FPTS column in "season" mode, same
 // played-weeks definition as seasonAvgPoints above just summed instead of
 // divided. Distinct from ros_total (a rest-of-season PROJECTION) - this is
 // real points already scored.
-export function seasonTotalPoints(p, currentWeek) {
-  const played = (p.weekly || []).filter((w) => w.week < currentWeek && w.actual?.points !== undefined && w.actual?.points !== null);
+export function seasonTotalPoints(p, currentWeek, fromWeek = 1) {
+  const played = (p.weekly || []).filter((w) => w.week >= fromWeek && w.week < currentWeek && w.actual?.points !== undefined && w.actual?.points !== null);
   if (!played.length) return null;
   return played.reduce((sum, w) => sum + w.actual.points, 0);
 }
@@ -180,8 +193,8 @@ export function seasonTotalPoints(p, currentWeek) {
 // week ffopportunity has no row for, is excluded from both the sum and
 // the "any data at all" check, same as seasonTotalPoints excludes a
 // missing actual.points).
-export function seasonTotalXfp(p, currentWeek) {
-  const played = (p.weekly || []).filter((w) => w.week < currentWeek && w.actual?.xfp_points !== undefined && w.actual?.xfp_points !== null);
+export function seasonTotalXfp(p, currentWeek, fromWeek = 1) {
+  const played = (p.weekly || []).filter((w) => w.week >= fromWeek && w.week < currentWeek && w.actual?.xfp_points !== undefined && w.actual?.xfp_points !== null);
   if (!played.length) return null;
   return played.reduce((sum, w) => sum + w.actual.xfp_points, 0);
 }
@@ -198,7 +211,8 @@ export function seasonTotalXfp(p, currentWeek) {
 // Game Log (always one specific week).
 export function usageShare(p, statsWeek, currentWeek, getNum, getDenom, positionGate) {
   if (positionGate && p.position !== positionGate) return null;
-  const weeks = statsWeek === "season" ? (p.weekly || []).filter((w) => w.week < currentWeek) : [(p.weekly || []).find((w) => w.week === statsWeek) || {}];
+  const from = statsWindowStart(statsWeek, currentWeek);
+  const weeks = from !== null ? (p.weekly || []).filter((w) => w.week >= from && w.week < currentWeek) : [(p.weekly || []).find((w) => w.week === statsWeek) || {}];
   let num = 0, denom = 0, any = false;
   for (const w of weeks) {
     const n = getNum(w);

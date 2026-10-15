@@ -52,7 +52,7 @@ from engine.play_log import (
     build_game_play_index, game_durations_by_game_id, incomplete_targets_for_player,
     scoring_plays_for_player, scoring_time_index, zero_point_plays_for_player,
 )
-from engine.points_against import dst_points_against_detail, points_against_detail, with_remaining_schedule
+from engine.points_against import dst_points_against_detail, points_against_detail, with_kick_attempts, with_remaining_schedule
 from engine.scoring import ScoringRules
 from engine import standings_stage
 from engine.xfp_play_log import expected_plays_for_player
@@ -127,6 +127,11 @@ _OFFENSE_STAT_FIELDS = [
     "receptions", "targets", "receiving_yards", "receiving_tds",
     "fumbles_lost_total", "special_teams_tds",
     "fg_made_0_19", "fg_made_20_29", "fg_made_30_39", "fg_made_40_49", "fg_made_50_59", "fg_made_60_", "pat_made",
+    # Attempts per distance (made + missed) and PAT attempts, for the
+    # "made/att" kicker columns - see engine/points_against.py's
+    # with_kick_attempts. fg_att_* are derived in _actual_stats_row, not raw
+    # nflverse columns.
+    "fg_att_0_19", "fg_att_20_29", "fg_att_30_39", "fg_att_40_49", "fg_att_50_59", "fg_att_60_", "pat_att",
 ]
 _DST_STAT_FIELDS = [
     "def_sacks", "def_interceptions", "fumble_recovery_opp", "def_tds", "def_safeties", "special_teams_tds",
@@ -144,6 +149,7 @@ ACTIVE_ROSTER_STATUS = "ACT"
 
 
 def _actual_stats_row(row: dict, fields: list[str]) -> dict:
+    row = with_kick_attempts(row)
     stats = {f: row.get(f) for f in fields}
     stats["two_pt_conversions"] = (
         (row.get("passing_2pt_conversions") or 0)
@@ -498,6 +504,15 @@ def _compute_faab_estimates(
         )
 
         prior_points = prior_actual["points"] if prior_actual else None
+        # Coming off a bye: week - 1 has no stat row only because his team
+        # didn't play, so judge relevance on the last game he actually
+        # played (week - 2) instead of reading "no production" - the same
+        # fallback recent_snap_pct already applies to snaps. This feeds ONLY
+        # the relevance gate below; prior_points the model sees (and the
+        # had_stat_row feature) stay as-is, matching the training rows.
+        relevance_points = prior_points
+        if relevance_points is None and p.get("bye") == current_week - 1:
+            relevance_points = points_by_week(p).get(current_week - 2)
         snap_pct = recent_snap_pct(pfr_id, current_week, snap_pct_index)
         # RB-position-scoped carry share and team-wide (any position) target
         # share - see engine.faab_estimate.recent_carry_share/recent_target_
@@ -523,7 +538,7 @@ def _compute_faab_estimates(
         # the training set either, so running them through the model would
         # just extrapolate from whatever's nearest and silently inflate a
         # should-be-$0 case.
-        is_relevant = is_faab_relevant(prior_points, snap_pct, p.get("ros_pos_rank"), p["position"])
+        is_relevant = is_faab_relevant(relevance_points, snap_pct, p.get("ros_pos_rank"), p["position"])
         per_player[p["id"]] = {
             "player": p, "prior_actual": prior_actual, "prior_points": prior_points,
             "snap_pct": snap_pct, "carry_share": carry_share, "target_share": target_share,

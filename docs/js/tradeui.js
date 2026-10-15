@@ -67,13 +67,25 @@ function sortedRoster(players, sortMode) {
 // trade "gives" selection stays a dedicated checkbox in its own leading
 // column instead, so the two clickable purposes never fight over the same
 // click.
-function rosterTable(side, playersList, selected, sortMode) {
+// The leading control cycles through three states per player: off ->
+// included (locked into every suggestion and the manual evaluation) ->
+// excluded (never used in any suggestion) -> off. Excluded players stay
+// visible but muted/struck through, so the exclusion is obvious at a glance.
+function rosterTable(side, playersList, selected, excluded, sortMode) {
   const rows = sortedRoster(playersList, sortMode)
     .map((p) => {
       const isSelected = selected.has(p.id);
+      const isExcluded = !isSelected && excluded.has(p.id);
       const color = POSITION_COLOR[p.position] || "#888";
-      return `<tr class="clickable-row ${isSelected ? "selected-row" : ""}" data-side="${side}" data-id="${p.id}">
-        <td><input type="checkbox" ${isSelected ? "checked" : ""} data-side="${side}" data-id="${p.id}" /></td>
+      const state = isSelected ? "include" : isExcluded ? "exclude" : "off";
+      const glyph = isSelected ? "&#10003;" : isExcluded ? "&#10005;" : "";
+      const title = isSelected
+        ? "Included in the trade - click to exclude from all suggestions"
+        : isExcluded
+          ? "Excluded from all suggestions - click to clear"
+          : "Click to include in the trade";
+      return `<tr class="clickable-row ${isSelected ? "selected-row" : ""} ${isExcluded ? "excluded-row" : ""}" data-side="${side}" data-id="${p.id}">
+        <td><button type="button" class="trade-pick trade-pick-${state}" data-pick data-side="${side}" data-id="${p.id}" aria-label="${title}" title="${title}">${glyph}</button></td>
         <td><span class="pos-tag" style="background:${color}">${p.position}</span> ${escapeHtml(p.name)}</td>
         <td class="muted small">#${p.ros_pos_rank ?? "–"}</td>
         <td>${fmt(p.ros_total, 0)}</td>
@@ -98,7 +110,7 @@ function rosterTable(side, playersList, selected, sortMode) {
 // Targets table (see strength.js's tradeTargetsTable).
 function suggestionsTableHtml(suggestions, playersById) {
   if (!suggestions.length) {
-    return `<p class="muted small">No trades found that clear the fairness bar for this pair - try locking a player (check a box above) to search around them, or pick a different partner.</p>`;
+    return `<p class="muted small">No trades found that clear the fairness bar for this pair - try locking a player (click a box above) to search around them, or pick a different partner.</p>`;
   }
   const names = (ids) => ids.map((id) => escapeHtml(playersById.get(id)?.name ?? id)).join(", ");
   const rows = suggestions
@@ -201,6 +213,7 @@ function generateSuggestions(suggestionsEl, data, state, rostA, rostB, freeAgent
     const suggestions = window.FFTrade.tradeSuggestions({
       rosterA: rostA.map((p) => p.id), rosterB: rostB.map((p) => p.id),
       lockedA: [...state.givesA], lockedB: [...state.givesB],
+      excludedA: [...state.excludedA], excludedB: [...state.excludedB],
       players, freeAgentsByPos, weeks,
       slots: data.meta.slots, eligibility: data.meta.slot_eligibility,
       rosterSize: data.meta.roster_size,
@@ -332,6 +345,7 @@ export function renderTrade(container, data) {
   const state = {
     teamA: pending?.teamA ?? defaultTeamA, teamB: pending?.teamB ?? defaultTeamB,
     givesA: new Set(pending?.givesA || []), givesB: new Set(pending?.givesB || []),
+    excludedA: new Set(), excludedB: new Set(),
     sortMode: "position", expandedWeek: null,
     suggestions: [],
   };
@@ -365,11 +379,11 @@ export function renderTrade(container, data) {
         <div class="trade-result">
           <div class="trade-side">
             <h3>${escapeHtml(teamLabel(teamA))} gives</h3>
-            <div class="table-wrap" id="trade-picker-a">${rosterTable("a", rostA, state.givesA, state.sortMode)}</div>
+            <div class="table-wrap" id="trade-picker-a">${rosterTable("a", rostA, state.givesA, state.excludedA, state.sortMode)}</div>
           </div>
           <div class="trade-side">
             <h3>${escapeHtml(teamLabel(teamB))} gives</h3>
-            <div class="table-wrap" id="trade-picker-b">${rosterTable("b", rostB, state.givesB, state.sortMode)}</div>
+            <div class="table-wrap" id="trade-picker-b">${rosterTable("b", rostB, state.givesB, state.excludedB, state.sortMode)}</div>
           </div>
         </div>
         <div class="card">
@@ -391,7 +405,7 @@ export function renderTrade(container, data) {
             <h3 style="margin:0">Suggested trades</h3>
             <button id="trade-suggest-refresh" type="button">Refresh suggestions</button>
           </div>
-          <p class="muted small">Check a box above first to lock that player into every suggestion below - the rest of each trade is built up around your locks. "A gain"/"B gain" are Team value totals (above), not the lineup-total numbers shown further down once you pick a trade to inspect in detail.</p>
+          <p class="muted small">Click a player's box above once (&#10003;) to lock them into every suggestion below - the rest of each trade is built up around your locks - and click again (&#10005;) to leave them out of all suggestions. "A gain"/"B gain" are Team value totals (above), not the lineup-total numbers shown further down once you pick a trade to inspect in detail.</p>
           <div class="table-wrap" id="trade-suggestions">${suggestionsTableHtml(state.suggestions, playersById)}</div>
         </div>
         <div id="trade-result"></div>
@@ -401,12 +415,14 @@ export function renderTrade(container, data) {
     container.querySelector("#trade-team-a").addEventListener("change", (e) => {
       state.teamA = Number(e.target.value);
       state.givesA.clear();
+      state.excludedA.clear();
       state.suggestions = [];
       draw({ regenerateSuggestions: true });
     });
     container.querySelector("#trade-team-b").addEventListener("change", (e) => {
       state.teamB = Number(e.target.value);
       state.givesB.clear();
+      state.excludedB.clear();
       state.suggestions = [];
       draw({ regenerateSuggestions: true });
     });
@@ -423,9 +439,18 @@ export function renderTrade(container, data) {
       wireSuggestionRows(container.querySelector("#trade-suggestions"), state.suggestions, state, draw);
     }
 
-    function toggle(side, id) {
-      const set = side === "a" ? state.givesA : state.givesB;
-      set.has(id) ? set.delete(id) : set.add(id);
+    // off -> included -> excluded -> off (see rosterTable's comment).
+    function cyclePick(side, id) {
+      const gives = side === "a" ? state.givesA : state.givesB;
+      const excluded = side === "a" ? state.excludedA : state.excludedB;
+      if (gives.has(id)) {
+        gives.delete(id);
+        excluded.add(id);
+      } else if (excluded.has(id)) {
+        excluded.delete(id);
+      } else {
+        gives.add(id);
+      }
       draw();
     }
     // Row click opens the player modal (same as Rankings/Start-Sit) - trade
@@ -433,15 +458,15 @@ export function renderTrade(container, data) {
     // rosterTable's comment).
     container.querySelectorAll("#trade-picker-a tr[data-id], #trade-picker-b tr[data-id]").forEach((row) => {
       row.addEventListener("click", (e) => {
-        if (e.target.tagName === "INPUT") return; // checkboxes handle their own click below
+        if (e.target.closest("[data-pick]")) return; // the pick button handles its own click below
         const player = playersById.get(row.dataset.id);
         if (player) openPlayerModal(player, data);
       });
     });
-    container.querySelectorAll('input[type="checkbox"][data-id]').forEach((cb) => {
-      cb.addEventListener("click", (e) => {
+    container.querySelectorAll("[data-pick]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
         e.stopPropagation();
-        toggle(cb.dataset.side, cb.dataset.id);
+        cyclePick(btn.dataset.side, btn.dataset.id);
       });
     });
 

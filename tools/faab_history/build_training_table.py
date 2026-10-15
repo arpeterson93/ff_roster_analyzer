@@ -788,7 +788,14 @@ def build_no_bid_rows(
                     if gsis_id in gsis_ids_with_stat_row:
                         continue
                     snap_pct = recent_snap_pct(gsis_to_pfr.get(gsis_id), week, season_index.snap_pct_by_player)
-                    _try_add_no_bid_row(gsis_id, position, None, snap_pct, ros_rank)
+                    # Off a bye (week - 1 was his team's bye): judge points
+                    # relevance on the last game he played (week - 2), same
+                    # fallback engine/pipeline.py's live gate applies.
+                    prior_points = None
+                    wk2_row = season_index.stats_by_player.get(gsis_id, {}).get(week - 2)
+                    if wk2_row is not None and week > 2 and rank_index["byes"].get(season, {}).get(wk2_row.get("team")) == week - 1:
+                        prior_points = scoring.points_for_row(wk2_row)
+                    _try_add_no_bid_row(gsis_id, position, prior_points, snap_pct, ros_rank)
     return out
 
 

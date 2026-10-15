@@ -5,7 +5,7 @@
 // any of it. Every metric exposes the same shape so trends.js can treat
 // them uniformly: {key, label, group, unit, positions (Set|null, null =
 // every position), get(player, week, currentWeek)}. `group` is the same
-// Passing/Rushing/Receiving/Misc/FG Made/PAT/etc. category statcolumns.js
+// Passing/Rushing/Receiving/Misc/FG/PAT/etc. category statcolumns.js
 // already groups its own table columns by - shown in the Trends metric
 // table's own Category column so a raw stat's block is obvious without
 // needing to already know statcolumns.js's own layout.
@@ -71,8 +71,14 @@ function usageGetter(fn) {
 // DST_BLOCKS has a couple of ungrouped (group: null) single-column blocks
 // (PA, the standalone TD) - falls back to `fallbackGroup` for those rather
 // than showing a blank Category cell.
-function flatten(blocks, fallbackGroup) {
-  return blocks.flatMap(([group, cols]) => cols.filter(([key]) => !Array.isArray(key)).map(([key, label]) => [group || fallbackGroup, key, label]));
+// keepArrayKeys (kickers): a "made/attempts" column is charted by its FIRST
+// element (makes) instead of being dropped.
+function flatten(blocks, fallbackGroup, keepArrayKeys = false) {
+  return blocks.flatMap(([group, cols]) =>
+    cols
+      .filter(([key]) => keepArrayKeys || !Array.isArray(key))
+      .map(([key, label]) => [group || fallbackGroup, Array.isArray(key) ? key[0] : key, label])
+  );
 }
 
 // Registry `key` is namespaced per source block list (off_/k_/dst_), NOT
@@ -86,7 +92,7 @@ function flatten(blocks, fallbackGroup) {
 const OFFENSE_STAT_METRICS = flatten(STATS_TAB_BLOCKS, "Offense").map(([group, key, label]) => ({
   key: `off_${key}`, label, group, unit: "count", positions: USAGE_POSITIONS, get: statGetter(key),
 }));
-const K_STAT_METRICS = flatten(blocksForPosition("K"), "Kicking").map(([group, key, label]) => ({
+const K_STAT_METRICS = flatten(blocksForPosition("K"), "Kicking", true).map(([group, key, label]) => ({
   key: `k_${key}`, label, group, unit: "count", positions: new Set(["K"]), get: statGetter(key),
 }));
 const DST_STAT_METRICS = flatten(blocksForPosition("DST"), "DST").map(([group, key, label]) => ({

@@ -2,7 +2,7 @@ import { fmt, escapeHtml, getYourTeam } from "./state.js";
 import {
   POSITION_COLOR, INJURY_BADGE, impliedTotalCellHtml, opponentCellHtml, sortByPositionOrder, teamLabel,
   pointsWeeksAgo, seasonAvgPoints, seasonTotalPoints, seasonTotalXfp, weatherCellHtml, rosCellHtml, projectedCellHtml,
-  snapPct, attPct, tgtPct, airYardPct, shortName,
+  snapPct, attPct, tgtPct, airYardPct, shortName, statsWindowStart,
 } from "./colors.js";
 import { openPlayerModal } from "./playermodal.js";
 import { openPointsAgainstModal } from "./pointsagainstmodal.js";
@@ -297,14 +297,23 @@ function projectionsColumns(data) {
 
 // ---------- Stats ----------
 
+// Games actually played inside the Stats tab's range (null for a single
+// week, where the column is not shown) - a bye or missed game has no actual.
+function gamesPlayed(p, statsWeek, currentWeek) {
+  const from = statsWindowStart(statsWeek, currentWeek);
+  if (from === null) return null;
+  return (p.weekly || []).filter((w) => w.week >= from && w.week < currentWeek && w.actual?.stats).length;
+}
+
 function statsForWeek(p, statsWeek, currentWeek) {
-  if (statsWeek !== "season") return weekEntryFor(p, statsWeek).actual?.stats || null;
+  const from = statsWindowStart(statsWeek, currentWeek);
+  if (from === null) return weekEntryFor(p, statsWeek).actual?.stats || null;
   // Season = sum of every numeric field across weeks with a real stat row
   // (byes/missed games excluded, same "week < currentWeek with an actual"
   // gate as seasonAvgPoints/seasonTotalPoints) - not position-specific, so
   // a QB's passing totals and a WR's receiving totals both fall out of the
   // exact same loop.
-  const played = (p.weekly || []).filter((w) => w.week < currentWeek && w.actual?.stats);
+  const played = (p.weekly || []).filter((w) => w.week >= from && w.week < currentWeek && w.actual?.stats);
   if (!played.length) return null;
   const sum = {};
   for (const w of played) {
@@ -316,7 +325,8 @@ function statsForWeek(p, statsWeek, currentWeek) {
 }
 
 function statsFpts(p, statsWeek, currentWeek) {
-  if (statsWeek === "season") return seasonTotalPoints(p, currentWeek);
+  const from = statsWindowStart(statsWeek, currentWeek);
+  if (from !== null) return seasonTotalPoints(p, currentWeek, from);
   return weekEntryFor(p, statsWeek).actual?.points ?? null;
 }
 
@@ -324,7 +334,8 @@ function statsFpts(p, statsWeek, currentWeek) {
 // ffopportunity has no model (K/DST) or no row for that player-week, same
 // convention as statsFpts.
 function statsXfpts(p, statsWeek, currentWeek) {
-  if (statsWeek === "season") return seasonTotalXfp(p, currentWeek);
+  const from = statsWindowStart(statsWeek, currentWeek);
+  if (from !== null) return seasonTotalXfp(p, currentWeek, from);
   return weekEntryFor(p, statsWeek).actual?.xfp_points ?? null;
 }
 
@@ -342,12 +353,13 @@ function statsXfpts(p, statsWeek, currentWeek) {
 // there's nothing to weight, same as every other stats-tab metric here.
 function scoringTimeCentroidPct(p, statsWeek, currentWeek, gameLogPlays) {
   const weeks = (gameLogPlays || {})[p.id] || {};
-  if (statsWeek !== "season") {
+  const from = statsWindowStart(statsWeek, currentWeek);
+  if (from === null) {
     return weeks[String(statsWeek)]?.scoring_time_index?.centroid_pct ?? null;
   }
   let num = 0, weight = 0;
   for (const [wk, detail] of Object.entries(weeks)) {
-    if (Number(wk) >= currentWeek) continue;
+    if (Number(wk) >= currentWeek || Number(wk) < from) continue;
     const sti = detail?.scoring_time_index;
     if (!sti) continue;
     num += sti.centroid_pct * sti.total_points;
@@ -356,28 +368,23 @@ function scoringTimeCentroidPct(p, statsWeek, currentWeek, gameLogPlays) {
   return weight > 0 ? num / weight : null;
 }
 
-// FPTS/xFPTS/Scoring Time: flat columns right after Star/Rank/Player/Team,
-// before the grouped stat block - leftmost among the "stats" columns
-// rather than trailing after Usage%, so they're visible without
-// scrolling. Scoring Time is dropped only for DST (no per-play attribution
-// at all - see engine/play_log.py's module docstring); unlike xFPTS it
-// still applies to K (field goals are real timestamped plays), so K keeps
-// it while still losing xFPTS (no ffopportunity model for K/DST - see
-// engine/expected_points.py).
+// G/FPTS/xFPTS: flat columns right after Star/Rank/Player/Team, before the
+// grouped stat block - leftmost among the "stats" columns rather than
+// trailing after Usage%, so they're visible without scrolling. xFPTS is
+// dropped for K/DST (no ffopportunity model - see engine/expected_points.py).
+// The TIME (Scoring Time) column lives at the right end of the Usage group
+// instead - see statsUsageColumns.
 function statsLeadingColumns(data, filters) {
   const cw = data.meta.current_week;
   const sw = filters.statsWeek;
-  const gameLogPlays = data.gameLogPlays;
   const fpts = { key: "_fpts", label: "FPTS", fmt: (_v, p) => fmtScore(statsFpts(p, sw, cw)) };
-  if (filters.position === "DST") return [fpts];
-  const scoringTime = {
-    key: "_scoring_time", label: "Scoring Time",
-    title: "Points-weighted centroid of WHEN this player's fantasy production happened, as a % of the game's real length (including OT). Near 50% is roughly even, centered around halftime; well above that leans on late-game (possibly garbage-time) production. Needs at least 2 real scoring plays to show a value.",
-    fmt: (_v, p) => fmtPct(scoringTimeCentroidPct(p, sw, cw, gameLogPlays)),
-  };
-  if (filters.position === "K") return [fpts, scoringTime];
+  // Games played - only meaningful across a multi-week range (Season/Last N),
+  // so a single-week view drops it.
+  const g = { key: "_games", label: "G", title: "Games played in this range (byes and missed games excluded)", fmt: (_v, p) => gamesPlayed(p, sw, cw) ?? "-" };
+  const withG = (cols) => (typeof sw === "number" ? cols : [g, ...cols]);
+  if (filters.position === "DST" || filters.position === "K") return withG([fpts]);
   const xfpts = { key: "_xfpts", label: "xFPTS", title: "Expected fantasy points - see the implementation plan's D2", fmt: (_v, p) => fmtScore(statsXfpts(p, sw, cw)) };
-  return [fpts, xfpts, scoringTime];
+  return withG([fpts, xfpts]);
 }
 
 // The trailing single-value columns after the grouped stat block (which is
@@ -387,14 +394,24 @@ function statsLeadingColumns(data, filters) {
 // once the position filter narrows to one of those, matching the player
 // modal's own K/DST game log, which never had a usage row either.
 function statsUsageColumns(data, filters) {
-  if (filters.position === "K" || filters.position === "DST") return [];
+  // DST has no per-play attribution at all (see engine/play_log.py), so no
+  // TIME either. K keeps TIME (field goals are real timestamped plays) but
+  // none of the snap/carry/target shares.
+  if (filters.position === "DST") return [];
   const cw = data.meta.current_week;
   const sw = filters.statsWeek;
+  const time = {
+    key: "_scoring_time", label: "TIME",
+    title: "Scoring Time: points-weighted centroid of WHEN this player's fantasy production happened, as a % of the game's real length (including OT). Near 50% is roughly even, centered around halftime; well above that leans on late-game (possibly garbage-time) production. Needs at least 2 real scoring plays to show a value.",
+    fmt: (_v, p) => fmtPct(scoringTimeCentroidPct(p, sw, cw, data.gameLogPlays)),
+  };
+  if (filters.position === "K") return [time];
   return [
     { key: "_snap_pct", label: "Snap%", fmt: (_v, p) => fmtPct(snapPct(p, sw, cw)) },
     { key: "_att_pct", label: "Att%", title: "RB carry share only", fmt: (_v, p) => fmtPct(attPct(p, sw, cw)) },
     { key: "_tgt_pct", label: "Tgt%", fmt: (_v, p) => fmtPct(tgtPct(p, sw, cw)) },
     { key: "_air_yard_pct", label: "AirYd%", fmt: (_v, p) => fmtPct(airYardPct(p, sw, cw)) },
+    time,
   ];
 }
 
@@ -441,6 +458,7 @@ function sortValue(p, key, data, filters) {
   if (key === "_att_pct") return attPct(p, filters.statsWeek, cw) ?? -Infinity;
   if (key === "_tgt_pct") return tgtPct(p, filters.statsWeek, cw) ?? -Infinity;
   if (key === "_air_yard_pct") return airYardPct(p, filters.statsWeek, cw) ?? -Infinity;
+  if (key === "_games") return gamesPlayed(p, filters.statsWeek, cw) ?? -Infinity;
   if (key === "_fpts") return statsFpts(p, filters.statsWeek, cw) ?? -Infinity;
   if (key === "_xfpts") return statsXfpts(p, filters.statsWeek, cw) ?? -Infinity;
   if (key === "_scoring_time") return scoringTimeCentroidPct(p, filters.statsWeek, cw, data.gameLogPlays) ?? -Infinity;
@@ -458,9 +476,8 @@ function sortValue(p, key, data, filters) {
   // def_sacks, fg_made_20_29, etc.) - not given their own `if` branches
   // since the key set is large and position-dependent; statsForWeek's own
   // stat dict is authoritative for whatever key the active block set uses.
-  // A combined column (the C/A key is a 2-element array, not a string)
-  // never reaches here - see renderStatsTable, which never marks it as
-  // sortable in the first place.
+  // A combined column (a 2-element array key) reaches here as its first
+  // element only - see renderStatsTable.
   if (typeof key === "string") {
     const statVal = statsForWeek(p, filters.statsWeek, cw)?.[key];
     if (statVal !== undefined) return statVal;
@@ -602,23 +619,21 @@ function renderStatsTable(wrap, container, data, filters, watched, targeted) {
   // statsUsageColumns) get their own "Usage" group label spanning all four,
   // same as the player modal's Game Log.
   const hasUsage = trailing.length > 0;
-  const topTrail = hasUsage ? `<th colspan="4" class="block-end">Usage</th>` : "";
-  // Every column sorts by its own stat key EXCEPT the combined C/A column
-  // (an array key, "completions"+"attempts" - no single sensible sort
-  // value), which stays a plain unclickable header.
+  const topTrail = hasUsage ? `<th colspan="${trailing.length}" class="block-end">Usage</th>` : "";
+  // Every column sorts by its own stat key. A combined "made/attempts"-style
+  // column (an array key - C/A, each kicking distance, PAT) sorts by its
+  // FIRST element (completions, makes) - see sortValue's own stat lookup.
   const bottomLabels = flatColumns
     .map(([key, label], i) => {
       const className = blockEnds.has(i) ? "block-end" : "";
-      return Array.isArray(key)
-        ? `<th${className ? ` class="${className}"` : ""}>${escapeHtml(label)}</th>`
-        : sortableThHtml({ key, label, className });
+      return sortableThHtml({ key: Array.isArray(key) ? key[0] : key, label, className });
     })
     .join("");
   // The Usage group's own boundary (see topTrail above) needs the same
   // continuous line through the label row and every body row, not just the
   // top group-header cell - AirYd% is Usage's last column (Snap%/Att%/Tgt%/
   // AirYd% is a fixed order - see statsUsageColumns).
-  const isTrailingBlockEnd = (c) => hasUsage && c.key === "_air_yard_pct";
+  const isTrailingBlockEnd = (c) => hasUsage && c === trailing[trailing.length - 1];
   const header = `
     <tr class="group-header-row">${topLead}${topGroups}${topTrail}</tr>
     <tr>${common.map((c) => sortableThHtml(c)).join("")}${leading.map((c) => sortableThHtml(c)).join("")}${bottomLabels}${trailing.map((c) => sortableThHtml(isTrailingBlockEnd(c) ? { ...c, className: "block-end" } : c)).join("")}</tr>
@@ -671,11 +686,12 @@ export function renderRankings(container, data, slug) {
   const weekOptions = [];
   for (let w = 1; w <= data.meta.current_week; w++) weekOptions.push(w);
 
-  const filters = { tab: "overview", position: "ALL", ownership: "all", team: "ALL", watchedOnly: false, targetOnly: false, myTeamOnly: false, search: "", statsWeek: "season" };
+  const filters = { tab: "overview", position: "ALL", ownership: "all", team: "ALL", watchedOnly: false, targetOnly: false, myTeamOnly: false, search: "", statsWeek: "season", lastN: 3 };
   let watched = new Set();
   let targeted = new Set();
 
   function draw() {
+    const isLast = typeof filters.statsWeek === "string" && filters.statsWeek.startsWith("last:");
     container.innerHTML = `
       <div class="card">
         <button class="mobile-filters-toggle" type="button" id="rankings-filters-toggle">Filters ▾</button>
@@ -683,7 +699,8 @@ export function renderRankings(container, data, slug) {
           <input type="search" id="rankings-search" class="filter-search" placeholder="Search players..." autocomplete="off" value="${escapeHtml(filters.search)}" />
           <span class="filter-group"><label class="filter-label">Position</label><select id="rankings-pos-filter">${positions.map((p) => `<option value="${p}">${p}</option>`).join("")}</select></span>
           <span class="filter-group"><label class="filter-label">Team</label><select id="rankings-team-filter">${nflTeams.map((t) => `<option value="${t}">${t}</option>`).join("")}</select></span>
-          ${filters.tab === "stats" ? `<span class="filter-group filter-stats-week"><label class="filter-label">Week</label><select id="rankings-stats-week"><option value="season">Season</option>${weekOptions.map((w) => `<option value="${w}">Week ${w}</option>`).join("")}</select></span>` : ""}
+          ${filters.tab === "stats" ? `<span class="filter-group filter-stats-week"><label class="filter-label">Week</label><select id="rankings-stats-week"><option value="season">Season</option><option value="last">Last N weeks</option>${weekOptions.map((w) => `<option value="${w}">Week ${w}</option>`).join("")}</select></span>` : ""}
+          ${filters.tab === "stats" && isLast ? `<span class="filter-group filter-stats-week"><label class="filter-label">Weeks back</label><span class="stepper"><button type="button" class="stepper-btn" data-last-step="-1" aria-label="Fewer weeks">&minus;</button><span class="stepper-val" id="rankings-last-n">${filters.lastN}</span><button type="button" class="stepper-btn" data-last-step="1" aria-label="More weeks">+</button></span></span>` : ""}
           <span class="filter-group"><label class="filter-label">Status</label><select id="rankings-ownership-filter">
             <option value="all">All</option>
             <option value="available">Available</option>
@@ -780,12 +797,24 @@ export function renderRankings(container, data, slug) {
     }
     const statsWeekEl = container.querySelector("#rankings-stats-week");
     if (statsWeekEl) {
-      statsWeekEl.value = filters.statsWeek;
+      statsWeekEl.value = isLast ? "last" : filters.statsWeek;
       statsWeekEl.addEventListener("change", (e) => {
-        filters.statsWeek = e.target.value === "season" ? "season" : Number(e.target.value);
-        render(container, data, filters, watched, targeted);
+        const v = e.target.value;
+        filters.statsWeek = v === "season" ? "season" : v === "last" ? `last:${filters.lastN}` : Number(v);
+        // The N input appears/disappears with this choice, so rebuild the
+        // filter row rather than just re-rendering the table.
+        draw();
       });
     }
+    container.querySelectorAll("[data-last-step]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const max = Math.max(1, data.meta.current_week - 1);
+        filters.lastN = Math.min(max, Math.max(1, filters.lastN + Number(btn.dataset.lastStep)));
+        filters.statsWeek = `last:${filters.lastN}`;
+        container.querySelector("#rankings-last-n").textContent = filters.lastN;
+        render(container, data, filters, watched, targeted);
+      });
+    });
   }
 
   draw();

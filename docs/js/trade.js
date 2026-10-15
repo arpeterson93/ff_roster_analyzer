@@ -762,6 +762,11 @@ function mutualBenefit(gainA, gainB) {
 function tradeSuggestions(opts) {
   var rosterA = opts.rosterA, rosterB = opts.rosterB;
   var lockedA = opts.lockedA || [], lockedB = opts.lockedB || [];
+  // Players the caller never wants in ANY suggestion (the Trade Calculator's
+  // third checkbox state) - dropped from the search pool entirely. A locked
+  // player always wins over an exclusion, so a stale overlap can't silently
+  // drop an explicitly-requested lock.
+  var excludedA = opts.excludedA || [], excludedB = opts.excludedB || [];
   var players = opts.players, freeAgentsByPos = opts.freeAgentsByPos;
   var weeks = opts.weeks, slots = opts.slots, eligibility = opts.eligibility;
   var rosterSize = opts.rosterSize;
@@ -783,9 +788,11 @@ function tradeSuggestions(opts) {
 
   var lockedASet = {}; lockedA.forEach(function (id) { lockedASet[id] = true; });
   var lockedBSet = {}; lockedB.forEach(function (id) { lockedBSet[id] = true; });
+  var excludedASet = {}; excludedA.forEach(function (id) { excludedASet[id] = true; });
+  var excludedBSet = {}; excludedB.forEach(function (id) { excludedBSet[id] = true; });
   var isAutoEligible = function (id) { return !(players[id] && AUTO_TRADE_EXCLUDED_POSITIONS[players[id].position]); };
-  var poolA = topNByRosTotal(rosterA.filter(function (id) { return !lockedASet[id] && isAutoEligible(id); }), players, poolSize);
-  var poolB = topNByRosTotal(rosterB.filter(function (id) { return !lockedBSet[id] && isAutoEligible(id); }), players, poolSize);
+  var poolA = topNByRosTotal(rosterA.filter(function (id) { return !lockedASet[id] && !excludedASet[id] && isAutoEligible(id); }), players, poolSize);
+  var poolB = topNByRosTotal(rosterB.filter(function (id) { return !lockedBSet[id] && !excludedBSet[id] && isAutoEligible(id); }), players, poolSize);
 
   var giveAOptions = sideOptions(lockedA, poolA, maxPerSide);
   var giveBOptions = sideOptions(lockedB, poolB, maxPerSide);
