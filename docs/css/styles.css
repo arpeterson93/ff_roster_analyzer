@@ -1602,3 +1602,17 @@ details[open] summary { margin-bottom: 8px; }
 #tab-history .history-alltime-table { font-size: 12px; white-space: nowrap; }
 #tab-history .history-alltime-table th, #tab-history .history-alltime-table td { padding: 4px 5px; text-align: center; }
 #tab-history .history-alltime-table th:first-child, #tab-history .history-alltime-table td:first-child { text-align: left; }
+
+/* History tab's sub-view bar - same underline-tab look as nav.tabs / .modal-tabs. */
+.history-tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.history-tabs button {
+  border: none; background: transparent; color: var(--ink-500);
+  padding: 8px 14px; font-size: 13px; cursor: pointer; white-space: nowrap;
+  border-bottom: 2px solid transparent;
+}
+.history-tabs button.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.history-tabs .history-scope { margin-left: auto; padding-bottom: 4px; }
+
+/* History tab tables: centered values like the other stat tables, team name left-aligned. */
+#tab-history table th, #tab-history table td { text-align: center; }
+#tab-history table th:first-child, #tab-history table td:first-child { text-align: left; }

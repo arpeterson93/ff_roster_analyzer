@@ -181,7 +181,7 @@ def schedule_swap(games: list[dict]) -> dict | None:
             per_sched[x] = {"w": w_l_t[0], "l": w_l_t[1], "t": w_l_t[2], "subbed": subbed,
                             "weeks": "".join(weeks_detail[w] for w in sorted(weeks_detail))}
         actual = per_sched[t]
-        others = [v for k, v in per_sched.items() if k != t]
+        others = list(per_sched.values())  # every schedule, the team's own included (matches the workbook)
         wins = lambda v: v["w"] + 0.5 * v["t"]  # noqa: E731
         avg = _mean([wins(v) for v in others])
         out[t] = {

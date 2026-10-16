@@ -45,6 +45,43 @@ function themeColors() {
   return { ink: cs.getPropertyValue("--ink-700").trim() || "#555", grid: cs.getPropertyValue("--border").trim() || "#ddd" };
 }
 
+
+// All-Time rows for a season range, computed from the per-game rows in
+// history.json (same definitions as engine/history.py's all_time, which is
+// the unfiltered version) so any From/To season pair works.
+function computeAllTime(h, fromS, toS, includePlayoffs) {
+  const cols = h.games_cols;
+  const ix = Object.fromEntries(cols.map((c, i) => [c, i]));
+  const rows = h.games.filter((g) => g[ix.season] >= fromS && g[ix.season] <= toS && (includePlayoffs || !g[ix.playoff]));
+  const activeSet = new Set(rows.filter((g) => g[ix.season] === toS).map((g) => g[ix.manager]));
+  const by = new Map();
+  rows.forEach((g) => {
+    if (!by.has(g[ix.manager])) by.set(g[ix.manager], []);
+    by.get(g[ix.manager]).push(g);
+  });
+  const median = (xs) => { const v = xs.slice().sort((a, b) => a - b); const n = v.length; return n % 2 ? v[(n - 1) / 2] : (v[n / 2 - 1] + v[n / 2]) / 2; };
+  const sd = (xs) => { if (xs.length < 2) return null; const m = avg(xs); return Math.sqrt(sum(xs.map((x) => (x - m) ** 2)) / xs.length); };
+  const bands = (xs) => (xs.length ? [[0, 0.25], [0.25, 0.5], [0.5, 0.75], [0.75, 1.0001]].map(([lo, hi]) => xs.filter((x) => x >= lo && x < hi).length / xs.length) : null);
+  const stat = (xs) => ({ avg: avg(xs), med: median(xs), sd: sd(xs), cov: sd(xs) ? sd(xs) / avg(xs) : null, min: Math.min(...xs), max: Math.max(...xs) });
+  const out = [];
+  by.forEach((gs, manager) => {
+    const res = gs.map((g) => g[ix.result]);
+    const w = res.filter((r) => r === "W").length, l = res.filter((r) => r === "L").length, t = res.filter((r) => r === "T").length;
+    const pf = gs.map((g) => g[ix.pf]);
+    const pa = gs.map((g) => g[ix.pa]).filter((x) => x !== null);
+    const wcPa = gs.map((g) => g[ix.wc_pa]).filter((x) => x !== null);
+    const winsPf = gs.filter((g, i) => res[i] === "W").map((g) => g[ix.pf]);
+    const lossPf = gs.filter((g, i) => res[i] === "L").map((g) => g[ix.pf]);
+    out.push({
+      manager, active: activeSet.has(manager), games: gs.length, w, l, t, win_pct: (w + 0.5 * t) / gs.length,
+      avg_wc_pf: avg(gs.map((g) => g[ix.wc_pf])), avg_wc_pa: avg(wcPa),
+      pf: { ...stat(pf), lowest_win: winsPf.length ? Math.min(...winsPf) : null, highest_loss: lossPf.length ? Math.max(...lossPf) : null },
+      wc_bins: bands(gs.map((g) => g[ix.wc_pf])), wc_pa_bins: bands(wcPa), pa: pa.length ? stat(pa) : null,
+    });
+  });
+  return out.sort((a, b) => b.win_pct - a.win_pct);
+}
+
 export function renderHistory(container, data, slug) {
   const h = data.history;
   if (!h || !h.meta) {
@@ -92,33 +129,75 @@ export function renderHistory(container, data, slug) {
   const scopedSeasons = () => (state.scope === ALL ? seasonKeys : [state.scope]);
 
   // ------------------------------------------------------------- All-Time
+  // One definition per column drives the header, the cells and the sort.
+  const bandCols = (prefix, field) => [0, 1, 2, 3].map((i) => ({ key: `${prefix}${i}`, label: ["0-25%", "25-50%", "50-75%", "75-100%"][i], val: (r) => (r[field] ? r[field][i] : null), fmt: (v) => (v === null ? "–" : pct(v, 0)) }));
+  const pfStat = (k, label, d = 1) => ({ key: `pf_${k}`, label, val: (r) => r.pf[k], fmt: (v) => fmt(v, d) });
+  const paStat = (k, label) => ({ key: `pa_${k}`, label, val: (r) => (r.pa ? r.pa[k] : null), fmt: (v) => fmt(v) });
+  const ALLTIME_COLS = [
+    { group: null, cols: [
+      { key: "manager", label: "Team", val: (r) => r.manager, text: true },
+      { key: "games", label: "Games", val: (r) => r.games, fmt: (v) => v },
+      { key: "record", label: "Record", val: (r) => r.win_pct, fmt: null, cell: (r) => rec(r.w, r.l, r.t) },
+      { key: "win_pct", label: "Win %", val: (r) => r.win_pct, fmt: pct },
+    ] },
+    { group: "Avg Win Conf", cols: [
+      { key: "wc_pf", label: "PF", val: (r) => r.avg_wc_pf, fmt: pct },
+      { key: "wc_pa", label: "PA", val: (r) => r.avg_wc_pa, fmt: pct },
+    ] },
+    { group: "Points For", cols: [pfStat("avg", "Avg"), pfStat("med", "Med"), pfStat("sd", "SD"), pfStat("cov", "COV", 2), pfStat("min", "Min"), pfStat("max", "Max"), pfStat("lowest_win", "Lowest Win"), pfStat("highest_loss", "Highest Loss")] },
+    { group: "PF Win-Conf bands", cols: bandCols("pfb", "wc_bins") },
+    { group: "Points Against", cols: [paStat("avg", "Avg"), paStat("med", "Med"), paStat("sd", "SD"), paStat("min", "Min"), paStat("max", "Max")] },
+    { group: "PA Win-Conf bands (opp. score)", cols: bandCols("pab", "wc_pa_bins") },
+  ];
+  const ALL_COLS = ALLTIME_COLS.flatMap((g) => g.cols);
+
+  const lastSeason = Number(seasonKeys[seasonKeys.length - 1]);
+  const firstSeason = Number(seasonKeys[0]);
+  function alltimeRows() {
+    const from = state.atFrom ?? firstSeason, to = state.atTo ?? lastSeason;
+    return computeAllTime(h, Math.min(from, to), Math.max(from, to), state.playoffs);
+  }
   function viewAllTime() {
-    const rows = h.all_time[state.playoffs ? "all" : "reg"];
+    const rows = alltimeRows();
+    const sort = state.atSort;
+    const col = sort && ALL_COLS.find((c) => c.key === sort.key);
+    const ordered = (list) => {
+      if (!col) return list;
+      return list.slice().sort((x, y) => {
+        const a = col.val(x), b = col.val(y);
+        if (col.text) return String(a).localeCompare(String(b)) * sort.dir;
+        // Missing values always sort last, whichever direction.
+        if (a === null || a === undefined) return 1;
+        if (b === null || b === undefined) return -1;
+        return (a - b) * sort.dir;
+      });
+    };
     const body = (list) =>
-      list
-        .map((r) => `<tr${rowClass(r.manager)}>
-          <td>${mgrLabel(r.manager)}</td><td>${r.games}</td><td>${rec(r.w, r.l, r.t)}</td><td>${pct(r.win_pct)}</td>
-          <td>${pct(r.avg_wc_pf)}</td><td>${pct(r.avg_wc_pa)}</td>
-          <td>${fmt(r.pf.avg)}</td><td>${fmt(r.pf.med)}</td><td>${fmt(r.pf.sd)}</td><td>${fmt(r.pf.cov, 2)}</td><td>${fmt(r.pf.min)}</td><td>${fmt(r.pf.max)}</td><td>${fmt(r.pf.lowest_win)}</td><td>${fmt(r.pf.highest_loss)}</td>
-          ${r.wc_bins.map((b) => `<td ${heat(b, 0, 0.5)}>${pct(b, 0)}</td>`).join("")}
-          ${(r.wc_pa_bins || [null, null, null, null]).map((b) => `<td>${b === null ? "–" : pct(b, 0)}</td>`).join("")}
-          <td>${r.pa ? fmt(r.pa.avg) : "–"}</td><td>${r.pa ? fmt(r.pa.med) : "–"}</td><td>${r.pa ? fmt(r.pa.sd) : "–"}</td><td>${r.pa ? fmt(r.pa.min) : "–"}</td><td>${r.pa ? fmt(r.pa.max) : "–"}</td>
-        </tr>`)
+      ordered(list)
+        .map((r) => `<tr${rowClass(r.manager)}>${ALL_COLS.map((c) => {
+          if (c.key === "manager") return `<td>${mgrLabel(r.manager)}</td>`;
+          return `<td>${c.cell ? c.cell(r) : c.fmt(c.val(r))}</td>`;
+        }).join("")}</tr>`)
         .join("");
+    const arrow = (c) => (sort && sort.key === c.key ? (sort.dir === 1 ? " ▲" : " ▼") : "");
+    const th = (c, extra = "") => `<th data-at-sort="${c.key}" style="cursor:pointer" ${extra}>${c.label}${arrow(c)}</th>`;
     const head = `<thead>
-      <tr class="group-header-row"><th rowspan="2">Team</th><th rowspan="2">Games</th><th rowspan="2">Record</th><th rowspan="2">Win %</th><th colspan="2">Avg Win Conf</th><th colspan="8">Points For</th><th colspan="4">PF Win-Conf bands</th><th colspan="4">PA Win-Conf bands (opp. score)</th><th colspan="5">Points Against</th></tr>
-      <tr><th>PF</th><th>PA</th><th>Avg</th><th>Med</th><th>SD</th><th>COV</th><th>Min</th><th>Max</th><th>Lowest Win</th><th>Highest Loss</th><th>0-25%</th><th>25-50%</th><th>50-75%</th><th>75-100%</th><th>0-25%</th><th>25-50%</th><th>50-75%</th><th>75-100%</th><th>Avg</th><th>Med</th><th>SD</th><th>Min</th><th>Max</th></tr></thead>`;
+      <tr class="group-header-row">${ALLTIME_COLS.map((g) => (g.group ? `<th colspan="${g.cols.length}">${g.group}</th>` : g.cols.map((c) => th(c, `rowspan="2"`)).join(""))).join("")}</tr>
+      <tr>${ALLTIME_COLS.filter((g) => g.group).flatMap((g) => g.cols).map((c) => th(c)).join("")}</tr></thead>`;
     const active = rows.filter((r) => r.active);
     const inactive = rows.filter((r) => !r.active);
     return `<div class="card">
-      <h2>All-Time <label class="muted small"><input type="checkbox" data-playoffs ${state.playoffs ? "checked" : ""}> include playoff/consolation games</label></h2>
-      <div class="table-wrap"><table class="history-alltime-table">${head}<tbody>${body(active)}${inactive.length ? `<tr><td colspan="27" class="muted small">Inactive managers</td></tr>${body(inactive)}` : ""}</tbody></table></div>
+      <h2>All-Time
+        <label class="muted small">From <select data-at-from>${seasonKeys.map((y) => `<option ${Number(y) === (state.atFrom ?? firstSeason) ? "selected" : ""}>${y}</option>`).join("")}</select></label>
+        <label class="muted small">to <select data-at-to>${seasonKeys.map((y) => `<option ${Number(y) === (state.atTo ?? lastSeason) ? "selected" : ""}>${y}</option>`).join("")}</select></label>
+        <label class="muted small"><input type="checkbox" data-playoffs ${state.playoffs ? "checked" : ""}> include playoff/consolation games</label></h2>
+      <div class="table-wrap"><table class="history-alltime-table">${head}<tbody>${body(active)}${inactive.length ? `<tr><td colspan="${ALL_COLS.length}" class="muted small">Inactive managers</td></tr>${body(inactive)}` : ""}</tbody></table></div>
     </div>
     <div class="card"><h2>Win % vs average win confidence</h2>
       <p class="muted small">Above the line = won more than their scoring "deserved" (lucky schedule); below = unlucky.</p>${chartBox("hc-alltime", 320)}</div>`;
   }
   function afterAllTime() {
-    const rows = h.all_time[state.playoffs ? "all" : "reg"].filter((r) => r.games >= 10);
+    const rows = alltimeRows().filter((r) => r.games >= Math.min(10, Math.max(...alltimeRows().map((x) => x.games)) / 2));
     chart("hc-alltime", {
       type: "scatter",
       data: { datasets: [{ label: "Managers", data: rows.map((r) => ({ x: r.avg_wc_pf * 100, y: r.win_pct * 100, m: r.manager })), backgroundColor: PALETTE[0], pointRadius: 5 }] },
@@ -258,7 +337,7 @@ export function renderHistory(container, data, slug) {
       return `<td ${x === t ? `class="block-end"` : ""} ${heat((c.w + c.t / 2) / games, 0.2, 0.8)}>${rec(c.w, c.l, c.t)}${c.star && x !== t ? "*" : ""}</td>`;
     };
     return `<div class="card"><h2>Record under every other team's schedule – ${state.scope === ALL ? "all seasons" : state.scope}</h2>
-      <p class="muted small">Rows: whose scores. Columns: whose schedule they'd have played. * = includes a week where that schedule's opponent was the row team itself, so the rest of the league's average score (excluding the row team) was used. The column with the row team's own name is its actual record. Luck = actual wins − average wins across the other schedules.</p>
+      <p class="muted small">Rows: whose scores. Columns: whose schedule they'd have played. * = includes a week where that schedule's opponent was the row team itself, so the rest of the league's average score (excluding the row team) was used. The column with the row team's own name is its actual record. Luck = actual wins − average wins across every schedule (their own included).</p>
       <div class="table-wrap"><table><thead><tr><th>Team</th><th>Actual</th><th>Best</th><th>Worst</th><th>Avg</th><th>Luck</th>${cols.map((c) => `<th title="${escapeHtml(c)}'s schedule">${escapeHtml(c.split(" ")[0])}</th>`).join("")}</tr></thead><tbody>
       ${teams.map((t) => `<tr${rowClass(t)}><td>${mgrLabel(t)}</td><td>${fmt(agg[t].actual, 1)}</td><td>${fmt(agg[t].best, 1)}</td><td>${fmt(agg[t].worst, 1)}</td><td>${fmt(agg[t].avg, 1)}</td><td ${heat(agg[t].luck / agg[t].seasons, -2, 2)}>${agg[t].luck > 0 ? "+" : ""}${fmt(agg[t].luck, 1)}</td>${cols.map((x) => cellHtml(t, x)).join("")}</tr>`).join("")}
       </tbody></table></div></div>
@@ -403,13 +482,26 @@ export function renderHistory(container, data, slug) {
     const scopeSel = SCOPED.has(state.view)
       ? `<label class="muted small">Season <select data-scope><option value="${ALL}" ${state.scope === ALL ? "selected" : ""}>All seasons</option>${seasonKeys.slice().reverse().map((s) => `<option ${s === state.scope ? "selected" : ""}>${s}</option>`).join("")}</select></label>`
       : "";
-    container.innerHTML = `<div class="history-toolbar" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:10px">
+    container.innerHTML = `<div class="history-tabs">
       ${VIEW_LIST.map(([k, label]) => `<button type="button" class="${k === state.view ? "active" : ""}" data-hview="${k}">${label}</button>`).join("")}
-      <span style="flex:1"></span>${scopeSel}</div>${view()}`;
+      ${scopeSel ? `<span class="history-scope">${scopeSel}</span>` : ""}</div>${view()}`;
     container.querySelectorAll("[data-hview]").forEach((b) => b.addEventListener("click", () => { state.view = b.dataset.hview; render(); }));
     const scope = container.querySelector("[data-scope]");
     if (scope) scope.addEventListener("change", () => { state.scope = scope.value; render(); });
     container.querySelectorAll("[data-focus]").forEach((s) => s.addEventListener("change", () => { state.focus = s.value; render(); }));
+    container.querySelectorAll("[data-at-sort]").forEach((el) =>
+      el.addEventListener("click", () => {
+        const key = el.dataset.atSort;
+        const cur = state.atSort;
+        // First click: best-first (descending, or A-Z for the name); click again to flip.
+        state.atSort = cur && cur.key === key ? { key, dir: -cur.dir } : { key, dir: key === "manager" ? 1 : -1 };
+        render();
+      })
+    );
+    [["[data-at-from]", "atFrom"], ["[data-at-to]", "atTo"]].forEach(([sel, key]) => {
+      const el = container.querySelector(sel);
+      if (el) el.addEventListener("change", () => { state[key] = Number(el.value); render(); });
+    });
     const po = container.querySelector("[data-playoffs]");
     if (po) po.addEventListener("change", () => { state.playoffs = po.checked; render(); });
     const wcp = container.querySelector("[data-wc-points]");
