@@ -269,7 +269,11 @@ def all_time(games: list[dict], wcs: dict[str, WinConfidence], include_playoffs:
         wc_pa = [g["wc_pa"] for g in gs if g["wc_pa"] is not None]
         wins_pf = [g["pf"] for g, r in zip(gs, res) if r == "W"]
         loss_pf = [g["pf"] for g, r in zip(gs, res) if r == "L"]
-        bins = [sum(1 for x in wc_pf if lo <= x < hi or (hi == 1.0 and x == 1.0)) / len(wc_pf) for lo, hi in ((0, .25), (.25, .5), (.5, .75), (.75, 1.0))]
+        def band_shares(xs):
+            return [sum(1 for x in xs if lo <= x < hi or (hi == 1.0 and x == 1.0)) / len(xs) for lo, hi in ((0, .25), (.25, .5), (.5, .75), (.75, 1.0))] if xs else None
+
+        bins = band_shares(wc_pf)
+        pa_bins = band_shares(wc_pa)
         rows.append({
             "manager": mgr, "active": mgr in active, "games": len(gs), "w": w, "l": l, "t": t,
             "win_pct": _r((w + 0.5 * t) / len(gs), 4),
@@ -278,6 +282,7 @@ def all_time(games: list[dict], wcs: dict[str, WinConfidence], include_playoffs:
                    "cov": _r(_sd(pf) / _mean(pf), 4) if _sd(pf) else None, "min": _r(min(pf)), "max": _r(max(pf)),
                    "lowest_win": _r(min(wins_pf)) if wins_pf else None, "highest_loss": _r(max(loss_pf)) if loss_pf else None},
             "wc_bins": [_r(b, 4) for b in bins],
+            "wc_pa_bins": [_r(b, 4) for b in pa_bins] if pa_bins else None,
             "pa": ({"avg": _r(_mean(pa)), "med": _r(statistics.median(pa)), "sd": _r(_sd(pa)),
                     "cov": _r(_sd(pa) / _mean(pa), 4) if _sd(pa) else None, "min": _r(min(pa)), "max": _r(max(pa))} if pa else None),
         })

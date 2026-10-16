@@ -101,17 +101,18 @@ export function renderHistory(container, data, slug) {
           <td>${pct(r.avg_wc_pf)}</td><td>${pct(r.avg_wc_pa)}</td>
           <td>${fmt(r.pf.avg)}</td><td>${fmt(r.pf.med)}</td><td>${fmt(r.pf.sd)}</td><td>${fmt(r.pf.cov, 2)}</td><td>${fmt(r.pf.min)}</td><td>${fmt(r.pf.max)}</td><td>${fmt(r.pf.lowest_win)}</td><td>${fmt(r.pf.highest_loss)}</td>
           ${r.wc_bins.map((b) => `<td ${heat(b, 0, 0.5)}>${pct(b, 0)}</td>`).join("")}
+          ${(r.wc_pa_bins || [null, null, null, null]).map((b) => `<td>${b === null ? "–" : pct(b, 0)}</td>`).join("")}
           <td>${r.pa ? fmt(r.pa.avg) : "–"}</td><td>${r.pa ? fmt(r.pa.med) : "–"}</td><td>${r.pa ? fmt(r.pa.sd) : "–"}</td><td>${r.pa ? fmt(r.pa.min) : "–"}</td><td>${r.pa ? fmt(r.pa.max) : "–"}</td>
         </tr>`)
         .join("");
     const head = `<thead>
-      <tr class="group-header-row"><th rowspan="2">Team</th><th rowspan="2">Games</th><th rowspan="2">Record</th><th rowspan="2">Win %</th><th colspan="2">Avg Win Conf</th><th colspan="8">Points For</th><th colspan="4">PF Win-Conf bands</th><th colspan="5">Points Against</th></tr>
-      <tr><th>PF</th><th>PA</th><th>Avg</th><th>Med</th><th>SD</th><th>COV</th><th>Min</th><th>Max</th><th>Lowest Win</th><th>Highest Loss</th><th>0-25%</th><th>25-50%</th><th>50-75%</th><th>75-100%</th><th>Avg</th><th>Med</th><th>SD</th><th>Min</th><th>Max</th></tr></thead>`;
+      <tr class="group-header-row"><th rowspan="2">Team</th><th rowspan="2">Games</th><th rowspan="2">Record</th><th rowspan="2">Win %</th><th colspan="2">Avg Win Conf</th><th colspan="8">Points For</th><th colspan="4">PF Win-Conf bands</th><th colspan="4">PA Win-Conf bands (opp. score)</th><th colspan="5">Points Against</th></tr>
+      <tr><th>PF</th><th>PA</th><th>Avg</th><th>Med</th><th>SD</th><th>COV</th><th>Min</th><th>Max</th><th>Lowest Win</th><th>Highest Loss</th><th>0-25%</th><th>25-50%</th><th>50-75%</th><th>75-100%</th><th>0-25%</th><th>25-50%</th><th>50-75%</th><th>75-100%</th><th>Avg</th><th>Med</th><th>SD</th><th>Min</th><th>Max</th></tr></thead>`;
     const active = rows.filter((r) => r.active);
     const inactive = rows.filter((r) => !r.active);
     return `<div class="card">
       <h2>All-Time <label class="muted small"><input type="checkbox" data-playoffs ${state.playoffs ? "checked" : ""}> include playoff/consolation games</label></h2>
-      <div class="table-wrap"><table>${head}<tbody>${body(active)}${inactive.length ? `<tr><td colspan="23" class="muted small">Inactive managers</td></tr>${body(inactive)}` : ""}</tbody></table></div>
+      <div class="table-wrap"><table>${head}<tbody>${body(active)}${inactive.length ? `<tr><td colspan="27" class="muted small">Inactive managers</td></tr>${body(inactive)}` : ""}</tbody></table></div>
     </div>
     <div class="card"><h2>Win % vs average win confidence</h2>
       <p class="muted small">Above the line = won more than their scoring "deserved" (lucky schedule); below = unlucky.</p>${chartBox("hc-alltime", 320)}</div>`;
