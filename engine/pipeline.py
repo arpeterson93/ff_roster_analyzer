@@ -55,6 +55,7 @@ from engine.play_log import (
 from engine.points_against import dst_points_against_detail, points_against_detail, with_kick_attempts, with_remaining_schedule
 from engine.scoring import ScoringRules
 from engine import standings_stage
+from engine.history import load_and_build as load_history
 from engine.xfp_play_log import expected_plays_for_player
 from engine.team_strength import (
     PlayerCtx,
@@ -1961,6 +1962,12 @@ def run_league(
         "fa_values_detail.json": fa_values_detail_out,
         "unmapped.json": unmapped,
     }
+    # Static between data pulls (tools/history/*), cheap to rebuild, so every
+    # stage that runs run_league just recomputes it; absent when the league
+    # has no raw history yet.
+    history_out = load_history(cfg["slug"], cfg.get("history"))
+    if history_out is not None:
+        result["history.json"] = history_out
     if "pbp" not in skip:
         result["game_log_plays.json"] = game_log_plays_out
     if "faab" not in skip:

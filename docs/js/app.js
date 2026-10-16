@@ -9,6 +9,7 @@ import { renderTrade } from "./tradeui.js";
 import { renderSchedule } from "./schedule.js";
 import { renderSettings } from "./settings.js";
 import { renderTrends } from "./trends.js";
+import { renderHistory } from "./history.js";
 
 const VIEWS = {
   strength: renderStrength,
@@ -19,6 +20,7 @@ const VIEWS = {
   standings: renderStandings,
   schedule: renderSchedule,
   trends: renderTrends,
+  history: renderHistory,
   settings: renderSettings,
 };
 

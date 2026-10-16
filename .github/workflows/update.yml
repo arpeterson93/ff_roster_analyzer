@@ -14,6 +14,7 @@ on:
       - "config/**"
       - "ingest/**"
       - "engine/**"
+      - "data/history/**"
       - "docs/**"
       - "tools/faab_history/fetch_release_data.py"
       - "tools/nflverse_freshness.py"
@@ -102,6 +103,8 @@ jobs:
       PYTHONIOENCODING: utf-8
       ESPN_S2_AGS: ${{ secrets.ESPN_S2_AGS }}
       SWID_AGS: ${{ secrets.SWID_AGS }}
+      ESPN_S2_OLEAGUE: ${{ secrets.ESPN_S2_OLEAGUE }}
+      SWID_OLEAGUE: ${{ secrets.SWID_OLEAGUE }}
       # Every stage sets this (not just refresh) - harmless for full/live,
       # which either always re-fetch anyway (full) or never touch nflverse
       # at all (live), and keeps this one line uniform across all three
@@ -154,6 +157,16 @@ jobs:
       - name: Fetch FAAB training data
         if: needs.gate.outputs.stage == 'full'
         run: python -m tools.faab_history.fetch_release_data
+
+      # Past seasons' history is committed under data/history/ and only changes
+      # when someone re-runs tools/history/pull_espn_history.py; the in-progress
+      # season is re-pulled here on every full/refresh build (not committed).
+      - name: Refresh current-season history
+        if: needs.gate.outputs.stage != 'live'
+        continue-on-error: true
+        run: |
+          python -m tools.history.pull_espn_history --league o-league --current --espn-s2-env ESPN_S2_OLEAGUE --swid-env SWID_OLEAGUE
+          python -m tools.history.pull_espn_history --league any-given-sunday --current
 
       - name: Run pipeline (full)
         if: needs.gate.outputs.stage == 'full'

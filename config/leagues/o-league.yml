@@ -4,7 +4,7 @@ platform: espn
 league_id: 355398
 season: 2026
 private: false
-credentials: null          # env var names for private leagues, e.g. {espn_s2: ESPN_S2_AGS, swid: SWID_AGS}
+credentials: {espn_s2: ESPN_S2_OLEAGUE, swid: SWID_OLEAGUE}   # env var names; the pipeline works without them (public league), history pulls need them for 2018+
 scoring_format: standard   # standard | half | ppr  -> FantasyPros page family
 settings_sheet_id: 1RDRiu5rqS0Vh1Jge36tr5cTN_o9GmSUrJbK_APiRq1Q    # Google Sheet id for live-editable settings (see README "Settings sheet")
 faab_model:
@@ -30,3 +30,5 @@ sim:
   iterations: 10000
   seed: 2026
   division_winners_first: true
+history:                         # see engine/history.py; raw data lives in data/history/o-league/
+  manager_aliases: {}            # {"Old display name": "Canonical name"} when one person shows up under two names

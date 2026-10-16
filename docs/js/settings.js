@@ -110,6 +110,24 @@ function teamsSectionHtml(teams, editable) {
   return `<div class="table-wrap"><table><thead><tr><th>ESPN team name</th><th>Shown on site as</th><th>Abbrev</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
+// Every owner name ESPN has reported for this league's history, with a
+// "Counts as" box - type the same name into two rows to merge them on the
+// History tab (key history_alias:<ESPN name>, see ingest/settings_sheet.py).
+function historyManagersHtml(history, editable) {
+  const raw = history && history.meta && history.meta.raw_managers;
+  if (!raw || !raw.length) return `<p class="muted small">No history imported yet.</p>`;
+  const rows = raw
+    .map(
+      (m) => `<tr>
+        <td>${escapeHtml(m.name)}</td>
+        <td class="muted small">${m.first === m.last ? m.first : `${m.first}-${m.last}`} (${m.games} games)</td>
+        <td><input type="text" data-key="history_alias:${escapeHtml(m.name)}" data-orig="${escapeHtml(m.name)}" value="${escapeHtml(m.maps_to)}" ${editable ? "" : "disabled"} /></td>
+      </tr>`
+    )
+    .join("");
+  return `<div class="table-wrap"><table><thead><tr><th>ESPN owner name</th><th>Seasons</th><th>Counts as</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
 export function renderSettings(container, data) {
   const settings = data.meta.settings || {};
   const sheetConfigured = !!data.meta.settings_sheet_id;
@@ -132,6 +150,11 @@ export function renderSettings(container, data) {
       <h2>Teams</h2>
       <p class="muted small">This site shows each manager's first name (or their ESPN team name, if no manager is set) instead of their real ESPN team name - override "Shown on site as" to change it.${editable ? " Changes save with the settings below." : ""}</p>
       ${teamsSectionHtml(data.meta.teams, editable)}
+    </div>
+    <div class="card">
+      <h2>History managers</h2>
+      <p class="muted small">The History tab groups results by ESPN owner name. If one person appears under two names (or a team's new owner should continue the old one's record), set both rows to the same "Counts as" name.${editable ? " Changes save with the settings below and apply on the next pipeline run." : ""}</p>
+      ${historyManagersHtml(data.history, editable)}
     </div>
     <div class="card">
       <h2>League settings</h2>
@@ -170,6 +193,13 @@ export function renderSettings(container, data) {
   container.querySelectorAll("input[data-key^='team_']").forEach((el) => {
     el.addEventListener("input", () => {
       pending[el.dataset.key] = el.value;
+    });
+  });
+
+  container.querySelectorAll("input[data-key^='history_alias:']").forEach((el) => {
+    el.addEventListener("input", () => {
+      // Same as the owner's own name = no alias (saved as empty to clear any earlier one).
+      pending[el.dataset.key] = el.value.trim() === el.dataset.orig ? "" : el.value.trim();
     });
   });
 

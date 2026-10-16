@@ -60,6 +60,11 @@ _DIVISION_TIEBREAK_KEY_RE = re.compile(r"^division_tiebreak_[1-4]$")
 # know an override even exists.
 _TEAM_DISPLAY_NAME_KEY_RE = re.compile(r"^team_(\d+)_display_name$")
 
+# History tab owner merge (docs/js/settings.js's History managers table):
+# "history_alias:<ESPN owner name>" -> the name that owner should count as,
+# collected into cfg["history"]["manager_aliases"] (engine/history.py).
+_HISTORY_ALIAS_KEY_RE = re.compile(r"^history_alias:(.+)$")
+
 
 class SettingsSheetError(Exception):
     pass
@@ -110,6 +115,18 @@ def apply_remote_settings(cfg: dict, remote_for_league: dict[str, str]) -> list[
             if old_value != raw_value:
                 changes.append(f"{key}: {old_value} -> {raw_value} (from settings sheet)")
             seeding_raw[key] = raw_value
+            continue
+
+        alias_match = _HISTORY_ALIAS_KEY_RE.match(key)
+        if alias_match:
+            old = alias_match.group(1)
+            aliases = cfg.setdefault("history", {}).setdefault("manager_aliases", {})
+            if aliases.get(old) != (raw_value or None):
+                changes.append(f"{key}: {aliases.get(old)} -> {raw_value} (from settings sheet)")
+            if raw_value and raw_value != old:
+                aliases[old] = raw_value
+            else:
+                aliases.pop(old, None)
             continue
 
         team_match = _TEAM_DISPLAY_NAME_KEY_RE.match(key)

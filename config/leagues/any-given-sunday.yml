@@ -30,3 +30,5 @@ sim:
   iterations: 10000
   seed: 2026
   division_winners_first: true
+history:
+  manager_aliases: {}
