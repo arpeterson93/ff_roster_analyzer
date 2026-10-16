@@ -112,7 +112,7 @@ export function renderHistory(container, data, slug) {
     const inactive = rows.filter((r) => !r.active);
     return `<div class="card">
       <h2>All-Time <label class="muted small"><input type="checkbox" data-playoffs ${state.playoffs ? "checked" : ""}> include playoff/consolation games</label></h2>
-      <div class="table-wrap"><table>${head}<tbody>${body(active)}${inactive.length ? `<tr><td colspan="27" class="muted small">Inactive managers</td></tr>${body(inactive)}` : ""}</tbody></table></div>
+      <div class="table-wrap"><table class="history-alltime-table">${head}<tbody>${body(active)}${inactive.length ? `<tr><td colspan="27" class="muted small">Inactive managers</td></tr>${body(inactive)}` : ""}</tbody></table></div>
     </div>
     <div class="card"><h2>Win % vs average win confidence</h2>
       <p class="muted small">Above the line = won more than their scoring "deserved" (lucky schedule); below = unlucky.</p>${chartBox("hc-alltime", 320)}</div>`;

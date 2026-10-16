@@ -1594,3 +1594,11 @@ details[open] summary { margin-bottom: 8px; }
 .stepper-btn { border: 0; border-radius: 0; padding: 0 10px; background: transparent; cursor: pointer; font-size: 16px; line-height: 1; }
 .stepper-btn:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .stepper-val { min-width: 2em; padding: 4px 0; text-align: center; font-variant-numeric: tabular-nums; border-left: 1px solid var(--border); border-right: 1px solid var(--border); }
+
+/* History tab: use the full viewport width (like Rankings) and tighten the
+   27-column All-Time table so it fits a widescreen without horizontal
+   scrolling; narrower screens still fall back to .table-wrap's scroll. */
+#tab-history.tabpanel { max-width: none; }
+#tab-history .history-alltime-table { font-size: 12px; white-space: nowrap; }
+#tab-history .history-alltime-table th, #tab-history .history-alltime-table td { padding: 4px 5px; text-align: center; }
+#tab-history .history-alltime-table th:first-child, #tab-history .history-alltime-table td:first-child { text-align: left; }
