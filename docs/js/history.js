@@ -53,11 +53,12 @@ function computeAllTime(h, fromS, toS, includePlayoffs) {
   const cols = h.games_cols;
   const ix = Object.fromEntries(cols.map((c, i) => [c, i]));
   const rows = h.games.filter((g) => g[ix.season] >= fromS && g[ix.season] <= toS && (includePlayoffs || !g[ix.playoff]));
-  const activeSet = new Set(rows.filter((g) => g[ix.season] === toS).map((g) => g[ix.manager]));
+  const activeSet = new Set(rows.filter((g) => g[ix.season] === toS).map((g) => h.meta.managers[g[ix.manager]]));
   const by = new Map();
   rows.forEach((g) => {
-    if (!by.has(g[ix.manager])) by.set(g[ix.manager], []);
-    by.get(g[ix.manager]).push(g);
+    const name = h.meta.managers[g[ix.manager]];  // games store an index into meta.managers
+    if (!by.has(name)) by.set(name, []);
+    by.get(name).push(g);
   });
   const median = (xs) => { const v = xs.slice().sort((a, b) => a - b); const n = v.length; return n % 2 ? v[(n - 1) / 2] : (v[n / 2 - 1] + v[n / 2]) / 2; };
   const sd = (xs) => { if (xs.length < 2) return null; const m = avg(xs); return Math.sqrt(sum(xs.map((x) => (x - m) ** 2)) / xs.length); };
