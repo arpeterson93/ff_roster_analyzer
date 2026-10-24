@@ -311,6 +311,7 @@ def _compute_faab_estimates(
     snap_pct_index: dict[str, dict[int, float]], gsis_to_pfr: dict[str, str],
     stats_index: dict[str, dict[int, dict]], team_rb_carries: dict[tuple[str, int], float],
     gsis_by_pid: dict[str, str],
+    waiver_espn_ids: set[int] | None = None,
 ) -> dict[str, dict]:
     """FAAB bid estimates for currently-unrostered players on ESPN "WAIVERS"
     status (need a real bid, unlike an instant-add "FREEAGENT") - see
@@ -359,11 +360,12 @@ def _compute_faab_estimates(
         return {}
     if not cfg.get("faab_model", {}).get("enabled"):
         return {}
-    try:
-        waiver_espn_ids = client.get_waiver_status_espn_ids()
-    except Exception as exc:
-        logger.warning("faab_model: failed to fetch waiver-status players: %s", exc)
-        return {}
+    if waiver_espn_ids is None:
+        try:
+            waiver_espn_ids = client.get_waiver_status_espn_ids()
+        except Exception as exc:
+            logger.warning("faab_model: failed to fetch waiver-status players: %s", exc)
+            return {}
     if not waiver_espn_ids:
         return {}
 
@@ -1934,6 +1936,18 @@ def run_league(
     # from (a real prod case: FAAB showed week 3 while it was still
     # Wednesday evening Central, a full day before week 2's Thursday
     # opener).
+    # Players currently on waivers (not instant-add free agents) and when each
+    # clears - still "available" (fantasy_team_id stays None), the site just
+    # labels them "On Waivers (Thu)". None on every other player.
+    try:
+        waiver_clears = client.get_waiver_clear_times()
+    except Exception as exc:
+        logger.warning("failed to fetch waiver status/clear times: %s", exc)
+        waiver_clears = None
+    for p in players_out:
+        p["on_waivers"] = bool(waiver_clears) and p["fantasy_team_id"] is None and p["espn_id"] in waiver_clears
+        p["waiver_clears"] = waiver_clears[p["espn_id"]] if p["on_waivers"] else None
+
     if "faab" not in skip:
         faab_week_started = nd.week_for_kickoff(datetime.now(timezone.utc), schedules_current, season)
         faab_current_week = _faab_week_override(current_week, faab_week_started)
@@ -1942,6 +1956,7 @@ def run_league(
             faab_estimates_out = _compute_faab_estimates(
                 cfg, client, players_out, season, faab_current_week, team_rosters, team_specific_fa_gains,
                 snap_pct_index, gsis_to_pfr, stats_index, team_rb_carries, gsis_by_pid,
+                waiver_espn_ids=set(waiver_clears) if waiver_clears is not None else None,
             )
         except Exception as exc:
             logger.warning("faab_model: estimate computation failed, writing empty faab_estimates.json: %s", exc)

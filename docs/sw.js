@@ -15,7 +15,7 @@
 // the last v2->v3 bump, which predated those edits - see the conversation
 // this was built from). activate() deletes every other cache name, so
 // this is also how old shells get cleaned up after a deploy.
-const CACHE_NAME = "stackademics-shell-v18";
+const CACHE_NAME = "stackademics-shell-v19";
 
 const APP_SHELL = [
   "./",
@@ -23,6 +23,7 @@ const APP_SHELL = [
   "manifest.json",
   "css/styles.css",
   "js/app.js",
+  "js/availability.js",
   "js/colors.js",
   "js/data.js",
   "js/history.js",

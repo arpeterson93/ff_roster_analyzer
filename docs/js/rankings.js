@@ -4,6 +4,7 @@ import {
   pointsWeeksAgo, seasonAvgPoints, seasonTotalPoints, seasonTotalXfp, weatherCellHtml, rosCellHtml, projectedCellHtml,
   snapPct, attPct, tgtPct, airYardPct, shortName, statsWindowStart,
 } from "./colors.js";
+import { isIrEligible, waiverLabel } from "./availability.js";
 import { openPlayerModal } from "./playermodal.js";
 import { openPointsAgainstModal } from "./pointsagainstmodal.js";
 import { loadWatchlist, setWatched } from "./watchlist.js";
@@ -40,7 +41,7 @@ function healthBadge(status) {
 }
 
 function ownerName(p, teamsById) {
-  if (p.fantasy_team_id === null) return "FA";
+  if (p.fantasy_team_id === null) return waiverLabel(p) || "FA";
   return teamLabel(teamsById.get(p.fantasy_team_id));
 }
 
@@ -504,7 +505,9 @@ function filteredSortedRows(data, filters, watched, targeted) {
     if (filters.myTeamOnly || filters.ownership !== "all" || filters.watchedOnly || filters.targetOnly) {
       const isMyTeam = filters.myTeamOnly && p.fantasy_team_id === yourTeamId;
       const ownershipOk =
-        filters.ownership === "available" ? p.fantasy_team_id === null
+        filters.ownership === "available" ? p.fantasy_team_id === null  // includes players on waivers
+        : filters.ownership === "waivers" ? p.on_waivers
+        : filters.ownership === "ir" ? isIrEligible(p)  // rostered or not
         : filters.ownership === "owned" ? p.fantasy_team_id !== null
         : true;
       const passesAvailWatch =
@@ -704,6 +707,8 @@ export function renderRankings(container, data, slug) {
           <span class="filter-group"><label class="filter-label">Status</label><select id="rankings-ownership-filter">
             <option value="all">All</option>
             <option value="available">Available</option>
+            <option value="waivers">On Waivers</option>
+            <option value="ir">IR-Eligible</option>
             <option value="owned">Owned</option>
           </select></span>
           ${yourTeamId !== null ? `<label class="filter-checkbox"><input type="checkbox" id="rankings-myteam-only" /> My Team</label>` : ""}

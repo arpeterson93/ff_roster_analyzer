@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time
+from datetime import datetime, timezone
 
 from espn_api.football import League as EspnLeague
 from espn_api.football import Player as EspnPlayer
@@ -71,6 +72,12 @@ _FA_SIZE_BY_POS = {"QB": 1000, "RB": 1000, "WR": 1000, "TE": 1000, "K": 1000, "D
 # as the full multi-position pool _FA_SIZE_BY_POS now targets, not the old
 # small per-position caps summed.
 _FUTURE_PROJECTIONS_FA_SIZE = 3000
+
+
+def _iso_utc(epoch_ms) -> str | None:
+    if not epoch_ms:
+        return None
+    return datetime.fromtimestamp(epoch_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class EspnClient:
@@ -356,6 +363,10 @@ class EspnClient:
         return result
 
     def get_waiver_status_espn_ids(self) -> set[int]:
+        """ESPN ids of players currently on waivers - see get_waiver_clear_times."""
+        return set(self.get_waiver_clear_times())
+
+    def get_waiver_clear_times(self) -> dict[int, str | None]:
         """ESPN ids of players currently on waivers (need a FAAB claim to
         add) rather than true free agents (instant, no-bid add). The status
         this actually needs lives on the raw player-list ROW returned by
@@ -375,4 +386,10 @@ class EspnClient:
         data = self._league.espn_request.league_get(
             params={"view": "kona_player_info", "scoringPeriodId": self._league.current_week}, headers=headers
         )
-        return {row["player"]["id"] for row in data.get("players", []) if row.get("status") == "WAIVERS"}
+        # waiverProcessDate (epoch ms, verified live 2026-10-23) is when this
+        # player clears waivers; returned as an ISO-8601 UTC string.
+        return {
+            row["player"]["id"]: _iso_utc(row.get("waiverProcessDate"))
+            for row in data.get("players", [])
+            if row.get("status") == "WAIVERS"
+        }

@@ -65,3 +65,26 @@ def test_get_live_week_player_status_returns_empty_on_timeout():
     with patch("ingest.espn_client._LIVE_STATUS_TIMEOUT_SEC", 0.05):
         result = client.get_live_week_player_status(1)
     assert result == {}
+
+
+def test_waiver_clear_times_parses_status_and_process_date(monkeypatch):
+    from ingest.espn_client import EspnClient
+
+    rows = [
+        {"status": "WAIVERS", "waiverProcessDate": 1792998000000, "player": {"id": 1}},
+        {"status": "WAIVERS", "player": {"id": 2}},
+        {"status": "FREEAGENT", "player": {"id": 3}},
+    ]
+
+    class FakeRequest:
+        def league_get(self, **kwargs):
+            return {"players": rows}
+
+    class FakeLeague:
+        current_week = 7
+        espn_request = FakeRequest()
+
+    client = EspnClient.__new__(EspnClient)
+    client._league = FakeLeague()
+    assert client.get_waiver_clear_times() == {1: "2026-10-26T07:00:00Z", 2: None}
+    assert client.get_waiver_status_espn_ids() == {1, 2}

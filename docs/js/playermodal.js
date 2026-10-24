@@ -1,5 +1,6 @@
 import { fmt, escapeHtml, getYourTeam } from "./state.js";
 import { POSITION_COLOR, opponentCellHtml, teamLabel, playerPhotoHtml, weeklyProjection, colorForRatio, ratioForRank, snapPct, attPct, tgtPct, airYardPct, seasonTotalPoints, seasonAvgPoints } from "./colors.js";
+import { waiverLabel } from "./availability.js";
 import { openModal, closeModal } from "./modal.js";
 import { blocksForPosition, groupedHeaderHtml, statCellsHtml } from "./statcolumns.js";
 import { loadWatchlist, setWatched } from "./watchlist.js";
@@ -1457,7 +1458,7 @@ function playerModalHeaderHtml(player, data, { showCompareTrigger = true } = {})
       ${playerPhotoHtml(player, "player-photo-lg")}
       <div>
         <h2><span class="pos-tag" style="background:${color}">${player.position}</span> ${escapeHtml(player.name)} <span class="muted small">${escapeHtml(player.nfl_team || "")}</span></h2>
-        <p class="muted small">${watchStarHtml(player, data)}${targetToggleHtml(player, data)}${team ? escapeHtml(teamLabel(team)) : "Free agent"} · Bye ${player.bye ?? "–"}</p>
+        <p class="muted small">${watchStarHtml(player, data)}${targetToggleHtml(player, data)}${team ? escapeHtml(teamLabel(team)) : waiverLabel(player) || "Free agent"} · Bye ${player.bye ?? "–"}</p>
       </div>
       ${
         showCompareTrigger
