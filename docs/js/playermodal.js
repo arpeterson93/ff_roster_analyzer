@@ -330,8 +330,10 @@ function gameLogTable(player, data) {
   // Weeks with no stat row, shown as gap rows between the real games: a BYE (no
   // opponent) or a game his team played that he missed (pipeline's
   // annotate_missed_games - `missed`, plus the injury-report status when known).
-  const gapWeek = (w) =>
-    !w.actual && (w.opponent ? w.missed === true : w.week <= (data.meta.weeks_complete ?? 0) || w.week === currentWeek);
+  // A bye only joins the (completed) game log once the whole NFL week is final
+  // (weeks_complete) - until then, including the current week before and during
+  // its games, it lives only in the Remaining schedule below.
+  const gapWeek = (w) => !w.actual && (w.opponent ? w.missed === true : w.week <= (data.meta.weeks_complete ?? 0));
   const logWeeks = (player.weekly || []).filter((w) => w.actual || gapWeek(w));
   // Narrows the table so a large-screen single modal - and especially the
   // side-by-side compare view, where each player gets roughly half the
