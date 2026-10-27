@@ -288,6 +288,24 @@ def _positional_ranks_from_overall(players: list[dict]) -> None:
             p["ros_pos_rank"] = i
 
 
+def annotate_missed_games(players_out: list[dict], injury_by_player_week: dict, weeks_complete: int) -> None:
+    """Marks each COMPLETED week a player's team played but he has no stat row for
+    (`weekly[i]["missed"] = True`) - injured, inactive, or not on the team yet - so
+    the player modal's Game Log shows an empty row for it instead of silently
+    skipping the week. `missed_status` carries nflverse's injury-report status for
+    that week (Out / Doubtful / Reserve ...) when there is one; without it the modal
+    labels the row DNP. A bye week has no opponent and is left unmarked (the modal
+    renders it as BYE)."""
+    for p in players_out:
+        for w in p.get("weekly", []):
+            if w["week"] > weeks_complete or w.get("actual") or not w.get("opponent"):
+                continue
+            w["missed"] = True
+            status = injury_by_player_week.get((p["id"], w["week"]))
+            if status:
+                w["missed_status"] = status
+
+
 def _faab_week_override(current_week: int, week_started: int | None) -> int:
     """FAAB gets its OWN week number, one ahead of ESPN's real current_week -
     but ONLY once current_week's own games have actually KICKED OFF (the
@@ -610,6 +628,9 @@ def _compute_faab_estimates(
         # observed fact, not a model extrapolation, so it isn't gated by
         # this same relevance threshold at all.
         team_interest = team_interest_for(p, info["qualifying_mates"])
+        # Which teammate(s) the "tm inj" flag is about - shown next to the tag in the
+        # FAAB Lab. Historical comps only carry the boolean, so only this player has names.
+        teammate_injured = [{"name": m["name"], "status": m.get("injury_status")} for m in info["qualifying_mates"]]
         same_week = model.same_week_signal(gsis_by_pid.get(pid), current_week)
         # Independent of same_week above (see that call's own comment on why
         # roster-fit/same-week context isn't gated by is_relevant) - a real
@@ -624,7 +645,7 @@ def _compute_faab_estimates(
                 "conditional_price": {"comp_based_mean": 0.0, "comp_based_median": 0.0, "regression": 0.0},
                 "comps": [], "interest_comps": [], "distribution": None,
                 "below_relevance_threshold": True,
-                "team_interest": team_interest,
+                "team_interest": team_interest, "teammate_injured": teammate_injured,
                 "same_week": same_week,
                 "same_week_availability": same_week_availability,
                 "inputs": {
@@ -665,7 +686,7 @@ def _compute_faab_estimates(
                 "conditional_price": {"comp_based_mean": 0.0, "comp_based_median": 0.0, "regression": 0.0},
                 "comps": [], "interest_comps": [], "distribution": None,
                 "unranked": True,
-                "team_interest": team_interest,
+                "team_interest": team_interest, "teammate_injured": teammate_injured,
                 "same_week": same_week,
                 "same_week_availability": same_week_availability,
                 "inputs": {
@@ -705,7 +726,8 @@ def _compute_faab_estimates(
         # see same_week_signal's own docstring on why it's never blended
         # into the k-NN comp/regression numbers, just shown alongside them.
         estimates[pid] = model.estimate(query) | {
-            "team_interest": team_interest, "same_week": same_week, "same_week_availability": same_week_availability,
+            "team_interest": team_interest, "teammate_injured": teammate_injured,
+            "same_week": same_week, "same_week_availability": same_week_availability,
         }
         # See _price_comps_are_single_observation - a price estimate whose
         # ENTIRE comp set (however many rows are shown) still traces back
@@ -1180,9 +1202,15 @@ def run_league(
     # already fully played) beneath each team's real completed weeks, so the
     # Points Against modal doesn't just stop at "now" - see
     # with_remaining_schedule's own docstring for the row shape.
-    remaining_weeks = list(range(current_week, final_week + 1))
+    # Every week from week 1, not just the remaining ones: with_remaining_schedule
+    # skips weeks a team already has a real entry for, so this only ADDS the rows a
+    # team has no game in - the past BYE week, which used to leave an unexplained
+    # gap in the modal's week numbering - alongside the future schedule rows.
+    all_weeks = list(range(1, final_week + 1))
+    prior_weeks = sorted({w for (_, w) in prior_opponent.keys()})
     for pos_detail in points_against.values():
-        with_remaining_schedule(pos_detail["current"], all_nfl_teams, remaining_weeks, opponent, is_home)
+        with_remaining_schedule(pos_detail["current"], all_nfl_teams, all_weeks, opponent, is_home)
+        with_remaining_schedule(pos_detail["prior"], all_nfl_teams, prior_weeks, prior_opponent, prior_is_home)
     _log_checkpoint("recent_results_done")
 
     # --- player universe: every rostered player + every fetched free agent ---
@@ -1980,6 +2008,15 @@ def run_league(
     # Static between data pulls (tools/history/*), cheap to rebuild, so every
     # stage that runs run_league just recomputes it; absent when the league
     # has no raw history yet.
+    try:
+        injury_by_week, _ = build_injury_indices(
+            nd.injuries(season, current_season=season), nd.rosters_weekly(season, current_season=season)
+        )
+        annotate_missed_games(players_out, injury_by_week, weeks_complete)
+    except Exception as exc:
+        logger.warning("missed-game annotations skipped (injury history unavailable): %s", exc)
+        annotate_missed_games(players_out, {}, weeks_complete)
+
     history_out = load_history(cfg["slug"], cfg.get("history"))
     if history_out is not None:
         result["history.json"] = history_out

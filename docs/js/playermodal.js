@@ -327,6 +327,12 @@ function gameLogTable(player, data) {
   const currentWeek = data.meta.current_week;
   const playsByWeek = (data.gameLogPlays || {})[player.id] || {};
   const playedWeeks = (player.weekly || []).filter((w) => w.actual);
+  // Weeks with no stat row, shown as gap rows between the real games: a BYE (no
+  // opponent) or a game his team played that he missed (pipeline's
+  // annotate_missed_games - `missed`, plus the injury-report status when known).
+  const gapWeek = (w) =>
+    !w.actual && (w.opponent ? w.missed === true : w.week <= (data.meta.weeks_complete ?? 0) || w.week === currentWeek);
+  const logWeeks = (player.weekly || []).filter((w) => w.actual || gapWeek(w));
   // Narrows the table so a large-screen single modal - and especially the
   // side-by-side compare view, where each player gets roughly half the
   // width - doesn't need horizontal scroll to see every completed game's
@@ -337,8 +343,25 @@ function gameLogTable(player, data) {
   // comment.
   const { top, bottom, flatColumns, blockEnds } = groupedHeaderHtml([...positionBlocks, ...extraBlocks], ["Wk", "Opp", "FPts", "xFPts"]);
   const colCount = flatColumns.length + 4;
-  const rows = playedWeeks
+  const missedLabel = (status) => {
+    const s = String(status || "").toLowerCase();
+    return s === "reserve" ? "IR" : s ? s.charAt(0).toUpperCase() + s.slice(1) : "DNP";
+  };
+  const rows = logWeeks
     .map((w) => {
+      if (!w.actual) {
+        // BYE: unchanged - the opponent column says BYE and every stat cell is blank.
+        if (!w.opponent) {
+          return `<tr class="game-log-row game-log-gap muted" data-week="${w.week}"><td>${w.week}</td><td><span class="muted">BYE</span></td><td>–</td><td>–</td>${statCellsHtml({}, flatColumns, blockEnds)}</tr>`;
+        }
+        // Missed game: Wk and Opp as usual, then ONE cell spanning every FPts/xFPts/stat
+        // column with the reason centered across it (injury-report status when there is
+        // one, else DNP) - nothing shoved into the narrow Opp column.
+        const why = w.missed_status
+          ? `Missed this game - injury report: ${missedLabel(w.missed_status)}`
+          : "Did not play (inactive or not on the team yet)";
+        return `<tr class="game-log-row game-log-gap muted" data-week="${w.week}"><td>${w.week}</td><td>${opponentCellHtml(w)}</td><td colspan="${colCount - 2}" class="game-log-missed-cell" style="text-align:center" title="${escapeHtml(why)}">${escapeHtml(missedLabel(w.missed_status))}</td></tr>`;
+      }
       const fpts = w.actual.points !== undefined && w.actual.points !== null ? fmt(w.actual.points, 1) : "-";
       const xfpts = fmtXfpts(w.actual.xfp_points);
       const weekDetail = playsByWeek[String(w.week)];
@@ -363,7 +386,7 @@ function gameLogTable(player, data) {
       return mainRow + detailRow;
     })
     .join("");
-  if (!rows) return `<p class="muted small">No games played yet this season.</p>`;
+  if (!playedWeeks.length) return `<p class="muted small">No games played yet this season.</p>`;
   return `<div class="table-wrap"><table class="game-log-stats-table">${top}${bottom}<tbody>${rows}</tbody></table></div>`;
 }
 
@@ -910,8 +933,20 @@ function usageCellHtml(position, snapPct, carryShare, targetShare, airYardShare)
   const airYdSub = airYd !== null ? `<span class="sub">AirYd ${airYd}</span>` : "";
   return `<span class="comp-recent-cell">${main}${sub}${airYdSub}</span>`;
 }
-function flagsCellHtml(ownInjury, teammateInjury) {
-  const flags = [ownInjury ? `<span class="comp-flag">inj</span>` : "", teammateInjury ? `<span class="comp-flag tm">tm inj</span>` : ""].join("");
+// `teammates` (optional, [{name, status}]) names who the "tm inj" tag is about, as
+// small last names right after it - only this player's own row has them (the
+// historical comps carry just the boolean flag).
+function flagsCellHtml(ownInjury, teammateInjury, teammates = []) {
+  const lastName = (full) => {
+    const parts = String(full || "").trim().split(/\s+/);
+    const suffixes = new Set(["jr.", "sr.", "ii", "iii", "iv", "v"]);
+    while (parts.length > 1 && suffixes.has(parts[parts.length - 1].toLowerCase())) parts.pop();
+    return parts[parts.length - 1] || "";
+  };
+  const names = teammateInjury && teammates.length
+    ? ` <span class="comp-tm-names muted small" title="${escapeHtml(teammates.map((t) => `${t.name}${t.status ? ` (${t.status})` : ""}`).join(", "))}">${escapeHtml(teammates.map((t) => lastName(t.name)).join(", "))}</span>`
+    : "";
+  const flags = [ownInjury ? `<span class="comp-flag">inj</span>` : "", teammateInjury ? `<span class="comp-flag tm">tm inj</span>${names}` : ""].join("");
   return flags || `<span class="muted small">–</span>`;
 }
 // Binary per-league count, not a weighted blend - of the leagues we have
@@ -943,7 +978,7 @@ function teamInterestSection(teamInterest, data) {
       const reason = ti.handcuff_of
         ? `<span class="handcuff-tag">owns ${escapeHtml(ti.handcuff_of)}</span>`
         : ti.nmd_gain !== null && ti.nmd_gain !== undefined
-        ? `<span class="muted small">${ti.nmd_gain >= 0 ? "+" : ""}${fmt(ti.nmd_gain, 1)} pts/wk to their lineup</span>`
+        ? `<span class="muted small">${ti.nmd_gain >= 0 ? "+" : ""}${fmt(ti.nmd_gain, 1)} pts ROS to their lineup</span>`
         : `<span class="muted small">–</span>`;
       return `<tr><td>${owner}</td><td><span class="interest-chip ${ti.level}">${INTEREST_LABEL[ti.level] || ti.level}</span></td><td>${reason}</td></tr>`;
     })
@@ -1267,7 +1302,7 @@ function faabEstimateSection(player, data) {
             <td>${recentCellHtml(inputs.prior_week_had_stat_row ? inputs.prior_week_actual_points : null, inputs.had_trailing_2_3_avg_points ? inputs.trailing_2_3_avg_points : null, inputs.had_season_avg_points ? inputs.season_avg_points : null)}</td>
             <td>${usageCellHtml(inputs.position, inputs.snap_pct_prior_week, inputs.had_carry_share_prior_week ? inputs.carry_share_prior_week : null, inputs.had_target_share_prior_week ? inputs.target_share_prior_week : null, inputs.air_yard_share_prior_week)}</td>
             <td>${rankCellHtml(inputs.had_weekly_rank ? inputs.weekly_rank : null, inputs.had_ros_rank ? inputs.ros_rank : null)}</td>
-            <td>${flagsCellHtml(inputs.own_injury_flag, inputs.teammate_position_injury_flag)}</td>
+            <td>${flagsCellHtml(inputs.own_injury_flag, inputs.teammate_position_injury_flag, est.teammate_injured || [])}</td>
           </tr>
         </tbody>
       </table>

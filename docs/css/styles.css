@@ -639,7 +639,7 @@ thead .sticky-col-first { z-index: 2; }
    Start/Sit and Rankings) - a fixed width regardless of team-code/rank
    length, with the text centered inside it, so a column of them lines up
    instead of each pill hugging its own text width. */
-.opp-pill { min-width: 64px; text-align: center; }
+.opp-pill { min-width: var(--opp-pill-w, 64px); text-align: center; } /* --opp-pill-w: widest possible pill, measured in colors.js's fitOppPillWidth */
 
 .bar-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 12px; }
 .bar-row-total { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }

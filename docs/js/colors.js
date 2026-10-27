@@ -264,6 +264,44 @@ export function playerPhotoHtml(p, sizeClass = "player-photo") {
   return url ? `<img class="${sizeClass}" src="${url}" alt="" loading="lazy" onerror="this.remove()" />` : "";
 }
 
+// Every opponent pill gets the width of the WIDEST one it could ever show - the
+// longest "@TEAM (rank)" over all 32 teams and ranks 1-32, measured with the
+// real pill styling in the user's real font - so a column of pills lines up
+// regardless of which team/rank each row happens to have. Published as the
+// --opp-pill-w CSS variable (styles.css's .opp-pill min-width reads it), so
+// already-rendered pills pick it up with no re-render. Re-measured once web
+// fonts finish loading, since text width can change when they do.
+const NFL_ABBREVS = [
+  "ARI", "ATL", "BAL", "BUF", "CAR", "CHI", "CIN", "CLE", "DAL", "DEN", "DET", "GB", "HOU", "IND", "JAX", "KC",
+  "LA", "LAC", "LV", "MIA", "MIN", "NE", "NO", "NYG", "NYJ", "PHI", "PIT", "SEA", "SF", "TB", "TEN", "WAS",
+];
+
+export function fitOppPillWidth() {
+  if (typeof document === "undefined" || !document.body) return;
+  const probe = document.createElement("span");
+  probe.className = "pill opp-pill";
+  probe.style.cssText = "position:absolute;visibility:hidden;left:-9999px;top:0;min-width:0;white-space:nowrap";
+  document.body.appendChild(probe);
+  let widest = 0;
+  for (const team of NFL_ABBREVS) {
+    for (let rank = 1; rank <= 32; rank++) {
+      probe.textContent = `@${team} (${rank})`;
+      widest = Math.max(widest, probe.getBoundingClientRect().width);
+    }
+  }
+  probe.remove();
+  if (widest > 0) document.documentElement.style.setProperty("--opp-pill-w", `${Math.ceil(widest)}px`);
+}
+
+if (typeof document !== "undefined") {
+  const run = () => {
+    fitOppPillWidth();
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitOppPillWidth);
+  };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", run);
+  else run();
+}
+
 // Combined "Opp" + "Matchup" cell: @ prefix on the road, colored by the
 // matchup RANK (always a full 0-1 spread within that position's own 32
 // teams - see ratioForRank).

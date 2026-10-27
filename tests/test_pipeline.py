@@ -216,3 +216,20 @@ def test_dst_path_is_unaffected_by_the_active_lookup():
     )
     assert result["points"] == 7.0
     assert result["stats"]["xpr"] is None
+
+
+def test_annotate_missed_games_marks_played_weeks_with_no_stats_not_byes_or_future_weeks():
+    from engine.pipeline import annotate_missed_games
+
+    player = {"id": "p1", "weekly": [
+        {"week": 1, "opponent": "AAA", "actual": {"points": 5}},   # played
+        {"week": 2, "opponent": "BBB", "actual": None},            # missed (injury report says Out)
+        {"week": 3, "opponent": None, "actual": None},             # bye
+        {"week": 4, "opponent": "CCC", "actual": None},            # no stat row, no injury report: still a missed (DNP) week
+        {"week": 5, "opponent": "DDD", "actual": None},            # not completed yet
+    ]}
+    annotate_missed_games([player], {("p1", 2): "Out"}, weeks_complete=4)
+    w = {x["week"]: x for x in player["weekly"]}
+    assert "missed" not in w[1] and "missed" not in w[3] and "missed" not in w[5]
+    assert w[2]["missed"] is True and w[2]["missed_status"] == "Out"
+    assert w[4]["missed"] is True and "missed_status" not in w[4]
