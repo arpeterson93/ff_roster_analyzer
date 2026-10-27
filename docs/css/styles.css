@@ -1616,3 +1616,11 @@ details[open] summary { margin-bottom: 8px; }
 /* History tab tables: centered values like the other stat tables, team name left-aligned. */
 #tab-history table th, #tab-history table td { text-align: center; }
 #tab-history table th:first-child, #tab-history table td:first-child { text-align: left; }
+
+/* Matchups tab: small line-graph icon next to a team name -> PA Chart view. */
+.chart-icon { display: inline-flex; vertical-align: middle; margin-left: 4px; padding: 2px; border-radius: 4px; color: var(--ink-500); cursor: pointer; }
+.chart-icon:hover, .chart-icon:focus-visible { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); outline: none; }
+
+/* Standings "Thru Wk N" seed movement vs. today's seed. */
+.seed-up { color: var(--green-600); font-weight: 600; }
+.seed-down { color: var(--red-600); font-weight: 600; }
