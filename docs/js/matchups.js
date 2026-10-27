@@ -1,5 +1,5 @@
 import { fmt, escapeHtml } from "./state.js";
-import { colorForRatio, ratioForRank } from "./colors.js";
+import { colorForRatio, ratioForRank, chartTeamColor } from "./colors.js";
 import { openPointsAgainstModal } from "./pointsagainstmodal.js";
 
 // Sort indicator + clickable <th>, same convention rankings.js's own
@@ -125,6 +125,20 @@ function chartIconHtml(team) {
   return `<span class="chart-icon" data-chart-team="${escapeHtml(team)}" role="button" tabindex="0" title="Weekly points-against chart" aria-label="Weekly points-against chart for ${escapeHtml(team)}"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 2v12h12"/><path d="M4.5 10.5l3-3.5 2.5 2 3.5-5"/></svg></span>`;
 }
 
+// Expected-source twin of recent_results' opp_avg_excl, which only exists for ACTUAL points.
+// matchups.json's pa_factor is league_avg / opp_avg_excl for whichever points it was built from
+// (engine/matchups.py), and the league average is just the mean of every team's allowed_ppg - so
+// the opponents' average is recoverable as league_avg / pa_factor (verified against the actual
+// data's opp_avg_excl to within 0.002). Lets Opp-Adjusted (+/-) work on the Expected source too.
+function expectedOppAvg(source, pos, team) {
+  const byTeam = source[pos] || {};
+  const m = byTeam[team];
+  if (!m || !m.pa_factor) return null;
+  const vals = Object.values(byTeam).map((x) => x.allowed_ppg).filter((v) => v !== null && v !== undefined);
+  if (!vals.length) return null;
+  return vals.reduce((a, b) => a + b, 0) / vals.length / m.pa_factor;
+}
+
 // All positions at once: one row per team, one column per position, each
 // cell stacking that position's points-allowed figure over its rank - same
 // visual language as strength.js's positionValueLeagueTable (total + a
@@ -200,7 +214,7 @@ function paByPositionTable(matchups, positions, basis, type, sortState, oppAvgFo
         .map((pos) => {
           const v = fpts(pos, t);
           const rank = rankByPos[pos].get(t);
-          if (v === null || v === undefined || rank === undefined) return `<td class="muted">-</td>`;
+          if (v === null || v === undefined || rank === undefined) return `<td class="muted cell-center">-</td>`;
           const ratio = ratioForRank(rank, teams.size);
           // ALL has no points-against detail to open, so its cells aren't clickable.
           const clickAttrs = pos === ALL_POS ? 'class="heat-cell"' : `data-team="${escapeHtml(t)}" data-pos="${pos}" class="heat-cell clickable-row"`;
@@ -255,20 +269,35 @@ function paByWeekTable(byPositionForPos, sortState, clickable = true) {
   const defaultOrder = teams.slice().sort((a, b) => adjAvgByTeam[b] - adjAvgByTeam[a]);
   const sortedTeams = sortState.key ? sortRows(defaultOrder, sortState, valueFor) : defaultOrder;
 
-  const header = `<tr>${sortTh("Team", "team", sortState)}${sortTh("Raw Avg", "avg_raw", sortState)}${sortTh("Opp Avg", "opp_avg", sortState, ` title="What this defense's actual opponents scored on average against everyone ELSE, excluding their own game against this defense - how tough/weak the offenses it actually faced were."`)}${sortTh("Avg Adjusted", "avg_adj", sortState)}${sortTh("vs Opp Avg (+/-)", "avg_add", sortState, ` title="Raw Avg minus Opp Avg: how many more (+) or fewer (-) points per game this defense allows than the offenses it faced normally score at this position."`)}${weeks.map((w) => sortTh(`Wk ${w}`, w, sortState)).join("")}</tr>`;
+  // Rank = a team's place in the order the table is CURRENTLY sorted by (the default order - Avg
+  // Adjusted, highest first - until a header is clicked). Teams tied on the sorted value, compared at
+  // the precision the table shows, share the rank of the topmost one: it is printed on that row and the
+  // rows below it in the tie are left blank. Bye weeks (no value) tie with each other.
+  const rankKey = sortState.key || "avg_adj";
+  const rankValue = (t) => {
+    const v = valueFor(t, rankKey);
+    return typeof v === "number" && !Number.isNaN(v) ? Math.round(v * 10) / 10 : v === undefined ? null : v;
+  };
+  const rankByTeam = new Map();
+  sortedTeams.forEach((t, i) => {
+    const tied = i > 0 && rankValue(t) === rankValue(sortedTeams[i - 1]);
+    rankByTeam.set(t, tied ? "" : i + 1);
+  });
+
+  const header = `<tr><th title="Place in the current sort - ties share the topmost team's rank, with the rows below left blank">Rank</th>${sortTh("Team", "team", sortState)}${sortTh("Raw Avg", "avg_raw", sortState)}${sortTh("Opp Avg", "opp_avg", sortState, ` title="What this defense's actual opponents scored on average against everyone ELSE, excluding their own game against this defense - how tough/weak the offenses it actually faced were."`)}${sortTh("Avg Adjusted", "avg_adj", sortState)}${sortTh("vs Opp Avg (+/-)", "avg_add", sortState, ` title="Raw Avg minus Opp Avg: how many more (+) or fewer (-) points per game this defense allows than the offenses it faced normally score at this position."`)}${weeks.map((w) => sortTh(`Wk ${w}`, w, sortState)).join("")}</tr>`;
   const rows = sortedTeams
     .map((t) => {
       const cells = weeks
         .map((w) => {
           const v = byPositionForPos[t][key][String(w)];
-          if (v === undefined) return `<td class="muted">-</td>`;
+          if (v === undefined) return `<td class="muted cell-center">-</td>`;
           const ratio = leagueAverage > 0 ? Math.max(0, Math.min(1, 0.5 + (v - leagueAverage) / leagueAverage)) : 0.5;
           return `<td class="heat-cell" style="background:${colorForRatio(ratio)}">${fmt(v, 1)}</td>`;
         })
         .join("");
-      const factorNote = ` <span class="muted small">(&times;${fmt(byPositionForPos[t].pa_factor ?? 1.0, 2)})</span>`;
+      const factorNote = ` <span class="muted small" title="Opponent-adjustment factor: league average / Opp Avg - Raw Avg &times; this = Avg Adjusted">(&times;${fmt(byPositionForPos[t].pa_factor ?? 1.0, 2)})</span>`;
       // ALL has no per-position detail to open, so its rows aren't clickable (the chart icon still works).
-      return `<tr ${clickable ? `data-team="${escapeHtml(t)}" class="clickable-row"` : ""}><td>${escapeHtml(t)} ${chartIconHtml(t)}</td><td class="cell-center">${fmt(rawAvgByTeam[t], 1)}</td><td class="cell-center">${fmt(byPositionForPos[t].opp_avg_excl ?? 0, 1)}</td><td class="cell-center"><strong>${fmt(adjAvgByTeam[t], 1)}</strong>${factorNote}</td><td class="cell-center"><strong>${addAvgByTeam[t] > 0 ? "+" : ""}${fmt(addAvgByTeam[t], 1)}</strong></td>${cells}</tr>`;
+      return `<tr ${clickable ? `data-team="${escapeHtml(t)}" class="clickable-row"` : ""}><td class="cell-center">${rankByTeam.get(t)}</td><td>${escapeHtml(t)} ${chartIconHtml(t)}</td><td class="cell-center">${fmt(rawAvgByTeam[t], 1)}</td><td class="cell-center">${fmt(byPositionForPos[t].opp_avg_excl ?? 0, 1)}${factorNote}</td><td class="cell-center"><strong>${fmt(adjAvgByTeam[t], 1)}</strong></td><td class="cell-center"><strong>${addAvgByTeam[t] > 0 ? "+" : ""}${fmt(addAvgByTeam[t], 1)}</strong></td>${cells}</tr>`;
     })
     .join("");
   return `<table>${header}<tbody>${rows}</tbody></table>`;
@@ -404,7 +433,7 @@ function scheduleStrengthTable(data, positions, windowKey, metric, sortState) {
     .map((r) => {
       const cells = columns
         .map((col) => {
-          if (r.avg[col] === undefined) return `<td class="muted">-</td>`;
+          if (r.avg[col] === undefined) return `<td class="muted cell-center">-</td>`;
           return `<td class="heat-cell" style="background:${colorForRatio(ratioForRank(r.rank[col], n))}"><div>${fmtV(r.avg[col])}</div><div class="heat-sub">#${r.rank[col]}</div></td>`;
         })
         .join("");
@@ -431,7 +460,7 @@ export function renderMatchups(container, data) {
           <option value="schedule">PA Schedule</option>
         </select>
         <span id="matchups-pos-wrap"><label>Position:</label>
-          <select id="matchups-pos-select">${[...positions, ...(offensePositionsOf(data).length ? [ALL_POS] : [])].map((p) => `<option value="${p}">${p}${p === ALL_POS ? " (all positions)" : ""}</option>`).join("")}</select>
+          <select id="matchups-pos-select">${[...positions, ...(offensePositionsOf(data).length ? [ALL_POS] : [])].map((p) => `<option value="${p}">${p}</option>`).join("")}</select>
         </span>
         <span id="matchups-team-wrap" hidden><label>Team:</label>
           <select id="matchups-team-select"></select>
@@ -544,17 +573,19 @@ export function renderMatchups(container, data) {
         const cs = getComputedStyle(document.documentElement);
         const ink = cs.getPropertyValue("--ink-700").trim() || "#555";
         const grid = cs.getPropertyValue("--border").trim() || "#ddd";
+        // The charted team's own color for its line; the opponent-average line is a neutral gray.
+        const teamColor = chartTeamColor(teamSelect.value, cs.getPropertyValue("--card"));
+        const avgColor = cs.getPropertyValue("--ink-500").trim() || "#7a7a73";
         chartInstance = new window.Chart(canvas.getContext("2d"), {
           type: "line",
           data: {
             labels: series.weeks.map((w, i) => `Wk ${w} ${series.opponents[i] || ""}`),
             datasets: [
-              mode === "offense"
-                ? { label: `${teamSelect.value} ${pos} points scored`, data: series.points, borderColor: "#2e7d32", backgroundColor: "#2e7d32", tension: 0.2 }
-                : { label: `${teamSelect.value} ${pos} points allowed`, data: series.points, borderColor: "#2563eb", backgroundColor: "#2563eb", tension: 0.2 },
-              mode === "offense"
-                ? { label: "Opponent defense's avg allowed (their other games)", data: series.oppAvg, borderColor: "#c62828", backgroundColor: "#c62828", borderDash: [6, 4], tension: 0.2 }
-                : { label: "Opponent's season avg (their other games)", data: series.oppAvg, borderColor: "#d97706", backgroundColor: "#d97706", borderDash: [6, 4], tension: 0.2 },
+              { label: `${teamSelect.value} ${pos} points ${mode === "offense" ? "scored" : "allowed"}`, data: series.points, borderColor: teamColor, backgroundColor: teamColor, tension: 0.2 },
+              {
+                label: mode === "offense" ? "Opponent defense's avg allowed (their other games)" : "Opponent's season avg (their other games)",
+                data: series.oppAvg, borderColor: avgColor, backgroundColor: avgColor, borderDash: [6, 4], tension: 0.2,
+              },
             ],
           },
           options: {
@@ -595,8 +626,12 @@ export function renderMatchups(container, data) {
           : "1 = easiest matchup, higher = tougher" +
             (typeSelect.value === "add" ? ". Opp-Adjusted (+/-) = points allowed minus what the offenses faced normally score at the position (their other games); +3.2 means this defense gives up 3.2 more per game than expected." : "");
       const source = sourceSelect.value === "expected" ? data.matchups._expected || {} : data.matchups;
-      // Opp Avg is built from ACTUAL points, so +/- has no matching baseline for the Expected source.
-      const oppAvgFor = (p, t) => sourceSelect.value === "expected" ? null : (((data.recentResults || { by_position: {} }).by_position[p] || {})[t] || {}).opp_avg_excl ?? null;
+      // The opponents' average each team's +/- is measured against: the actual Opp Avg for the Actual
+      // source; for Expected, recovered from that source's own pa_factor (see expectedOppAvg).
+      const oppAvgFor = (p, t) =>
+        sourceSelect.value === "expected"
+          ? expectedOppAvg(source, p, t)
+          : (((data.recentResults || { by_position: {} }).by_position[p] || {})[t] || {}).opp_avg_excl ?? null;
       wrap.innerHTML = paByPositionTable(source, positions, basisSelect.value, typeSelect.value, sortState, oppAvgFor);
     }
 

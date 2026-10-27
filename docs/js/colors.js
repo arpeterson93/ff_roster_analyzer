@@ -264,6 +264,76 @@ export function playerPhotoHtml(p, sizeClass = "player-photo") {
   return url ? `<img class="${sizeClass}" src="${url}" alt="" loading="lazy" onerror="this.remove()" />` : "";
 }
 
+// NFL team colors [primary, secondary] (from nflverse's teams table, the same abbreviations the
+// rest of the site uses - LA for the Rams) - used to color a team's own line on the PA charts.
+export const TEAM_COLORS = {
+  ARI: ["#97233F", "#000000"],
+  ATL: ["#A71930", "#000000"],
+  BAL: ["#241773", "#9E7C0C"],
+  BUF: ["#00338D", "#C60C30"],
+  CAR: ["#0085CA", "#000000"],
+  CHI: ["#0B162A", "#E64100"],
+  CIN: ["#FB4F14", "#000000"],
+  CLE: ["#FF3C00", "#311D00"],
+  DAL: ["#002244", "#B0B7BC"],
+  DEN: ["#002244", "#FB4F14"],
+  DET: ["#0076B6", "#B0B7BC"],
+  GB: ["#203731", "#FFB612"],
+  HOU: ["#03202F", "#A71930"],
+  IND: ["#002C5F", "#A5ACAF"],
+  JAX: ["#006778", "#000000"],
+  KC: ["#E31837", "#FFB612"],
+  LA: ["#003594", "#FFD100"],
+  LAC: ["#007BC7", "#FFC20E"],
+  LV: ["#000000", "#A5ACAF"],
+  MIA: ["#008E97", "#F58220"],
+  MIN: ["#4F2683", "#FFC62F"],
+  NE: ["#002244", "#C60C30"],
+  NO: ["#D3BC8D", "#000000"],
+  NYG: ["#0B2265", "#A71930"],
+  NYJ: ["#003F2D", "#000000"],
+  PHI: ["#004C54", "#A5ACAF"],
+  PIT: ["#000000", "#FFB612"],
+  SEA: ["#002244", "#69BE28"],
+  SF: ["#AA0000", "#B3995D"],
+  TB: ["#A71930", "#322F2B"],
+  TEN: ["#4495D2", "#D50A0A"],
+  WAS: ["#5A1414", "#FFB612"],
+};
+
+const _luma = (hex) => {
+  const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+};
+const _contrast = (a, b) => {
+  const [hi, lo] = [_luma(a), _luma(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+};
+// A pale gray ("silver") secondary would be mistaken for the neutral gray average line.
+const _isSilver = (hex) => {
+  const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  const sat = Math.max(...c) === 0 ? 0 : (Math.max(...c) - Math.min(...c)) / Math.max(...c);
+  return sat < 0.2 && _luma(hex) > 0.3;
+};
+const _mix = (hex, toward, t) =>
+  "#" + [1, 3, 5].map((i) => Math.round(parseInt(hex.slice(i, i + 2), 16) * (1 - t) + parseInt(toward.slice(i, i + 2), 16) * t).toString(16).padStart(2, "0")).join("");
+
+// A team's primary color for a line drawn on `bg` (a #rrggbb card color): the primary itself when
+// it reads clearly (contrast >= 3), else the secondary if THAT does (and isn't a silver that would
+// blend into the gray average line), else the primary nudged toward
+// white (dark theme) or black (light theme) until it does - so a near-black PIT/LV line doesn't
+// vanish on the dark theme, or a pale NO gold on the light one.
+export function chartTeamColor(abbr, bg = "#ffffff") {
+  const [primary, secondary] = TEAM_COLORS[abbr] || ["#2563EB", "#2563EB"];
+  const base = /^#[0-9a-f]{6}$/i.test(String(bg).trim()) ? String(bg).trim() : "#ffffff";
+  if (_contrast(primary, base) >= 3) return primary;
+  if (_contrast(secondary, base) >= 3 && !_isSilver(secondary)) return secondary;
+  const toward = _luma(base) < 0.5 ? "#ffffff" : "#000000";
+  let color = primary;
+  for (let t = 0.1; t <= 1 && _contrast(color, base) < 3; t += 0.1) color = _mix(primary, toward, t);
+  return color;
+}
+
 // Every opponent pill gets the width of the WIDEST one it could ever show - the
 // longest "@TEAM (rank)" over all 32 teams and ranks 1-32, measured with the
 // real pill styling in the user's real font - so a column of pills lines up
