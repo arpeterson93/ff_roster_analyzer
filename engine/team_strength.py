@@ -382,6 +382,7 @@ def pickups(
     max_pickups: int,
     depth_weight: float = 0.5,
     ir_player_ids: frozenset[str] = frozenset(),
+    all_gains: dict[str, float] | None = None,
 ) -> list[dict]:
     """A pickup candidate is any free agent where swapping him in for the
     weakest droppable rostered player at his position (or the weakest
@@ -437,6 +438,14 @@ def pickups(
     effect to just this candidate's own contribution and the dropped
     player's removal, which is all this function is actually trying to
     measure.
+
+    all_gains, when given, is filled with {free_agent_id: gain} for EVERY
+    candidate that clears gain > 0 - before the max_pickups cut - so the
+    FAAB Lab's "Likely interested owners" can bucket the SAME real
+    before/after gain per owner instead of a cheaper, wrong comparison (see
+    the pipeline's team_specific_fa_gains). A free agent that never becomes
+    a candidate (no ROS value, or no real lineup gain for this team) is
+    simply absent, i.e. no interest from this team.
 
     That shared pool also gains the dropped player himself, not just loses
     this candidate - he genuinely becomes a real wire option once cut, and
@@ -515,6 +524,8 @@ def pickups(
             gain = after - before
             if gain > 0:
                 candidates.append({"add": fa.id, "drop": drop_pid, "gain": gain})
+                if all_gains is not None:
+                    all_gains[fa.id] = gain
     candidates.sort(key=lambda c: c["gain"], reverse=True)
     return candidates[:max_pickups]
 

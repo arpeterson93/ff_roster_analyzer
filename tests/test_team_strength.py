@@ -939,3 +939,36 @@ def test_trade_targets_guarantees_at_least_one_candidate_per_partner():
     # doesn't bump the genuine top pick.
     top = max(best_by_partner.values(), key=lambda r: r["mutual_benefit"])
     assert top in capped
+
+
+def test_pickups_all_gains_records_every_positive_candidate_before_the_max_pickups_cut():
+    slots = {"RB": 1}
+    eligibility = {"RB": {"RB"}}
+    weeks = [1, 2]
+    players = {"rb1": _player("rb1", "RB", 5.0)}
+    free_agents = {"RB": [_player("fa_a", "RB", 30.0), _player("fa_b", "RB", 20.0), _player("fa_c", "RB", 10.0)]}
+    team_values = position_value_by_player(["rb1"], players, free_agents, weeks, slots, eligibility)
+    gains: dict[str, float] = {}
+    result = pickups(["rb1"], players, team_values, free_agents, weeks, slots, eligibility, max_pickups=1, all_gains=gains)
+    assert len(result) == 1  # shortlist is cut to max_pickups...
+    assert set(gains) == {"fa_a", "fa_b", "fa_c"}  # ...but every helpful free agent has a gain recorded
+    assert gains["fa_a"] > gains["fa_b"] > gains["fa_c"] > 0
+
+
+def test_pickups_all_gains_gives_no_credit_to_a_free_agent_that_only_fills_a_negative_value_hole():
+    # Same scenario as the negative-value-starter test: the starter's own value_delta is
+    # below zero, but none of the streamers would actually help. A naive "free agent's
+    # value minus the weakest player's value" comparison would credit every one of them;
+    # the whole-roster before/after gain must record none.
+    slots = {"QB": 1}
+    eligibility = {"QB": {"QB"}}
+    weeks = [1, 2, 3]
+    qb1 = PlayerCtx(id="qb1", position="QB", ros_total=66.0, weekly={1: 22.0, 2: 24.0, 3: 20.0})
+    fa_x = PlayerCtx(id="fa_x", position="QB", ros_total=33.0, weekly={1: 23.0, 2: 5.0, 3: 5.0})
+    fa_y = PlayerCtx(id="fa_y", position="QB", ros_total=35.0, weekly={1: 5.0, 2: 25.0, 3: 5.0})
+    free_agents = {"QB": [fa_x, fa_y]}
+    players = {"qb1": qb1}
+    team_values = position_value_by_player(["qb1"], players, free_agents, weeks, slots, eligibility)
+    gains: dict[str, float] = {}
+    pickups(["qb1"], players, team_values, free_agents, weeks, slots, eligibility, max_pickups=5, all_gains=gains)
+    assert gains == {}

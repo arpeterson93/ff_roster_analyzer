@@ -1572,6 +1572,11 @@ def run_league(
 
     teams_out = []
     team_values_by_team: dict[int, dict[str, dict]] = {}
+    # {team_id_str: {free_agent_id: whole-roster before/after gain}} - filled per team by
+    # pickups() below and read by _compute_faab_estimates' team_interest_for (see the
+    # team_fa_gains_all comment). Percentile-bucketed into Low/Med/High THERE, relative
+    # to this week's own spread of gains across the league.
+    team_specific_fa_gains: dict[str, dict[str, float]] = {}
     for t in espn_teams:
         roster_ids = team_rosters[t.team_id]
         team_values = position_value_by_player(roster_ids, players_ctx, free_agents_ctx, weeks, settings.slots, settings.slot_eligibility)
@@ -1604,11 +1609,17 @@ def run_league(
             pos_list.sort(key=lambda x: x["value_delta"], reverse=True)
 
         team_ir_ids = frozenset(pid for pid in roster_ids if pid in ir_ids)
+        # The same pass that builds this team's suggested pickups also records the real
+        # whole-roster before/after gain for EVERY free agent that helps this team -
+        # the FAAB Lab's per-owner interest (team_interest_for) buckets exactly these,
+        # so "who would want him" and "who should add him" can never disagree.
+        team_fa_gains_all: dict[str, float] = {}
         pickup_list = pickups(
             roster_ids, players_ctx, team_values, free_agents_ctx,
             weeks, settings.slots, settings.slot_eligibility,
-            strength_cfg["max_pickups"], ir_player_ids=team_ir_ids,
+            strength_cfg["max_pickups"], ir_player_ids=team_ir_ids, all_gains=team_fa_gains_all,
         )
+        team_specific_fa_gains[str(t.team_id)] = team_fa_gains_all
 
         other_rosters = {ot.team_id: team_rosters[ot.team_id] for ot in espn_teams if ot.team_id != t.team_id}
         targets = trade_targets(
@@ -1637,31 +1648,6 @@ def run_league(
             }
         )
     _log_checkpoint("team_strength_done")
-
-    # team_interest_for (inside _compute_faab_estimates below) needs a
-    # PER-TEAM "would THIS specific team want him" gain to percentile-bucket
-    # into Low/Med/High - fa_pool_values above is deliberately team-agnostic
-    # (one universal rating per free agent, see fa_pool_value's own
-    # docstring), so it can't answer that by itself. Reuses the exact same
-    # "beats the weakest droppable player at his position" comparison
-    # pickups() makes, just for EVERY free agent rather than pickups()' own
-    # gain>0/max_pickups-filtered shortlist - percentile bucketing needs the
-    # full distribution, not just the ones that already clear a real bar.
-    team_specific_fa_gains: dict[str, dict[str, float]] = {}
-    for team_id, roster_ids in team_rosters.items():
-        team_ir_ids = frozenset(pid for pid in roster_ids if pid in ir_ids)
-        team_values = team_values_by_team.get(team_id, {})
-        droppable = [pid for pid in roster_ids if pid not in team_ir_ids and pid in team_values]
-        gains: dict[str, float] = {}
-        if droppable:
-            for fas in free_agents_ctx.values():
-                for fa in fas:
-                    fa_val = fa_pool_values.get(fa.id, {}).get("value_delta", 0.0)
-                    same_pos = [pid for pid in droppable if players_by_id[pid]["position"] == fa.position]
-                    pool = same_pos or droppable
-                    weakest = min(pool, key=lambda pid: team_values[pid]["value_delta"])
-                    gains[fa.id] = fa_val - team_values[weakest]["value_delta"]
-        team_specific_fa_gains[str(team_id)] = gains
 
     # --- lineups (every remaining week, so Start/Sit can show future weeks) ---
     all_week_lineups: dict[tuple[int, int], tuple[float, dict[str, str]]] = {}
