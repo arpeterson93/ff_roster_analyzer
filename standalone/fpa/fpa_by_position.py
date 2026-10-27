@@ -7,13 +7,18 @@ worst matchups for QB / RB / WR / TE / K / D/ST, from real nflverse stats.
     python fpa_by_position.py --ppr 0                 # standard scoring
     python fpa_by_position.py --league-id 123456      # YOUR ESPN league's exact scoring (public leagues)
     python fpa_by_position.py --set PY=0.05 --set REC=1   # override any scoring item
-    python fpa_by_position.py --chart DET:WR          # weekly line chart for one team + position
+    python fpa_by_position.py --chart DET:WR          # weekly chart: points a defense ALLOWED to a position
+    python fpa_by_position.py --chart-offense DET:WR  # weekly chart: points the position group SCORED vs. what each opponent allows
     python fpa_by_position.py --last 4 --out results  # last-4 average, plus CSVs in ./results
+    python fpa_by_position.py --html report.html      # also builds the schedule-strength tables
+    python fpa_by_position.py --html r.html --playoff-weeks 15-17   # your fantasy playoff weeks
 
 No accounts, logins or API keys. Data: nflverse (https://github.com/nflverse),
 downloaded automatically on first run and cached by nflreadpy.
 
 How the numbers work
+- Only weeks where every NFL game is final are used (--partial-weeks to include a week in
+  progress), so every team is compared over the same games.
 - Every player's weekly line (and each team's D/ST line) is scored with the
   rules in effect, then summed per (team being rated, week, position): "points
   that team allowed to that position that week". Regular season only.
@@ -25,6 +30,12 @@ How the numbers work
   grades itself). "+/-" corrects for who was faced, in plain points: points
   allowed minus Opp Avg, averaged (+3.2 = gives up 3.2 more per game than
   those offenses normally score). "+/- Rk" ranks it; 1 = the best matchup.
+- Schedule strength (in the HTML report and fpa_schedule.csv): for each team and
+  position group, the average "+/-" (or raw FPA/G) of the opponents on its
+  schedule - already faced, rest of the regular fantasy season, and the fantasy
+  playoffs. For D/ST the row is the team's DEFENSE, facing offenses. Higher =
+  softer schedule. Fantasy playoff weeks come from --playoff-weeks, else your
+  --league-id's settings, else weeks 15-17.
 - Scoring comes from, in priority order: your --set overrides, your ESPN
   league (--league-id), else ESPN's typical default template for the chosen
   --ppr (the most common settings across ~900 public ESPN leagues).
@@ -43,7 +54,9 @@ import nflreadpy as nfl
 import polars as pl
 
 OFFENSE_POSITIONS = ["QB", "RB", "WR", "TE", "K"]
-POSITIONS = OFFENSE_POSITIONS + ["DST"]
+# "ALL" is not a real position: it is the TOTAL fantasy points a team allows across
+# QB + RB + WR + TE + K (D/ST is excluded - it is rated from the other side).
+POSITIONS = OFFENSE_POSITIONS + ["DST", "ALL"]
 
 # ESPN statId -> (abbr, label); adapted from the espn_api package's table.
 ESPN_STAT_MAP = {
@@ -536,6 +549,21 @@ def fetch_league_items(league_id: int, season: int) -> list[dict]:
     return items
 
 
+def drop_unscored_positions(items: list[dict], positions: list[str]) -> list[str]:
+    """Positions this scoring actually scores. A league with no D/ST scoring
+    (or no kicker scoring) would otherwise show a table of all zeros."""
+    keep = []
+    for pos in positions:
+        if pos == "DST" and not ScoringRules(items, is_dst=True).items:
+            print("Note: this scoring has no D/ST items, so D/ST is skipped.", file=sys.stderr)
+            continue
+        if pos == "K" and not {"FG0", "FG40", "FG50", "FG60", "FG", "PAT"} & {i["abbr"] for i in items if i["points"]}:
+            print("Note: this scoring has no kicker items, so K is skipped.", file=sys.stderr)
+            continue
+        keep.append(pos)
+    return keep
+
+
 def apply_overrides(items: list[dict], overrides: dict[str, float]) -> list[dict]:
     valid = {a for a, _ in ESPN_STAT_MAP.values()}
     bad = [a for a in overrides if a not in valid]
@@ -568,10 +596,24 @@ def describe_scoring(items: list[dict]) -> list[str]:
 # ---------------------------------------------------------------------------
 # Data + tables
 # ---------------------------------------------------------------------------
-def load_frames(season: int):
+def load_frames(season: int, completed_only: bool = True):
+    """(player stats, team stats, schedule) for the regular season. With
+    completed_only (the default), stats from a week that isn't fully over yet - some
+    games final, others not - are dropped, so every team is compared over the same
+    weeks (otherwise a team that has already played that week would show one more
+    game than one that hasn't). The schedule is always kept whole: the
+    schedule-strength tables need the future weeks."""
     players = nfl.load_player_stats([season]).filter(pl.col("season_type") == "REG")
     teams = nfl.load_team_stats([season]).filter(pl.col("season_type") == "REG")
     sched = nfl.load_schedules([season]).filter(pl.col("game_type") == "REG")
+    if completed_only:
+        done = completed_week(sched)
+        in_progress = sorted({w for w in players["week"].unique().to_list() if w > done})
+        if in_progress:
+            print(f"Note: week {', '.join(map(str, in_progress))} is still in progress and is left out "
+                  "(use --partial-weeks to include it).", file=sys.stderr)
+        players = players.filter(pl.col("week") <= done)
+        teams = teams.filter(pl.col("week") <= done)
     return players, teams, sched
 
 
@@ -579,7 +621,8 @@ def collect_points(items, positions, players, teams, sched) -> pl.DataFrame:
     """One row per (team being rated, week, position): points the opposing
     unit scored against it. Columns: team, week, position, opponent, points."""
     rows = []
-    offense_positions = [p for p in positions if p in OFFENSE_POSITIONS]
+    # "ALL" needs every offensive position summed, whichever of them are displayed.
+    offense_positions = list(OFFENSE_POSITIONS) if "ALL" in positions else [p for p in positions if p in OFFENSE_POSITIONS]
     if offense_positions:
         rules = ScoringRules(items)
         acc: dict[tuple, float] = {}
@@ -588,6 +631,13 @@ def collect_points(items, positions, players, teams, sched) -> pl.DataFrame:
             key = (r["opponent_team"], r["week"], r["position"], r["team"])
             acc[key] = acc.get(key, 0.0) + rules.points(r)
         rows += [{"team": k[0], "week": k[1], "position": k[2], "opponent": k[3], "points": v} for k, v in acc.items()]
+        if "ALL" in positions:
+            total: dict[tuple, float] = {}
+            for k, v in acc.items():
+                total[(k[0], k[1], k[3])] = total.get((k[0], k[1], k[3]), 0.0) + v
+            rows += [{"team": k[0], "week": k[1], "position": "ALL", "opponent": k[2], "points": v} for k, v in total.items()]
+        # drop the positions only computed to feed ALL
+        rows = [r for r in rows if r["position"] in positions]
     if "DST" in positions and teams.height:
         rules = ScoringRules(items, is_dst=True)
         scores = {}
@@ -618,7 +668,18 @@ def build_tables(points: pl.DataFrame, last: int | None):
         .then((pl.col("opp_total") - pl.col("points")) / (pl.col("opp_games") - 1))
         .otherwise(None)
         .alias("opp_avg")
-    ).drop(["opp_total", "opp_games"]).sort(["position", "team", "week"])
+    ).drop(["opp_total", "opp_games"])
+    # the rated team's own average at this position in its OTHER games (feeds the offense-side chart:
+    # "how many points does the defense that week allow on average")
+    own = points.group_by(["team", "position"]).agg(
+        pl.col("points").sum().alias("own_total"), pl.col("week").n_unique().alias("own_games")
+    )
+    weekly = weekly.join(own, on=["team", "position"]).with_columns(
+        pl.when(pl.col("own_games") > 1)
+        .then((pl.col("own_total") - pl.col("points")) / (pl.col("own_games") - 1))
+        .otherwise(None)
+        .alias("team_avg")
+    ).drop(["own_total", "own_games"]).sort(["position", "team", "week"])
     rows = []
     for (pos, team), g in weekly.group_by(["position", "team"]):
         exp = g.filter(pl.col("opp_avg").is_not_null())
@@ -653,7 +714,8 @@ def print_table(summary: pl.DataFrame, pos: str, last: int | None) -> None:
     head = f"{who:<8}{'G':>3}{'FPA':>8}{'FPA/G':>8}{'RawRk':>6}{'OppAvg':>8}{'+/-':>8}{'+/-Rk':>6}"
     if last:
         head += f"  |{f'L{last}/G':>8}{f'L{last}Opp':>8}{f'L{last}+/-':>8}{f'L{last}Rk':>6}"
-    note = "points opposing D/STs scored against each offense" if pos == "DST" else "fantasy points allowed"
+    note = ("points opposing D/STs scored against each offense" if pos == "DST"
+            else "total fantasy points allowed to QB+RB+WR+TE+K" if pos == "ALL" else "fantasy points allowed")
     print(f"\n=== {pos}: {note} (sorted by season +/- Rk; 1 = best matchup) ===")
     print(head)
 
@@ -746,7 +808,9 @@ def html_report(summary: pl.DataFrame, positions: list[str], last: int | None) -
             if kind in ("heat", "diff"):
                 vals = [v for v in sub[key].to_list() if v is not None]
                 rng[key] = (min(vals), max(vals)) if vals else (None, None)
-        note = "points opposing D/STs scored against each offense" if pos == "DST" else "fantasy points allowed to the position"
+        note = ("points opposing D/STs scored against each offense" if pos == "DST"
+                else "total fantasy points allowed to all offensive positions (QB+RB+WR+TE+K; D/ST excluded)" if pos == "ALL"
+                else "fantasy points allowed to the position")
         parts.append(
             f"<h3>{pos}</h3><p>{note}. Raw Rk = rank by FPA/G alone (1 = most allowed). Opp Avg = what the average opponent faced scores at the "
             "position in its other games; +/- = FPA/G &minus; Opp Avg (+3.2 = gives up 3.2 more per game than those offenses normally score). "
@@ -769,6 +833,159 @@ def html_report(summary: pl.DataFrame, positions: list[str], last: int | None) -
                     style = _heat(v, *rng[key], center=0.0)
                 cls = ' class="team"' if kind == "text" else ""
                 cells.append(f'<td{cls} data-v="{dv}"{style}>{shown}</td>')
+            parts.append("<tr>" + "".join(cells) + "</tr>")
+        parts.append("</tbody></table>")
+    parts.append("</div>")
+    return "".join(parts)
+
+
+def parse_week_range(spec: str) -> tuple[int, int]:
+    """"15-17" -> (15, 17); "15" -> (15, 15)."""
+    a, _, b = str(spec).strip().partition("-")
+    lo, hi = int(a), int(b or a)
+    if hi < lo:
+        raise SystemExit(f"Playoff weeks {spec!r}: the end is before the start.")
+    return lo, hi
+
+
+def fetch_league_weeks(league_id: int, season: int) -> tuple[int, int]:
+    """(last regular-season fantasy week, last fantasy playoff week) from a
+    public ESPN league's settings."""
+    url = (f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/{season}"
+           f"/segments/0/leagues/{league_id}?view=mSettings")
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        ss = json.load(resp)["settings"]["scheduleSettings"]
+    last = max(max(weeks) for weeks in ss["matchupPeriods"].values())
+    return int(ss["matchupPeriodCount"]), int(last)
+
+
+def resolve_playoff_weeks(spec: str | None, league_id: int | None, season: int) -> tuple[int, int]:
+    """-> (last regular-season fantasy week, last playoff week)."""
+    if spec:
+        start, end = parse_week_range(spec)
+        return start - 1, end
+    if league_id:
+        try:
+            return fetch_league_weeks(league_id, season)
+        except Exception as exc:
+            print(f"Could not read playoff weeks from league {league_id} ({exc}); assuming weeks 15-17.", file=sys.stderr)
+    return 14, 17
+
+
+def completed_week(sched: pl.DataFrame) -> int:
+    """Largest week W such that every NFL game in weeks 1..W has a final score."""
+    done = 0
+    for wk in sorted(sched["week"].unique().to_list()):
+        games = sched.filter(pl.col("week") == wk)
+        if games.filter(pl.col("home_score").is_null() | pl.col("away_score").is_null()).is_empty():
+            done = wk
+        else:
+            break
+    return done
+
+
+def schedule_strength(summary: pl.DataFrame, sched: pl.DataFrame, reg_end: int, playoff_end: int) -> pl.DataFrame:
+    """Per (period, team, position): the average +/- and raw FPA/G of the
+    opponents on that team's schedule, ranked within position (1 = softest).
+    Periods: faced (completed NFL weeks), reg (rest of the regular fantasy
+    season), playoffs (fantasy playoff weeks). Columns: period, team,
+    position, games, avg_diff, avg_raw, rank_diff, rank_raw."""
+    opp = {}
+    for g in sched.iter_rows(named=True):
+        opp[(g["home_team"], g["week"])] = g["away_team"]
+        opp[(g["away_team"], g["week"])] = g["home_team"]
+    teams = sorted({t for t, _ in opp})
+    done = completed_week(sched)
+    windows = {
+        "faced": [w for w in range(1, done + 1)],
+        "reg": [w for w in range(done + 1, reg_end + 1)],
+        "playoffs": [w for w in range(reg_end + 1, playoff_end + 1) if w > done],
+    }
+    lookup = {(r["position"], r["team"]): (r["per_game"], r["diff"]) for r in summary.iter_rows(named=True)}
+    rows = []
+    for period, weeks in windows.items():
+        for pos in summary["position"].unique().to_list():
+            for team in teams:
+                diffs, raws = [], []
+                for w in weeks:
+                    o = opp.get((team, w))
+                    if o is None or (pos, o) not in lookup:
+                        continue
+                    raw, diff = lookup[(pos, o)]
+                    raws.append(raw)
+                    if diff is not None:
+                        diffs.append(diff)
+                if raws:
+                    rows.append({
+                        "period": period, "team": team, "position": pos, "games": len(raws),
+                        "avg_diff": sum(diffs) / len(diffs) if diffs else None, "avg_raw": sum(raws) / len(raws),
+                    })
+    out = pl.DataFrame(rows, schema={"period": pl.Utf8, "team": pl.Utf8, "position": pl.Utf8, "games": pl.Int64,
+                                     "avg_diff": pl.Float64, "avg_raw": pl.Float64})
+    return out.with_columns(
+        pl.col("avg_diff").rank("ordinal", descending=True).over(["period", "position"]).cast(pl.Int64).alias("rank_diff"),
+        pl.col("avg_raw").rank("ordinal", descending=True).over(["period", "position"]).cast(pl.Int64).alias("rank_raw"),
+    )
+
+
+def schedule_html(sched_df: pl.DataFrame, metric: str, reg_end: int, playoff_end: int, positions: list[str] | None = None) -> str:
+    """One table per period (rows = teams, columns = positions, with the ALL
+    column - total points allowed across QB+RB+WR+TE+K - last). Each cell is
+    the average opponent value with the team's rank under it (1 = softest
+    schedule). Click a header to sort; rows start sorted by the ALL rank."""
+    val_key, rk_key = ("avg_diff", "rank_diff") if metric == "diff" else ("avg_raw", "rank_raw")
+    fmt = "{:+.1f}" if metric == "diff" else "{:.1f}"
+    positions = positions or [p for p in POSITIONS if p in set(sched_df["position"].to_list())]
+    titles = {
+        "faced": ("Schedule faced to date", "completed NFL weeks"),
+        "reg": ("Rest of the regular fantasy season", f"through week {reg_end}"),
+        "playoffs": (f"Fantasy playoffs", f"weeks {reg_end + 1}-{playoff_end}"),
+    }
+    what = ("average +/- of the opponents faced (points they allow above what their own opponents normally score)"
+            if metric == "diff" else "average points per game the opponents faced allow")
+    parts = [_HTML_CSS, '<div class="fpa-wrap"><h2 style="font-size:18px;margin:18px 0 0">Schedule strength</h2>',
+             f"<p>For each team's position group: the {what}. Higher / rank 1 = softer schedule. "
+             "ALL = the same measure for total points allowed across QB+RB+WR+TE+K (D/ST excluded). "
+             "For D/ST the row is the team's defense, facing offenses.</p>"]
+    for period in ("faced", "reg", "playoffs"):
+        sub = sched_df.filter(pl.col("period") == period)
+        title, span = titles[period]
+        parts.append(f"<h3>{title} <span style='font-weight:400;font-size:12px'>({span})</span></h3>")
+        if sub.is_empty():
+            parts.append("<p>No games in this window.</p>")
+            continue
+        by = {(r["team"], r["position"]): r for r in sub.iter_rows(named=True)}
+        teams = sorted({r["team"] for r in sub.iter_rows(named=True)})
+        ranges = {}
+        for pos in positions:
+            vals = [by[(t, pos)][val_key] for t in teams if (t, pos) in by and by[(t, pos)][val_key] is not None]
+            ranges[pos] = (min(vals), max(vals)) if vals else (None, None)
+
+        # Default order: the ALL rank (softest total schedule first); without ALL, the average rank.
+        def order_key(t):
+            if "ALL" in positions and (t, "ALL") in by:
+                return by[(t, "ALL")][rk_key]
+            rs = [by[(t, p)][rk_key] for p in positions if (t, p) in by]
+            return sum(rs) / len(rs) if rs else 99
+
+        center = 0.0 if metric == "diff" else None
+        sort_col = "ALL" if "ALL" in positions else None
+        header = ["Team", "G"] + positions
+        parts.append('<table class="fpa-table"><thead><tr>' + "".join(
+            f'<th onclick="fpaSort(this)"' + (' data-dir="asc"' if h == sort_col else "") + f">{h}" + (" \u25B2" if h == sort_col else "") + "</th>"
+            for h in header) + "</tr></thead><tbody>")
+        for t in sorted(teams, key=order_key):
+            games = max((by[(t, p)]["games"] for p in positions if (t, p) in by), default=0)
+            cells = [f'<td class="team" data-v="{t}">{t}</td>', f'<td data-v="{games}">{games}</td>']
+            for pos in positions:
+                r = by.get((t, pos))
+                if r is None or r[val_key] is None:
+                    cells.append('<td data-v="">-</td>')
+                    continue
+                v = r[val_key]
+                cells.append(f'<td data-v="{v}"{_heat(v, *ranges[pos], center=center)}>{fmt.format(v)}'
+                             f' <span style="color:#57606a;font-size:11px">#{r[rk_key]}</span></td>')
             parts.append("<tr>" + "".join(cells) + "</tr>")
         parts.append("</tbody></table>")
     parts.append("</div>")
@@ -803,6 +1020,37 @@ def plot_team_position(weekly: pl.DataFrame, team: str, pos: str, path: str | No
     return fig
 
 
+def plot_offense_position(weekly: pl.DataFrame, team: str, pos: str, path: str | None = None, show: bool = False):
+    """Line chart from the OFFENSE's side: what the team's position group
+    scored each week vs. the average points the opposing defense allows at
+    that position in its other games. For D/ST, `team` is the defense (its
+    opponents are offenses). Needs matplotlib."""
+    import matplotlib.pyplot as plt
+
+    g = weekly.filter((pl.col("opponent") == team) & (pl.col("position") == pos)).sort("week")
+    if g.is_empty():
+        raise SystemExit(f"No {pos} data for {team}.")
+    fig, ax = plt.subplots(figsize=(9, 4.5))
+    ax.plot(g["week"], g["points"], marker="o", linewidth=2, color="#2e7d32", label=f"{team} {pos} points scored")
+    ax.plot(g["week"], g["team_avg"], marker="s", linewidth=2, linestyle="--", color="#c62828",
+            label="Opponent's avg points allowed (their other games)")
+    for w, o, pts in zip(g["week"], g["team"], g["points"]):
+        ax.annotate(o, (w, pts), textcoords="offset points", xytext=(0, 7), ha="center", fontsize=8)
+    ax.set_xlabel("Week")
+    ax.set_ylabel("Fantasy points")
+    ax.set_xticks(list(g["week"]))
+    ax.set_title(f"{team} {pos}: points scored each week vs. what that opponent usually allows")
+    ax.grid(alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    if path:
+        fig.savefig(path, dpi=150)
+    if show:
+        plt.show()
+        plt.close(fig)  # already drawn; don't let a notebook draw the returned figure a second time
+    return fig
+
+
 def default_season() -> int:
     today = date.today()
     return today.year if today.month >= 9 else today.year - 1  # Jan-Aug: the season that just finished
@@ -823,9 +1071,16 @@ def main() -> int:
                     help="override a scoring item by ESPN abbreviation, e.g. --set PY=0.05 --set REC=1 (repeatable)")
     ap.add_argument("--positions", default=",".join(POSITIONS), help=f"comma list from {','.join(POSITIONS)}")
     ap.add_argument("--last", type=int, metavar="N", help="also show each team's average over its last N games")
-    ap.add_argument("--chart", metavar="TEAM:POS", help="save a weekly line chart, e.g. DET:WR (needs matplotlib)")
+    ap.add_argument("--chart", metavar="TEAM:POS", help="save a weekly chart of points ALLOWED by a defense, e.g. DET:WR (needs matplotlib)")
+    ap.add_argument("--chart-offense", metavar="TEAM:POS",
+                    help="save a weekly chart of what a team's position group SCORED vs. what each opponent usually allows, e.g. DET:WR")
     ap.add_argument("--out", metavar="DIR", help="write fpa_summary.csv / fpa_weekly.csv (and the chart) here")
+    ap.add_argument("--playoff-weeks", metavar="A-B", help="your fantasy playoff weeks, e.g. 15-17 (default: from --league-id, else 15-17)")
+    ap.add_argument("--schedule-metric", choices=["diff", "raw"], default="diff",
+                    help="schedule-strength tables: average opponent +/- (default) or raw FPA/G")
     ap.add_argument("--html", metavar="FILE", help="write a sortable, color-coded HTML report of the tables (open it in a browser)")
+    ap.add_argument("--partial-weeks", action="store_true",
+                    help="also include a week that is still in progress (default: only weeks where every game is final)")
     ap.add_argument("--show-scoring", action="store_true", help="print the scoring in use and exit")
     a = ap.parse_args()
 
@@ -842,6 +1097,10 @@ def main() -> int:
             ap.error(f"--set expects ITEM=NUMBER, got {s!r}")
 
     items = resolve_scoring(a.ppr, a.league_id, a.season, overrides)
+    positions = drop_unscored_positions(items, positions)
+    if not positions:
+        print("Nothing to show: none of the requested positions are scored.", file=sys.stderr)
+        return 1
     source = f"ESPN league {a.league_id}" if a.league_id else {0.0: "ESPN default, standard", 0.5: "ESPN default, half PPR", 1.0: "ESPN default, full PPR"}[a.ppr]
     print(f"Scoring: {source}" + (f" + overrides {overrides}" if overrides else ""))
     if a.show_scoring:
@@ -850,14 +1109,19 @@ def main() -> int:
 
     print(f"Loading {a.season} stats from nflverse...", file=sys.stderr)
     try:
-        players, teams, sched = load_frames(a.season)
+        players, teams, sched = load_frames(a.season, not a.partial_weeks)
     except Exception as exc:  # network trouble, or that season isn't published yet
         print(f"Could not load {a.season} data: {exc}", file=sys.stderr)
         return 1
-    chart_pos = a.chart.partition(":")[2].upper() if a.chart else None
-    if chart_pos and chart_pos not in POSITIONS:
-        ap.error(f"--chart expects TEAM:POS with POS one of {', '.join(POSITIONS)}")
-    points = collect_points(items, sorted(set(positions) | ({chart_pos} if chart_pos else set())), players, teams, sched)
+    chart_specs = []
+    for flag, spec, fn in (("--chart", a.chart, plot_team_position), ("--chart-offense", a.chart_offense, plot_offense_position)):
+        if spec:
+            team, _, pos = spec.partition(":")
+            if pos.upper() not in POSITIONS:
+                ap.error(f"{flag} expects TEAM:POS with POS one of {', '.join(POSITIONS)}")
+            chart_specs.append((team.upper(), pos.upper(), fn, "scored" if fn is plot_offense_position else "allowed"))
+    extra = {pos for _, pos, *_ in chart_specs if pos not in positions}
+    points = collect_points(items, sorted(set(positions) | extra), players, teams, sched)
     if points.is_empty():
         print(f"No regular-season data for {a.season} yet.", file=sys.stderr)
         return 1
@@ -867,10 +1131,13 @@ def main() -> int:
     for pos in positions:
         print_table(summary, pos, a.last)
 
+    reg_end, playoff_end = resolve_playoff_weeks(a.playoff_weeks, a.league_id, a.season)
+    sched_df = schedule_strength(summary, sched, reg_end, playoff_end)
     if a.html:
         Path(a.html).write_text(
             "<!doctype html><meta charset='utf-8'><title>Fantasy points allowed</title><body style='background:#fff'>"
-            + html_report(summary, positions, a.last),
+            + html_report(summary, positions, a.last)
+            + schedule_html(sched_df, a.schedule_metric, reg_end, playoff_end, positions),
             encoding="utf-8",
         )
         print(f"\nWrote {a.html} - open it in a browser")
@@ -879,12 +1146,12 @@ def main() -> int:
         out.mkdir(parents=True, exist_ok=True)
         summary.sort(["position", "rank"]).write_csv(out / "fpa_summary.csv")
         weekly.write_csv(out / "fpa_weekly.csv")
-        print(f"\nWrote {out / 'fpa_summary.csv'} and {out / 'fpa_weekly.csv'}")
-    if a.chart:
-        team, _, pos = a.chart.partition(":")
-        path = str((out or Path(".")) / f"fpa_{team.upper()}_{pos.upper()}.png")
+        sched_df.sort(["period", "position", "rank_diff"]).write_csv(out / "fpa_schedule.csv")
+        print(f"\nWrote {out / 'fpa_summary.csv'}, {out / 'fpa_weekly.csv'} and {out / 'fpa_schedule.csv'}")
+    for team, pos, fn, kind in chart_specs:
+        path = str((out or Path(".")) / f"fpa_{team}_{pos}_{kind}.png")
         try:
-            plot_team_position(weekly, team.upper(), pos.upper(), path)
+            fn(weekly, team, pos, path)
             print(f"Wrote {path}")
         except ImportError:
             print("Charts need matplotlib: pip install matplotlib", file=sys.stderr)
