@@ -84,6 +84,10 @@ function valueFor(row, key) {
   if (key === "cur_record") return row.wins;
   if (key === "cur_pf") return row.points_for;
   if (key === "cur_pa") return row.points_against;
+  if (key === "thru_seed") return row.thru ? row.thru.seed : null;
+  if (key === "thru_record") return row.thru ? row.thru.wins : null;
+  if (key === "thru_pf") return row.thru ? row.thru.points_for : null;
+  if (key === "thru_pa") return row.thru ? row.thru.points_against : null;
   if (key === "ros_record") return row.ros.wins;
   if (key === "ros_pf") return row.ros.pf;
   if (key === "ros_pa") return row.ros.pa;
@@ -104,6 +108,25 @@ export function renderStandings(container, data, slug) {
   // playoff_team_count using the last playoff seed's own criteria.
   const defaultOrder = allRows.slice().sort((a, b) => a.seed - b.seed);
 
+  // "Thru Wk N": the standings one week out (engine/standings_stage.py's
+  // _thru_week_standings) - absent from older builds and once the regular
+  // season is over, in which case the whole block is simply not drawn.
+  const thruWeek = allRows.find((r) => r.thru)?.thru.week ?? null;
+
+  // Seed one week out, plus how far it moved from today's seed (lower seed
+  // number = better, so a smaller number is an improvement).
+  const thruSeedCell = (s) => {
+    if (!s.thru || s.thru.seed === null || s.thru.seed === undefined) return "–";
+    const delta = s.seed === null || s.seed === undefined ? 0 : s.seed - s.thru.seed;
+    const mark = delta > 0 ? ` <span class="seed-up small">▲${delta}</span>` : delta < 0 ? ` <span class="seed-down small">▼${-delta}</span>` : "";
+    return `${s.thru.seed}${mark}`;
+  };
+  const thruResultTitle = (s) => {
+    if (!s.thru || !s.thru.result) return "No projected game this week";
+    const opp = data.teamsById.get(s.thru.opponent_id);
+    return `Wk ${s.thru.week}: projected ${s.thru.result} vs ${opp ? teamLabel(opp) : s.thru.opponent_id} (${fmt(s.thru.projected_score, 1)}-${fmt(s.thru.opponent_score, 1)})`;
+  };
+
   let sortState = { key: null, dir: 1, lastKey: null };
 
   const wrap = () => {
@@ -118,6 +141,10 @@ export function renderStandings(container, data, slug) {
           <td>${s.wins}-${s.losses}${s.ties ? "-" + s.ties : ""}</td>
           <td>${fmt(s.points_for, 1)}</td>
           <td class="block-end">${fmt(s.points_against, 1)}</td>
+          ${thruWeek === null ? "" : `<td>${thruSeedCell(s)}</td>
+          <td title="${escapeHtml(thruResultTitle(s))}">${s.thru ? `${s.thru.wins}-${s.thru.losses}${s.thru.ties ? "-" + s.thru.ties : ""}` : "–"}${s.thru && s.thru.result ? ` <span class="muted small">${s.thru.result}</span>` : ""}</td>
+          <td>${s.thru ? fmt(s.thru.points_for, 1) : "–"}</td>
+          <td class="block-end">${s.thru ? fmt(s.thru.points_against, 1) : "–"}</td>`}
           <td>${s.ros.wins}-${s.ros.losses}</td>
           <td>${fmt(s.ros.pf, 1)}</td>
           <td class="block-end">${fmt(s.ros.pa, 1)}</td>
@@ -141,6 +168,7 @@ export function renderStandings(container, data, slug) {
                 ${sortTh("Team", "team", sortState, ` class="sticky-team" rowspan="2"`)}
                 ${sortTh("Div", "div", sortState, ` rowspan="2"`)}
                 <th colspan="3" class="block-end">Current</th>
+                ${thruWeek === null ? "" : `<th colspan="4" class="block-end" title="Current record plus this week's matchups played out at their projected scores (live-blended once the week has started), seeded with the same tiebreakers.">Thru Wk ${thruWeek}</th>`}
                 <th colspan="3" class="block-end">ROS</th>
                 ${sortTh("xWins", "xwins", sortState, ` rowspan="2"`)}
                 ${sortTh("Playoff%", "playoff", sortState, ` rowspan="2"`)}
@@ -150,6 +178,7 @@ export function renderStandings(container, data, slug) {
               </tr>
               <tr>
                 ${sortTh("Record", "cur_record", sortState)}${sortTh("PF", "cur_pf", sortState)}${sortTh("PA", "cur_pa", sortState, ` class="block-end"`)}
+                ${thruWeek === null ? "" : `${sortTh("Seed", "thru_seed", sortState)}${sortTh("Record", "thru_record", sortState)}${sortTh("PF", "thru_pf", sortState)}${sortTh("PA", "thru_pa", sortState, ` class="block-end"`)}`}
                 ${sortTh("Record", "ros_record", sortState)}${sortTh("PF", "ros_pf", sortState)}${sortTh("PA", "ros_pa", sortState, ` class="block-end"`)}
               </tr>
             </thead>

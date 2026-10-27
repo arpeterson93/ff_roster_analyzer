@@ -144,3 +144,60 @@ def test_live_team_mean_sd_falls_back_to_position_sd_when_no_weekly_entry():
     assert team_live_mean_sd[20][1] == pytest.approx(4.0)
     assert live_points[20]["stub1"] == pytest.approx(0.0)
     assert live_projected[20]["stub1"] == pytest.approx(10.0)
+
+
+def test_thru_week_plays_out_the_current_week_at_projected_scores_and_reseeds():
+    # Team 2 is ahead now (1-0 vs 0-1), but team 1 is projected to beat it this
+    # week, so one week out team 1 is seed 1 with a 1-1 record that includes
+    # the projected points; team 3 (bye) keeps its record.
+    teams = [_Team(1, wins=0, losses=1, points_for=90.0, points_against=100.0),
+             _Team(2, wins=1, losses=0, points_for=100.0, points_against=90.0),
+             _Team(3, wins=0, losses=0)]
+    matchups = [
+        Matchup(week=1, home_team_id=1, away_team_id=2, home_score=90.0, away_score=100.0, played=True),
+        Matchup(week=2, home_team_id=1, away_team_id=2, home_score=None, away_score=None, played=False),
+    ]
+    team_week_mean = {(1, 2): 110.0, (2, 2): 95.0}
+    team_week_sd = {(1, 2): 10.0, (2, 2): 10.0}
+
+    _, standings_out = standings_outputs(
+        teams, matchups, _settings(reg_season_count=3, playoff_team_count=1), SIM_CFG, current_week=2,
+        team_week_mean=team_week_mean, team_week_sd=team_week_sd,
+        team_live_mean_sd={}, live_points_by_team={}, week_started=False,
+    )
+    by_id = {s["team_id"]: s for s in standings_out}
+    t1, t2, t3 = (by_id[i]["thru"] for i in (1, 2, 3))
+
+    assert (t1["wins"], t1["losses"], t1["result"], t1["week"]) == (1, 1, "W", 2)
+    assert t1["points_for"] == pytest.approx(200.0) and t1["points_against"] == pytest.approx(195.0)
+    assert (t2["wins"], t2["losses"], t2["result"]) == (1, 1, "L")
+    assert t3["result"] is None and (t3["wins"], t3["losses"]) == (0, 0)
+    # 1-1 vs 1-1: team 1 has more points for (200 vs 195) -> seed 1 one week out, while team 2 is seed 1 today
+    assert by_id[2]["seed"] == 1 and by_id[1]["seed"] != 1
+    assert t1["seed"] == 1 and t2["seed"] == 2
+
+
+def test_thru_week_uses_the_live_blend_once_the_week_has_started():
+    teams = [_Team(1), _Team(2)]
+    matchups = [Matchup(week=2, home_team_id=1, away_team_id=2, home_score=None, away_score=None, played=False)]
+    team_week_mean = {(1, 2): 100.0, (2, 2): 100.0}
+    team_week_sd = {(1, 2): 10.0, (2, 2): 10.0}
+    # Pregame it's a coin flip (home wins ties only by >), but live team 2 is far ahead.
+    _, standings_out = standings_outputs(
+        teams, matchups, _settings(playoff_team_count=1), SIM_CFG, current_week=2,
+        team_week_mean=team_week_mean, team_week_sd=team_week_sd,
+        team_live_mean_sd={1: (80.0, 5.0), 2: (120.0, 5.0)}, live_points_by_team={1: {}, 2: {}}, week_started=True,
+    )
+    by_id = {s["team_id"]: s for s in standings_out}
+    assert by_id[2]["thru"]["result"] == "W" and by_id[2]["thru"]["projected_score"] == pytest.approx(120.0)
+    assert by_id[1]["thru"]["result"] == "L"
+
+
+def test_thru_week_is_absent_once_the_regular_season_is_over():
+    teams = [_Team(1), _Team(2)]
+    matchups = [Matchup(week=4, home_team_id=1, away_team_id=2, home_score=None, away_score=None, played=False)]
+    _, standings_out = standings_outputs(
+        teams, matchups, _settings(reg_season_count=3), SIM_CFG, current_week=4,
+        team_week_mean={}, team_week_sd={}, team_live_mean_sd={}, live_points_by_team={}, week_started=False,
+    )
+    assert all(s["thru"] is None for s in standings_out)

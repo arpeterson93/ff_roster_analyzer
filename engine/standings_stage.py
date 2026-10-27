@@ -202,6 +202,18 @@ def standings_outputs(
         seed_team_states, played_matchups, settings.playoff_team_count, division_tiebreak_order, seed_configs,
     )
 
+    # --- "thru this week": the standings one week out ---
+    # Current record/PF/PA plus this week's (current_week's) matchups played out
+    # at their projected scores - the live blend (real points so far + the
+    # remaining share of each starter's projection) once the week has kicked
+    # off, the pregame projection before that - and seeded with the exact same
+    # tiebreak rules as the current seed. None for every team when there is no
+    # unplayed regular-season week left to step into.
+    thru = _thru_week_standings(
+        espn_teams, espn_matchups, settings, current_week, team_week_mean, team_live_mean_sd, week_started,
+        played_matchups, seed_team_states, division_tiebreak_order, seed_configs,
+    )
+
     standings_out = []
     for t in espn_teams:
         s = sim_results[t.team_id]
@@ -209,6 +221,7 @@ def standings_outputs(
             {
                 "team_id": t.team_id, "wins": t.wins, "losses": t.losses, "ties": t.ties, "points_for": t.points_for,
                 "points_against": t.points_against, "seed": current_seeds.get(t.team_id),
+                "thru": thru.get(t.team_id),
                 "division": settings.divisions.get(t.division_id, str(t.division_id)),
                 "expected_wins": s["expected_wins"], "playoff_odds": s["playoff_odds"], "bye_odds": s["bye_odds"],
                 "division_win_odds": s["division_win_odds"], "seed_probs": s["seed_probs"], "iterations": s["iterations"],
@@ -216,3 +229,69 @@ def standings_outputs(
         )
 
     return schedule_out, standings_out
+
+
+def _thru_week_standings(
+    espn_teams, espn_matchups, settings, current_week, team_week_mean, team_live_mean_sd, week_started,
+    played_matchups, seed_team_states, division_tiebreak_order, seed_configs,
+) -> dict[int, dict]:
+    """{team_id: {week, wins, losses, ties, points_for, points_against, seed,
+    result, opponent_id, projected_score, opponent_score}} - see the call site.
+    A team with no projectable game that week (bye, or no projection yet)
+    keeps its current record and just gets re-seeded."""
+    if current_week > settings.reg_season_count:
+        return {}
+    week_matchups = [m for m in espn_matchups if not m.played and m.week == current_week]
+    if not week_matchups:
+        return {}
+
+    def means(m: Matchup):
+        if week_started and m.home_team_id in team_live_mean_sd and m.away_team_id in team_live_mean_sd:
+            return team_live_mean_sd[m.home_team_id][0], team_live_mean_sd[m.away_team_id][0]
+        if (m.home_team_id, current_week) in team_week_mean and (m.away_team_id, current_week) in team_week_mean:
+            return team_week_mean[(m.home_team_id, current_week)], team_week_mean[(m.away_team_id, current_week)]
+        return None
+
+    info = {
+        t.team_id: {"week": current_week, "wins": t.wins, "losses": t.losses, "ties": t.ties,
+                    "points_for": t.points_for, "points_against": t.points_against,
+                    "result": None, "opponent_id": None, "projected_score": None, "opponent_score": None}
+        for t in espn_teams
+    }
+    projected_played = list(played_matchups)
+    for m in week_matchups:
+        scores = means(m)
+        if scores is None or m.home_team_id not in info or m.away_team_id not in info:
+            continue
+        home, away = scores
+        for team_id, opp_id, mine, theirs in ((m.home_team_id, m.away_team_id, home, away), (m.away_team_id, m.home_team_id, away, home)):
+            row = info[team_id]
+            row["points_for"] += mine
+            row["points_against"] += theirs
+            row["opponent_id"], row["projected_score"], row["opponent_score"] = opp_id, mine, theirs
+            if mine > theirs:
+                row["wins"] += 1
+                row["result"] = "W"
+            elif mine < theirs:
+                row["losses"] += 1
+                row["result"] = "L"
+            else:
+                row["ties"] += 1
+                row["result"] = "T"
+        projected_played.append(
+            PlayedMatchup(home_team_id=m.home_team_id, away_team_id=m.away_team_id, home_score=home, away_score=away)
+        )
+
+    projected_states = [
+        SeedTeamState(
+            team_id=t.team_id, division_id=t.division_id, wins=info[t.team_id]["wins"], losses=info[t.team_id]["losses"],
+            ties=info[t.team_id]["ties"], points_for=info[t.team_id]["points_for"], points_against=info[t.team_id]["points_against"],
+        )
+        for t in seed_team_states
+    ]
+    seeds = compute_current_seeds(
+        projected_states, projected_played, settings.playoff_team_count, division_tiebreak_order, seed_configs,
+    )
+    for team_id, row in info.items():
+        row["seed"] = seeds.get(team_id)
+    return info
