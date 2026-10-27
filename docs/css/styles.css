@@ -352,6 +352,21 @@ tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); 
   background: color-mix(in srgb, var(--amber-500) 14%, var(--card));
 }
 
+/* Hover: the sticky Photo/Player cells keep an OPAQUE background (so scrolled stat
+   columns hide behind them), which also hid the row's translucent hover tint
+   (`tbody tr:hover`, accent 6%) - the Player column stayed plain while every other cell
+   tinted. Same tint mixed against the opaque --card instead, so it reads identically.
+   The streamed (amber) rows get their own hover tint the same way. */
+#tab-startsit .lineup-table tbody tr:not(.totals-row):hover .photo-col,
+#tab-startsit .lineup-table tbody tr:not(.totals-row):hover .player-td {
+  background: color-mix(in srgb, var(--accent) 6%, var(--card));
+}
+#tab-startsit .lineup-table tbody tr.streamed-row:hover .photo-col,
+#tab-startsit .lineup-table tbody tr.streamed-row:hover .player-td {
+  background: color-mix(in srgb, var(--amber-500) 22%, var(--card));
+}
+
+
 /* The lineup card shrink-wraps to whatever width its widest child (the
    lineup table) actually needs, instead of a plain .card's normal block
    behavior of stretching to fill the tabpanel's own 1400px cap regardless -
