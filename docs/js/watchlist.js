@@ -117,6 +117,13 @@ export async function loadWatchlist(leagueSlug, teamId, listName = DEFAULT_LIST)
   return new Set(loadLocal(listName)[key] || []);
 }
 
+// Fired on `window` after every toggle, from ANY caller (the Rankings table's
+// own star, or the player modal's star/target) - so a view that already holds
+// its own Set for this list (Rankings does) can sync to a toggle made
+// somewhere else instead of waiting for a re-load. detail = {leagueSlug,
+// teamId, playerId, watched, listName}.
+export const WATCHLIST_CHANGED = "watchlist-changed";
+
 // Fire-and-forget: caller already has its own Set it's updating optimistically
 // for the current render; this just persists that same change.
 export function setWatched(leagueSlug, teamId, playerId, watched, listName = DEFAULT_LIST) {
@@ -128,6 +135,7 @@ export function setWatched(leagueSlug, teamId, playerId, watched, listName = DEF
   else localSet.delete(playerId);
   local[key] = [...localSet];
   saveLocal(listName, local);
+  window.dispatchEvent(new CustomEvent(WATCHLIST_CHANGED, { detail: { leagueSlug, teamId, playerId, watched, listName } }));
 
   if (remoteByList) {
     if (!remoteByList.has(listName)) remoteByList.set(listName, new Map());

@@ -7,7 +7,7 @@ import {
 import { isIrEligible, waiverLabel } from "./availability.js";
 import { openPlayerModal } from "./playermodal.js";
 import { openPointsAgainstModal } from "./pointsagainstmodal.js";
-import { loadWatchlist, setWatched } from "./watchlist.js";
+import { loadWatchlist, setWatched, WATCHLIST_CHANGED } from "./watchlist.js";
 import { STATS_TAB_BLOCKS, blocksForPosition, blockEndIndices, statCellsHtml } from "./statcolumns.js";
 
 const FLEX_POSITIONS = ["RB", "WR", "TE"];
@@ -34,6 +34,9 @@ function statsBlocksFor(position) {
   if (position === "K" || position === "DST") return blocksForPosition(position);
   return STATS_TAB_BLOCKS;
 }
+
+// The one live WATCHLIST_CHANGED listener (see renderRankings) - replaced on every visit to this tab.
+let activeWatchlistListener = null;
 
 function healthBadge(status) {
   const letters = INJURY_BADGE[status];
@@ -823,6 +826,23 @@ export function renderRankings(container, data, slug) {
   }
 
   draw();
+
+  // A star/target toggled from the player modal (or anywhere other than this
+  // table's own star) lands in watchlist.js as a WATCHLIST_CHANGED event; fold
+  // it into this view's own Sets and redraw so the star and the Watch List /
+  // Target filters reflect it immediately. One live listener at a time - each
+  // visit to this tab builds a fresh closure, so the previous one is dropped.
+  if (activeWatchlistListener) window.removeEventListener(WATCHLIST_CHANGED, activeWatchlistListener);
+  activeWatchlistListener = (e) => {
+    const d = e.detail;
+    if (d.leagueSlug !== slug || d.teamId !== yourTeamId) return;
+    const set = d.listName === "target" ? targeted : watched;
+    if (set.has(d.playerId) === d.watched) return; // already reflected (this view's own toggle)
+    if (d.watched) set.add(d.playerId);
+    else set.delete(d.playerId);
+    render(container, data, filters, watched, targeted);
+  };
+  window.addEventListener(WATCHLIST_CHANGED, activeWatchlistListener);
 
   if (yourTeamId !== null) {
     loadWatchlist(slug, yourTeamId).then((set) => {
