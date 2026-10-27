@@ -33,6 +33,92 @@ function sortRows(rows, sortState, valueFor) {
   });
 }
 
+// "ALL" is not a real position: it is the TOTAL of every offensive position
+// (QB+RB+WR+TE+K - whichever the league has), so a team's overall fantasy
+// points allowed. DST is excluded: its data is keyed by the OFFENSE (points
+// the opposing D/ST scored against it), a different side of the matchup that
+// can't be added to what a defense allows. Because every position's number is
+// per-game over the same games, the total of per-game averages (and of the
+// +/- differences) is exactly the average of the per-game totals.
+const ALL_POS = "ALL";
+const offensePositionsOf = (data) => Object.keys(data.matchups).filter((p) => p !== "_expected" && p !== "DST" && p !== ALL_POS);
+
+// points_against.json-shaped {current, prior} for ALL: per defense/week, the
+// sum of every offensive position's points (null if ANY position still has no
+// points that week - i.e. a future week), with that week's opponent.
+function allPositionsDetail(data) {
+  const out = { current: {}, prior: {} };
+  const positions = offensePositionsOf(data);
+  ["current", "prior"].forEach((key) => {
+    const teams = new Set();
+    positions.forEach((p) => Object.keys(((data.pointsAgainst || {})[p] || {})[key] || {}).forEach((t) => teams.add(t)));
+    teams.forEach((t) => {
+      const weeks = new Set();
+      positions.forEach((p) => Object.keys((((data.pointsAgainst || {})[p] || {})[key] || {})[t] || {}).forEach((w) => weeks.add(w)));
+      const byWeek = {};
+      weeks.forEach((w) => {
+        let total = 0;
+        let complete = true;
+        let opponent = null;
+        let home = null;
+        positions.forEach((p) => {
+          const e = ((((data.pointsAgainst || {})[p] || {})[key] || {})[t] || {})[w];
+          if (!e) return;
+          if (e.points === null || e.points === undefined) complete = false;
+          else total += e.points;
+          if (opponent === null && e.opponent) {
+            opponent = e.opponent;
+            home = e.home;
+          }
+        });
+        byWeek[w] = { points: complete ? Math.round(total * 10) / 10 : null, opponent, home, stats: {}, players: [] };
+      });
+      out[key][t] = byWeek;
+    });
+  });
+  return out;
+}
+
+// recent_results.by_position-shaped {team: {current, prior, pa_factor,
+// opp_avg_excl}} for ALL (feeds the PA by Week table). pa_factor is chosen so
+// that rawAvg * pa_factor equals the SUM of each position's own adjusted
+// average - the existing "Avg Adjusted" formula then needs no special case.
+function allPositionsByWeek(data) {
+  const byPos = (data.recentResults || { by_position: {} }).by_position;
+  const positions = offensePositionsOf(data);
+  const teams = new Set();
+  positions.forEach((p) => Object.keys(byPos[p] || {}).forEach((t) => teams.add(t)));
+  const mean = (obj) => {
+    const v = Object.values(obj);
+    return v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0;
+  };
+  const out = {};
+  teams.forEach((t) => {
+    const entry = { current: {}, prior: {}, pa_factor: 1.0, opp_avg_excl: 0 };
+    ["current", "prior"].forEach((key) => {
+      const weeks = new Set();
+      positions.forEach((p) => Object.keys((((byPos[p] || {})[t] || {})[key]) || {}).forEach((w) => weeks.add(w)));
+      weeks.forEach((w) => {
+        entry[key][w] = positions.reduce((a, p) => a + (((((byPos[p] || {})[t] || {})[key]) || {})[w] ?? 0), 0);
+      });
+    });
+    const useKey = Object.keys(entry.current).length ? "current" : "prior";
+    let raw = 0;
+    let adj = 0;
+    positions.forEach((p) => {
+      const pt = (byPos[p] || {})[t];
+      if (!pt) return;
+      const avg = mean(pt[useKey] || {});
+      raw += avg;
+      adj += avg * (pt.pa_factor ?? 1.0);
+      entry.opp_avg_excl += pt.opp_avg_excl ?? 0;
+    });
+    entry.pa_factor = raw > 0 ? adj / raw : 1.0;
+    out[t] = entry;
+  });
+  return out;
+}
+
 // Small line-graph icon next to a team name: opens the PA Chart view for that
 // team at the position currently selected (see renderMatchups' wiring).
 function chartIconHtml(team) {
@@ -75,30 +161,50 @@ function paByPositionTable(matchups, positions, basis, type, sortState, oppAvgFo
     return raw;
   };
   const showValue = (v) => (type === "add" ? `${v > 0 ? "+" : ""}${fmt(v, 1)}` : fmt(v, 1));
+  // The ALL column (right of the positions): the sum of every offensive
+  // position's value for the basis/type showing - needs EVERY offensive
+  // position the table has data for, so a team missing one isn't under-counted.
+  const fptsForPos = fptsFor;
+  const offense = positions.filter((p) => p !== "DST" && p !== ALL_POS);
+  const offenseWithData = offense.filter((p) => [...teams].some((t) => fptsForPos(p, t) !== null));
+  const fptsAll = (team) => {
+    if (!offenseWithData.length) return null;
+    let total = 0;
+    for (const p of offenseWithData) {
+      const v = fptsForPos(p, team);
+      if (v === null || v === undefined) return null;
+      total += v;
+    }
+    return total;
+  };
+  const cols = offenseWithData.length ? [...positions, ALL_POS] : positions;
+  const fpts = (pos, team) => (pos === ALL_POS ? fptsAll(team) : fptsForPos(pos, team));
   const rankByPos = {};
-  positions.forEach((pos) => {
+  cols.forEach((pos) => {
     const ranked = [...teams]
-      .map((t) => ({ t, v: fptsFor(pos, t) }))
+      .map((t) => ({ t, v: fpts(pos, t) }))
       .filter((x) => x.v !== null && x.v !== undefined)
       .sort((a, b) => b.v - a.v);
     rankByPos[pos] = new Map(ranked.map((x, i) => [x.t, i + 1]));
   });
   const totalFor = (t) => positions.reduce((acc, pos) => acc + (fptsFor(pos, t) || 0), 0);
 
-  const valueFor = (t, key) => (key === "team" ? t : fptsFor(key, t));
+  const valueFor = (t, key) => (key === "team" ? t : fpts(key, t));
   const defaultOrder = [...teams].sort((a, b) => totalFor(b) - totalFor(a));
   const sortedTeams = sortState.key ? sortRows(defaultOrder, sortState, valueFor) : defaultOrder;
 
-  const header = `<tr>${sortTh("Team", "team", sortState)}${positions.map((p) => sortTh(p, p, sortState)).join("")}</tr>`;
+  const header = `<tr>${sortTh("Team", "team", sortState)}${cols.map((p) => sortTh(p, p, sortState, p === ALL_POS ? ` title="Total across QB+RB+WR+TE+K (D/ST excluded)"` : "")).join("")}</tr>`;
   const rows = sortedTeams
     .map((t) => {
-      const cells = positions
+      const cells = cols
         .map((pos) => {
-          const v = fptsFor(pos, t);
+          const v = fpts(pos, t);
           const rank = rankByPos[pos].get(t);
           if (v === null || v === undefined || rank === undefined) return `<td class="muted">-</td>`;
           const ratio = ratioForRank(rank, teams.size);
-          return `<td data-team="${escapeHtml(t)}" data-pos="${pos}" class="heat-cell clickable-row" style="background:${colorForRatio(ratio)}">
+          // ALL has no points-against detail to open, so its cells aren't clickable.
+          const clickAttrs = pos === ALL_POS ? 'class="heat-cell"' : `data-team="${escapeHtml(t)}" data-pos="${pos}" class="heat-cell clickable-row"`;
+          return `<td ${clickAttrs} style="background:${colorForRatio(ratio)}">
             <div>${showValue(v)}</div>
             <div class="heat-sub">#${rank}</div>
           </td>`;
@@ -110,7 +216,7 @@ function paByPositionTable(matchups, positions, basis, type, sortState, oppAvgFo
   return `<table><thead>${header}</thead><tbody>${rows}</tbody></table>`;
 }
 
-function paByWeekTable(byPositionForPos, sortState) {
+function paByWeekTable(byPositionForPos, sortState, clickable = true) {
   const teams = Object.keys(byPositionForPos).sort();
   const anyCurrent = teams.some((t) => Object.keys(byPositionForPos[t].current).length > 0);
   const key = anyCurrent ? "current" : "prior";
@@ -161,7 +267,8 @@ function paByWeekTable(byPositionForPos, sortState) {
         })
         .join("");
       const factorNote = ` <span class="muted small">(&times;${fmt(byPositionForPos[t].pa_factor ?? 1.0, 2)})</span>`;
-      return `<tr data-team="${escapeHtml(t)}" class="clickable-row"><td>${escapeHtml(t)} ${chartIconHtml(t)}</td><td class="cell-center">${fmt(rawAvgByTeam[t], 1)}</td><td class="cell-center">${fmt(byPositionForPos[t].opp_avg_excl ?? 0, 1)}</td><td class="cell-center"><strong>${fmt(adjAvgByTeam[t], 1)}</strong>${factorNote}</td><td class="cell-center"><strong>${addAvgByTeam[t] > 0 ? "+" : ""}${fmt(addAvgByTeam[t], 1)}</strong></td>${cells}</tr>`;
+      // ALL has no per-position detail to open, so its rows aren't clickable (the chart icon still works).
+      return `<tr ${clickable ? `data-team="${escapeHtml(t)}" class="clickable-row"` : ""}><td>${escapeHtml(t)} ${chartIconHtml(t)}</td><td class="cell-center">${fmt(rawAvgByTeam[t], 1)}</td><td class="cell-center">${fmt(byPositionForPos[t].opp_avg_excl ?? 0, 1)}</td><td class="cell-center"><strong>${fmt(adjAvgByTeam[t], 1)}</strong>${factorNote}</td><td class="cell-center"><strong>${addAvgByTeam[t] > 0 ? "+" : ""}${fmt(addAvgByTeam[t], 1)}</strong></td>${cells}</tr>`;
     })
     .join("");
   return `<table>${header}<tbody>${rows}</tbody></table>`;
@@ -174,8 +281,8 @@ function paByWeekTable(byPositionForPos, sortState) {
 // Week table's "Opp Avg" - a defense never gets graded against its own game).
 // A unit's weekly output at the position is read off the same rows: it is
 // every entry across all defenses whose `opponent` is that unit.
-function chartSeriesFor(team, position, data) {
-  const detail = (data.pointsAgainst || {})[position] || { current: {}, prior: {} };
+function chartSeriesFor(team, position, data, mode = "defense") {
+  const detail = position === ALL_POS ? allPositionsDetail(data) : (data.pointsAgainst || {})[position] || { current: {}, prior: {} };
   const hasCurrent = Object.values(detail.current || {}).some((weeks) => Object.keys(weeks).length > 0);
   const bySeason = hasCurrent ? detail.current : detail.prior || {};
   const season = hasCurrent ? data.recentResults?.current_season : data.recentResults?.prior_season;
@@ -186,6 +293,29 @@ function chartSeriesFor(team, position, data) {
       (unitWeeks[e.opponent] = unitWeeks[e.opponent] || {})[w] = e.points;
     });
   });
+  if (mode === "offense") {
+    // The same rows from the OTHER side: what this team's position group
+    // scored each week (every defense's entry whose opponent is this team)
+    // vs. the average that week's opposing defense allows at the position in
+    // its other games (leave-one-out, same convention as the defense view).
+    const rows = [];
+    Object.entries(bySeason).forEach(([defense, weeksMap]) => {
+      Object.entries(weeksMap).forEach(([w, e]) => {
+        if (e.opponent === team) rows.push({ week: Number(w), defense, points: e.points });
+      });
+    });
+    rows.sort((a, b) => a.week - b.week);
+    const defAvg = rows.map((r) => {
+      const others = Object.entries(bySeason[r.defense] || {})
+        .filter(([w, e]) => Number(w) !== r.week && e.points !== null && e.points !== undefined)
+        .map(([, e]) => e.points);
+      return others.length ? others.reduce((a, b) => a + b, 0) / others.length : null;
+    });
+    return {
+      weeks: rows.map((r) => r.week), points: rows.map((r) => r.points), opponents: rows.map((r) => r.defense),
+      oppAvg: defAvg, season, teams: Object.keys(bySeason).filter((t) => Object.keys(bySeason[t]).length).sort(),
+    };
+  }
   const mine = bySeason[team] || {};
   const weeks = Object.keys(mine).map(Number).sort((a, b) => a - b);
   const points = weeks.map((w) => mine[w].points);
@@ -195,6 +325,93 @@ function chartSeriesFor(team, position, data) {
     return others.length ? others.reduce((a, b) => a + b, 0) / others.length : null;
   });
   return { weeks, points, opponents, oppAvg, season, teams: Object.keys(bySeason).filter((t) => Object.keys(bySeason[t]).length).sort() };
+}
+
+// Schedule strength from the OFFENSE's side: for each team's position group,
+// the average of the opposing defenses' season-long numbers over a window of
+// weeks - already faced, the rest of the regular fantasy season, or the
+// fantasy playoffs. Per defense the number is its raw points allowed per game
+// at the position, or that minus what the offenses it faced normally score
+// (the PA tab's +/- type). Rank 1 = softest schedule. For DST (keyed by
+// offense in the data) the row is the team's defense, facing offenses.
+function scheduleStrengthRows(data, positions, windowKey, metric) {
+  const meta = data.meta;
+  const [lo, hi] = {
+    faced: [1, meta.weeks_complete ?? 0],
+    reg: [(meta.weeks_complete ?? 0) + 1, meta.reg_season_count],
+    playoffs: [meta.reg_season_count + 1, meta.final_week],
+  }[windowKey];
+  const byPos = (data.recentResults || { by_position: {} }).by_position;
+  const valueFor = (pos, rated) => {
+    const m = (data.matchups[pos] || {})[rated];
+    if (!m || m.allowed_ppg === null || m.allowed_ppg === undefined) return null;
+    if (metric === "raw") return m.allowed_ppg;
+    const opp = ((byPos[pos] || {})[rated] || {}).opp_avg_excl;
+    return opp === null || opp === undefined ? null : m.allowed_ppg - opp;
+  };
+  // ALL for one defense = the sum of every offensive position's value (needs all of them).
+  const offense = offensePositionsOf(data);
+  const valueForAll = (rated) => {
+    let total = 0;
+    for (const p of offense) {
+      const v = valueFor(p, rated);
+      if (v === null) return null;
+      total += v;
+    }
+    return offense.length ? total : null;
+  };
+  const columns = offense.length ? [...positions, ALL_POS] : positions;
+  const table = {}; // team -> {games, avg: {col: value}, rank: {col: rank}}
+  columns.forEach((col) => {
+    const detail = col === ALL_POS ? allPositionsDetail(data) : (data.pointsAgainst || {})[col] || { current: {}, prior: {} };
+    const hasCurrent = Object.values(detail.current || {}).some((w) => Object.keys(w).length > 0);
+    const bySeason = hasCurrent ? detail.current : detail.prior || {};
+    const vals = {}; // unit team -> [value per week in window]
+    Object.entries(bySeason).forEach(([rated, weeks]) => {
+      Object.entries(weeks).forEach(([w, e]) => {
+        const wk = Number(w);
+        if (!e.opponent || wk < lo || wk > hi) return;
+        const v = col === ALL_POS ? valueForAll(rated) : valueFor(col, rated);
+        if (v === null) return;
+        (vals[e.opponent] = vals[e.opponent] || []).push(v);
+      });
+    });
+    Object.entries(vals).forEach(([team, list]) => {
+      const row = (table[team] = table[team] || { team, games: 0, avg: {}, rank: {} });
+      row.avg[col] = list.reduce((a, b) => a + b, 0) / list.length;
+      row.games = Math.max(row.games, list.length);
+    });
+    Object.values(table)
+      .filter((r) => r.avg[col] !== undefined)
+      .sort((a, b) => b.avg[col] - a.avg[col])
+      .forEach((r, i) => (r.rank[col] = i + 1));
+  });
+  return { rows: Object.values(table), columns, lo, hi };
+}
+
+function scheduleStrengthTable(data, positions, windowKey, metric, sortState) {
+  const { rows, columns, lo, hi } = scheduleStrengthRows(data, positions, windowKey, metric);
+  if (!rows.length || hi < lo) return `<p class="muted small">No games in this window.</p>`;
+  const valueFor = (r, key) => (key === "team" ? r.team : key === "games" ? r.games : r.avg[key] ?? null);
+  // Default order: the ALL rank (softest total schedule first); without ALL, the first position's rank.
+  const orderCol = columns.includes(ALL_POS) ? ALL_POS : columns[0];
+  const ordered = rows.slice().sort((a, b) => (a.rank[orderCol] ?? 99) - (b.rank[orderCol] ?? 99));
+  const sorted = sortState.key ? sortRows(ordered, sortState, valueFor) : ordered;
+  const n = rows.length;
+  const fmtV = (v) => (metric === "diff" ? `${v > 0 ? "+" : ""}${fmt(v, 1)}` : fmt(v, 1));
+  const header = `<tr>${sortTh("Team", "team", sortState)}${sortTh("G", "games", sortState)}${columns.map((p) => sortTh(p, p, sortState, p === ALL_POS ? ` title="Total across QB+RB+WR+TE+K (D/ST excluded)"` : "")).join("")}</tr>`;
+  const body = sorted
+    .map((r) => {
+      const cells = columns
+        .map((col) => {
+          if (r.avg[col] === undefined) return `<td class="muted">-</td>`;
+          return `<td class="heat-cell" style="background:${colorForRatio(ratioForRank(r.rank[col], n))}"><div>${fmtV(r.avg[col])}</div><div class="heat-sub">#${r.rank[col]}</div></td>`;
+        })
+        .join("");
+      return `<tr><td>${escapeHtml(r.team)}</td><td class="cell-center">${r.games}</td>${cells}</tr>`;
+    })
+    .join("");
+  return `<table><thead>${header}</thead><tbody>${body}</tbody></table>`;
 }
 
 export function renderMatchups(container, data) {
@@ -211,12 +428,30 @@ export function renderMatchups(container, data) {
           <option value="position">PA by Position</option>
           <option value="week">PA by Week</option>
           <option value="chart">PA Chart</option>
+          <option value="schedule">PA Schedule</option>
         </select>
         <span id="matchups-pos-wrap"><label>Position:</label>
-          <select id="matchups-pos-select">${positions.map((p) => `<option value="${p}">${p}</option>`).join("")}</select>
+          <select id="matchups-pos-select">${[...positions, ...(offensePositionsOf(data).length ? [ALL_POS] : [])].map((p) => `<option value="${p}">${p}${p === ALL_POS ? " (all positions)" : ""}</option>`).join("")}</select>
         </span>
         <span id="matchups-team-wrap" hidden><label>Team:</label>
           <select id="matchups-team-select"></select>
+          <select id="matchups-chart-mode" title="Which side of the matchup to chart">
+            <option value="defense">Defense: points allowed</option>
+            <option value="offense">Offense: points scored</option>
+          </select>
+        </span>
+        <span id="matchups-sched-wrap" hidden>
+          <label>Window:</label>
+          <select id="matchups-window-select">
+            <option value="faced">Faced to date</option>
+            <option value="reg">Rest of regular season</option>
+            <option value="playoffs">Fantasy playoffs</option>
+          </select>
+          <label>Metric:</label>
+          <select id="matchups-metric-select">
+            <option value="diff">+/- vs expected</option>
+            <option value="raw">Raw pts allowed/g</option>
+          </select>
         </span>
         <span id="matchups-basis-wrap"><label>Basis:</label>
           <select id="matchups-basis-select">
@@ -255,6 +490,10 @@ export function renderMatchups(container, data) {
   const sourceWrap = container.querySelector("#matchups-source-wrap");
   const teamSelect = container.querySelector("#matchups-team-select");
   const teamWrap = container.querySelector("#matchups-team-wrap");
+  const chartModeSelect = container.querySelector("#matchups-chart-mode");
+  const schedWrap = container.querySelector("#matchups-sched-wrap");
+  const windowSelect = container.querySelector("#matchups-window-select");
+  const metricSelect = container.querySelector("#matchups-metric-select");
   let chartInstance = null;
   let pendingChartTeam = null; // set by a table row's chart icon, consumed by the next chart draw
 
@@ -275,23 +514,28 @@ export function renderMatchups(container, data) {
       chartInstance.destroy();
       chartInstance = null;
     }
-    posWrap.hidden = view === "position";
+    posWrap.hidden = view === "position" || view === "schedule";
     teamWrap.hidden = view !== "chart";
+    schedWrap.hidden = view !== "schedule";
     basisWrap.hidden = view !== "position";
     typeWrap.hidden = view !== "position";
     sourceWrap.hidden = view !== "position";
 
     if (view === "chart") {
-      const probe = chartSeriesFor("", pos, data);
+      const mode = chartModeSelect.value;
+      const probe = chartSeriesFor("", pos, data, mode);
       const prevTeam = teamSelect.value;
       teamSelect.innerHTML = probe.teams.map((t) => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join("");
       if (probe.teams.includes(prevTeam)) teamSelect.value = prevTeam;
       if (pendingChartTeam && probe.teams.includes(pendingChartTeam)) teamSelect.value = pendingChartTeam;
       pendingChartTeam = null;
-      const series = chartSeriesFor(teamSelect.value, pos, data);
+      const series = chartSeriesFor(teamSelect.value, pos, data, mode);
       help.textContent =
-        "Points this defense allowed each week at the position, vs. the average that week's opponent scores at the position in its other games - above the dashed line means the defense gave up more than that offense usually does. " +
-        (pos === "DST" ? "For DST the team shown is the offense." : "");
+        mode === "offense"
+          ? "Points this team's position group scored each week, vs. the average that week's opposing defense allows at the position in its other games - above the dashed line means the offense beat what that defense usually gives up. " +
+            (pos === "DST" ? "For DST the team shown is the defense." : "")
+          : "Points this defense allowed each week at the position, vs. the average that week's opponent scores at the position in its other games - above the dashed line means the defense gave up more than that offense usually does. " +
+            (pos === "DST" ? "For DST the team shown is the offense." : "");
       wrap.innerHTML = series.weeks.length
         ? `<div class="matchups-chart" style="position:relative;height:320px"><canvas id="matchups-chart-canvas"></canvas></div>`
         : `<p class="muted small">No weekly results available yet.</p>`;
@@ -305,8 +549,12 @@ export function renderMatchups(container, data) {
           data: {
             labels: series.weeks.map((w, i) => `Wk ${w} ${series.opponents[i] || ""}`),
             datasets: [
-              { label: `${teamSelect.value} ${pos} points allowed`, data: series.points, borderColor: "#2563eb", backgroundColor: "#2563eb", tension: 0.2 },
-              { label: "Opponent's season avg (their other games)", data: series.oppAvg, borderColor: "#d97706", backgroundColor: "#d97706", borderDash: [6, 4], tension: 0.2 },
+              mode === "offense"
+                ? { label: `${teamSelect.value} ${pos} points scored`, data: series.points, borderColor: "#2e7d32", backgroundColor: "#2e7d32", tension: 0.2 }
+                : { label: `${teamSelect.value} ${pos} points allowed`, data: series.points, borderColor: "#2563eb", backgroundColor: "#2563eb", tension: 0.2 },
+              mode === "offense"
+                ? { label: "Opponent defense's avg allowed (their other games)", data: series.oppAvg, borderColor: "#c62828", backgroundColor: "#c62828", borderDash: [6, 4], tension: 0.2 }
+                : { label: "Opponent's season avg (their other games)", data: series.oppAvg, borderColor: "#d97706", backgroundColor: "#d97706", borderDash: [6, 4], tension: 0.2 },
             ],
           },
           options: {
@@ -323,9 +571,16 @@ export function renderMatchups(container, data) {
       return;
     }
 
-    if (view === "week") {
+    if (view === "schedule") {
+      help.textContent =
+        "Each team's position group's schedule: the average of the opposing defenses' season numbers (+/- vs. what the offenses they faced normally score, or raw points allowed per game) over the window. Rank 1 = softest schedule. For DST the row is the team's defense, facing offenses. Fantasy playoff weeks come from this league's settings.";
+      wrap.innerHTML = scheduleStrengthTable(data, positions, windowSelect.value, metricSelect.value, sortState);
+    } else if (view === "week") {
       help.textContent = '"Opp Avg" is what this defense\'s opponents scored on average against everyone ELSE (excluding their own game against this defense) - "Adjusted" scales Raw Avg by that same strength-of-opponent factor.';
-      wrap.innerHTML = paByWeekTable((data.recentResults || { by_position: {} }).by_position[pos] || {}, sortState);
+      wrap.innerHTML =
+        pos === ALL_POS
+          ? paByWeekTable(allPositionsByWeek(data), sortState, false)
+          : paByWeekTable((data.recentResults || { by_position: {} }).by_position[pos] || {}, sortState);
     } else {
       // "Expected" reads matchups.json's "_expected" sibling (see
       // engine/pipeline.py) - built the same way as the real table, just fed
@@ -381,5 +636,8 @@ export function renderMatchups(container, data) {
   typeSelect.addEventListener("change", draw);
   sourceSelect.addEventListener("change", draw);
   teamSelect.addEventListener("change", draw);
+  chartModeSelect.addEventListener("change", draw);
+  windowSelect.addEventListener("change", draw);
+  metricSelect.addEventListener("change", draw);
   draw();
 }
