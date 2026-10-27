@@ -363,13 +363,19 @@ function chartSeriesFor(team, position, data, mode = "defense") {
 // at the position, or that minus what the offenses it faced normally score
 // (the PA tab's +/- type). Rank 1 = softest schedule. For DST (keyed by
 // offense in the data) the row is the team's defense, facing offenses.
-function scheduleStrengthRows(data, positions, windowKey, metric) {
-  const meta = data.meta;
-  const [lo, hi] = {
+// Weeks covered by a PA Schedule window: already completed NFL weeks, the rest of the regular fantasy
+// season, or the fantasy playoffs.
+function scheduleWindow(meta, windowKey) {
+  return {
     faced: [1, meta.weeks_complete ?? 0],
     reg: [(meta.weeks_complete ?? 0) + 1, meta.reg_season_count],
     playoffs: [meta.reg_season_count + 1, meta.final_week],
   }[windowKey];
+}
+
+// A defense's number for the PA Schedule views: its raw points allowed per game at a position, or that
+// minus what the offenses it faced normally score ("+/-"). ALL = the sum over every offensive position.
+function scheduleMetric(data, metric) {
   const byPos = (data.recentResults || { by_position: {} }).by_position;
   const valueFor = (pos, rated) => {
     const m = (data.matchups[pos] || {})[rated];
@@ -378,7 +384,6 @@ function scheduleStrengthRows(data, positions, windowKey, metric) {
     const opp = ((byPos[pos] || {})[rated] || {}).opp_avg_excl;
     return opp === null || opp === undefined ? null : m.allowed_ppg - opp;
   };
-  // ALL for one defense = the sum of every offensive position's value (needs all of them).
   const offense = offensePositionsOf(data);
   const valueForAll = (rated) => {
     let total = 0;
@@ -389,6 +394,12 @@ function scheduleStrengthRows(data, positions, windowKey, metric) {
     }
     return offense.length ? total : null;
   };
+  return { valueFor, valueForAll, offense };
+}
+
+function scheduleStrengthRows(data, positions, windowKey, metric) {
+  const [lo, hi] = scheduleWindow(data.meta, windowKey);
+  const { valueFor, valueForAll, offense } = scheduleMetric(data, metric);
   const columns = offense.length ? [...positions, ALL_POS] : positions;
   const table = {}; // team -> {games, avg: {col: value}, rank: {col: rank}}
   columns.forEach((col) => {
@@ -416,6 +427,69 @@ function scheduleStrengthRows(data, positions, windowKey, metric) {
       .forEach((r, i) => (r.rank[col] = i + 1));
   });
   return { rows: Object.values(table), columns, lo, hi };
+}
+
+// One position's schedule week by week - the Rankings Schedule tab's opponent grid, but for every team's
+// position group: each cell is the opponent (@ = away) with that defense's number (+/- or raw points
+// allowed per game, per the Metric) and its rank among the defenses at the position (1 = softest, i.e.
+// allows the most), colored by that rank. A bye is a muted BYE. Avg = the window's average number.
+function scheduleWeeklyGrid(data, pos, windowKey, metric, sortState) {
+  const { valueFor, valueForAll } = scheduleMetric(data, metric);
+  const [lo, hi] = scheduleWindow(data.meta, windowKey);
+  if (hi < lo) return `<p class="muted small">No games in this window.</p>`;
+  const detail = pos === ALL_POS ? allPositionsDetail(data) : (data.pointsAgainst || {})[pos] || { current: {}, prior: {} };
+  const hasCurrent = Object.values(detail.current || {}).some((w) => Object.keys(w).length > 0);
+  const bySeason = hasCurrent ? detail.current : detail.prior || {};
+  const metricOf = (rated) => (pos === ALL_POS ? valueForAll(rated) : valueFor(pos, rated));
+
+  // Every defense ranked at this position by the number: 1 = highest = softest matchup.
+  const ranked = Object.keys(bySeason)
+    .map((t) => ({ t, v: metricOf(t) }))
+    .filter((x) => x.v !== null)
+    .sort((a, b) => b.v - a.v);
+  const rankOf = new Map(ranked.map((x, i) => [x.t, i + 1]));
+  const valueOfDef = new Map(ranked.map((x) => [x.t, x.v]));
+  const n = ranked.length;
+
+  // Each team's own schedule (it is the "unit" in a defense's entry: entry.opponent). `home` on an entry is the
+  // DEFENSE's home flag, so the unit is the road team exactly when it is true.
+  const sched = {};
+  Object.entries(bySeason).forEach(([rated, weeks]) => {
+    if (!rankOf.has(rated)) return;
+    Object.entries(weeks).forEach(([w, e]) => {
+      const wk = Number(w);
+      if (!e.opponent || wk < lo || wk > hi) return;
+      (sched[e.opponent] = sched[e.opponent] || {})[wk] = { opp: rated, away: e.home === true, value: valueOfDef.get(rated), rank: rankOf.get(rated) };
+    });
+  });
+  const weeks = [];
+  for (let w = lo; w <= hi; w++) weeks.push(w);
+  const rows = Object.entries(sched).map(([team, byWeek]) => {
+    const vals = Object.values(byWeek).map((c) => c.value);
+    return { team, byWeek, avg: vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null };
+  });
+  rows.filter((r) => r.avg !== null).sort((a, b) => b.avg - a.avg).forEach((r, i) => (r.avgRank = i + 1));
+
+  const valueFor2 = (r, key) => (key === "team" ? r.team : key === "avg" ? r.avg : r.byWeek[key]?.value ?? null);
+  const ordered = rows.slice().sort((a, b) => (a.avgRank ?? 99) - (b.avgRank ?? 99));
+  const sorted = sortState.key ? sortRows(ordered, sortState, valueFor2) : ordered;
+  const fmtV = (v) => (metric === "diff" ? `${v > 0 ? "+" : ""}${fmt(v, 1)}` : fmt(v, 1));
+  const header = `<tr>${sortTh("Team", "team", sortState)}${sortTh("Avg", "avg", sortState, ` title="Average over the window's games"`)}${weeks.map((w) => sortTh(`Wk ${w}`, w, sortState)).join("")}</tr>`;
+  const body = sorted
+    .map((r) => {
+      const avgCell = r.avg === null ? `<td class="muted cell-center">-</td>` : `<td class="heat-cell" style="background:${colorForRatio(ratioForRank(r.avgRank, rows.length))}"><div>${fmtV(r.avg)}</div><div class="heat-sub">#${r.avgRank}</div></td>`;
+      const cells = weeks
+        .map((w) => {
+          const c = r.byWeek[w];
+          if (!c) return `<td class="muted cell-center">BYE</td>`;
+          const tip = `Wk ${w}: ${c.away ? "at" : "vs"} ${c.opp} - allows ${fmtV(c.value)} (${metric === "diff" ? "+/- vs expected" : "pts/g"}), #${c.rank} of ${n}`;
+          return `<td class="heat-cell ros-cell" style="background:${colorForRatio(ratioForRank(c.rank, n))}" title="${escapeHtml(tip)}"><div class="ros-opp">${c.away ? "@" : ""}${escapeHtml(c.opp)}</div><div class="heat-sub">${fmtV(c.value)} &middot; #${c.rank}</div></td>`;
+        })
+        .join("");
+      return `<tr><td>${escapeHtml(r.team)}</td>${avgCell}${cells}</tr>`;
+    })
+    .join("");
+  return `<table><thead>${header}</thead><tbody>${body}</tbody></table>`;
 }
 
 function scheduleStrengthTable(data, positions, windowKey, metric, sortState) {
@@ -470,6 +544,8 @@ export function renderMatchups(container, data) {
           </select>
         </span>
         <span id="matchups-sched-wrap" hidden>
+          <label>Position:</label>
+          <select id="matchups-sched-pos-select">${[["summary", "All positions"], ...positions.map((p) => [p, p]), ...(offensePositionsOf(data).length ? [[ALL_POS, ALL_POS]] : [])].map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select>
           <label>Window:</label>
           <select id="matchups-window-select">
             <option value="faced">Faced to date</option>
@@ -522,6 +598,8 @@ export function renderMatchups(container, data) {
   const chartModeSelect = container.querySelector("#matchups-chart-mode");
   const schedWrap = container.querySelector("#matchups-sched-wrap");
   const windowSelect = container.querySelector("#matchups-window-select");
+  const schedPosSelect = container.querySelector("#matchups-sched-pos-select");
+  let lastSchedKey = null; // position|window - a different one resets the sort (a "Wk 9" key means nothing elsewhere)
   const metricSelect = container.querySelector("#matchups-metric-select");
   let chartInstance = null;
   let pendingChartTeam = null; // set by a table row's chart icon, consumed by the next chart draw
@@ -605,7 +683,18 @@ export function renderMatchups(container, data) {
     if (view === "schedule") {
       help.textContent =
         "Each team's position group's schedule: the average of the opposing defenses' season numbers (+/- vs. what the offenses they faced normally score, or raw points allowed per game) over the window. Rank 1 = softest schedule. For DST the row is the team's defense, facing offenses. Fantasy playoff weeks come from this league's settings.";
-      wrap.innerHTML = scheduleStrengthTable(data, positions, windowSelect.value, metricSelect.value, sortState);
+      const schedKey = `${schedPosSelect.value}|${windowSelect.value}`;
+      if (schedKey !== lastSchedKey) {
+        sortState = { key: null, dir: 1, lastKey: null };
+        lastSchedKey = schedKey;
+      }
+      if (schedPosSelect.value === "summary") {
+        wrap.innerHTML = scheduleStrengthTable(data, positions, windowSelect.value, metricSelect.value, sortState);
+      } else {
+        help.textContent =
+          "Each team's position group, week by week: the opponent (@ = away), that defense's number (+/- vs. what the offenses it faces normally score, or raw points allowed per game) and its rank among defenses at the position - 1 = softest matchup. Avg is the window's average. BYE = no game. Pick All positions for the summary table.";
+        wrap.innerHTML = scheduleWeeklyGrid(data, schedPosSelect.value, windowSelect.value, metricSelect.value, sortState);
+      }
     } else if (view === "week") {
       help.textContent = '"Opp Avg" is what this defense\'s opponents scored on average against everyone ELSE (excluding their own game against this defense) - "Adjusted" scales Raw Avg by that same strength-of-opponent factor.';
       wrap.innerHTML =
@@ -673,6 +762,7 @@ export function renderMatchups(container, data) {
   teamSelect.addEventListener("change", draw);
   chartModeSelect.addEventListener("change", draw);
   windowSelect.addEventListener("change", draw);
+  schedPosSelect.addEventListener("change", draw);
   metricSelect.addEventListener("change", draw);
   draw();
 }
