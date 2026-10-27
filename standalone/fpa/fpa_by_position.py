@@ -992,6 +992,46 @@ def schedule_html(sched_df: pl.DataFrame, metric: str, reg_end: int, playoff_end
     return "".join(parts)
 
 
+_TEAM_COLORS: dict[str, tuple[str, str]] | None = None
+
+
+def team_line_color(team: str) -> str:
+    """The team's primary color (nflverse teams table); if that is hard to see on the
+    white chart background, its secondary color; if neither is, the primary darkened
+    until it is. Blue if the colors are unavailable."""
+    global _TEAM_COLORS
+    if _TEAM_COLORS is None:
+        try:
+            _TEAM_COLORS = {r["team_abbr"]: (r["team_color"], r["team_color2"]) for r in nfl.load_teams().iter_rows(named=True)}
+        except Exception:
+            _TEAM_COLORS = {}
+    primary, secondary = _TEAM_COLORS.get(team, ("#2563EB", "#2563EB"))
+
+    def lum(h):
+        c = [int(h[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+        c = [v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4 for v in c]
+        return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+
+    def contrast(h):  # against white
+        return 1.05 / (lum(h) + 0.05)
+
+    if contrast(primary) >= 3:
+        return primary
+    sec = [int(secondary[i:i + 2], 16) for i in (1, 3, 5)]
+    silver = (max(sec) == 0 or (max(sec) - min(sec)) / max(sec) < 0.2) and lum(secondary) > 0.3  # blends into the gray avg line
+    if contrast(secondary) >= 3 and not silver:
+        return secondary
+    for step in range(1, 11):  # pale primary: darken until it reads on white
+        t = step / 10
+        mixed = "#" + "".join(f"{round(int(primary[i:i + 2], 16) * (1 - t)):02x}" for i in (1, 3, 5))
+        if contrast(mixed) >= 3:
+            return mixed
+    return primary
+
+
+AVG_LINE_COLOR = "#6b7280"  # neutral gray for the "opponent's average" line
+
+
 def plot_team_position(weekly: pl.DataFrame, team: str, pos: str, path: str | None = None, show: bool = False):
     """Line chart: points the team allowed each week vs. the average of the
     opponent it faced (that opponent's other games). Needs matplotlib."""
@@ -1001,8 +1041,8 @@ def plot_team_position(weekly: pl.DataFrame, team: str, pos: str, path: str | No
     if g.is_empty():
         raise SystemExit(f"No {pos} data for {team}.")
     fig, ax = plt.subplots(figsize=(9, 4.5))
-    ax.plot(g["week"], g["points"], marker="o", linewidth=2, label=f"{team} {pos} points allowed")
-    ax.plot(g["week"], g["opp_avg"], marker="s", linewidth=2, linestyle="--", label="Opponent's season avg (other games)")
+    ax.plot(g["week"], g["points"], marker="o", linewidth=2, color=team_line_color(team), label=f"{team} {pos} points allowed")
+    ax.plot(g["week"], g["opp_avg"], marker="s", linewidth=2, linestyle="--", color=AVG_LINE_COLOR, label="Opponent's season avg (other games)")
     for w, o in zip(g["week"], g["opponent"]):
         ax.annotate(o, (w, g.filter(pl.col("week") == w)["points"][0]), textcoords="offset points", xytext=(0, 7), ha="center", fontsize=8)
     ax.set_xlabel("Week")
@@ -1031,8 +1071,8 @@ def plot_offense_position(weekly: pl.DataFrame, team: str, pos: str, path: str |
     if g.is_empty():
         raise SystemExit(f"No {pos} data for {team}.")
     fig, ax = plt.subplots(figsize=(9, 4.5))
-    ax.plot(g["week"], g["points"], marker="o", linewidth=2, color="#2e7d32", label=f"{team} {pos} points scored")
-    ax.plot(g["week"], g["team_avg"], marker="s", linewidth=2, linestyle="--", color="#c62828",
+    ax.plot(g["week"], g["points"], marker="o", linewidth=2, color=team_line_color(team), label=f"{team} {pos} points scored")
+    ax.plot(g["week"], g["team_avg"], marker="s", linewidth=2, linestyle="--", color=AVG_LINE_COLOR,
             label="Opponent's avg points allowed (their other games)")
     for w, o, pts in zip(g["week"], g["team"], g["points"]):
         ax.annotate(o, (w, pts), textcoords="offset points", xytext=(0, 7), ha="center", fontsize=8)

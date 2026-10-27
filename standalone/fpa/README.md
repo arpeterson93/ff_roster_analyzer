@@ -42,7 +42,7 @@ BUF      6   212.9   35.48     1   25.14   +10.3     1  |   38.87   24.32  +14.5
 - **+/-**: points allowed minus Opp Avg, averaged: how much more (+) or less (-) the team gives up than those offenses normally score. `+3.2` = 3.2 more per game than expected. **+/-Rk** ranks it (1 = best matchup); the HTML report sorts by it by default.
 - **L3 columns** (with `--last 3`): the same FPA/G, Opp Avg, +/- and rank for just each team's last 3 games, so you get one rank for the whole season and one for recent form.
 - **D/ST** is rated from the other side: the team listed is the *offense*, and the number is how many D/ST points opposing defenses scored against it.
-- **Chart**: blue = points the team allowed each week; orange dashed = the average that week's opponent scores at the position in its other games.
+- **Chart**: the team's color = points the team allowed each week; gray dashed = the average that week's opponent scores at the position in its other games.
 
 ## Schedule strength
 
