@@ -483,7 +483,9 @@ function scheduleWeeklyGrid(data, pos, windowKey, metric, sortState) {
           const c = r.byWeek[w];
           if (!c) return `<td class="muted cell-center">BYE</td>`;
           const tip = `Wk ${w}: ${c.away ? "at" : "vs"} ${c.opp} - allows ${fmtV(c.value)} (${metric === "diff" ? "+/- vs expected" : "pts/g"}), #${c.rank} of ${n}`;
-          return `<td class="heat-cell ros-cell" style="background:${colorForRatio(ratioForRank(c.rank, n))}" title="${escapeHtml(tip)}"><div class="ros-opp">${c.away ? "@" : ""}${escapeHtml(c.opp)}</div><div class="heat-sub">${fmtV(c.value)} &middot; #${c.rank}</div></td>`;
+          // Click the opponent's cell -> that defense's points-against modal for this position (none exists for ALL).
+          const clickAttrs = pos === ALL_POS ? 'class="heat-cell ros-cell"' : `class="heat-cell ros-cell clickable-row" data-team="${escapeHtml(c.opp)}" data-pos="${pos}"`;
+          return `<td ${clickAttrs} style="background:${colorForRatio(ratioForRank(c.rank, n))}" title="${escapeHtml(tip)}"><div class="ros-opp">${c.away ? "@" : ""}${escapeHtml(c.opp)}</div><div class="heat-sub">${fmtV(c.value)} &middot; #${c.rank}</div></td>`;
         })
         .join("");
       return `<tr><td>${escapeHtml(r.team)}</td>${avgCell}${cells}</tr>`;
@@ -692,7 +694,7 @@ export function renderMatchups(container, data) {
         wrap.innerHTML = scheduleStrengthTable(data, positions, windowSelect.value, metricSelect.value, sortState);
       } else {
         help.textContent =
-          "Each team's position group, week by week: the opponent (@ = away), that defense's number (+/- vs. what the offenses it faces normally score, or raw points allowed per game) and its rank among defenses at the position - 1 = softest matchup. Avg is the window's average. BYE = no game. Pick All positions for the summary table.";
+          "Each team's position group, week by week: the opponent (@ = away), that defense's number (+/- vs. what the offenses it faces normally score, or raw points allowed per game) and its rank among defenses at the position - 1 = softest matchup. Avg is the window's average. BYE = no game. Click a cell for that defense's points-against detail. Pick All positions for the summary table.";
         wrap.innerHTML = scheduleWeeklyGrid(data, schedPosSelect.value, windowSelect.value, metricSelect.value, sortState);
       }
     } else if (view === "week") {
