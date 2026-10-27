@@ -147,7 +147,7 @@ function overviewColumns(data) {
     { key: "_wk2", label: "2wk", fmt: (_v, p) => fmtOrDash(pointsWeeksAgo(p, 2, cw)) },
     { key: "_wk1", label: "1wk", fmt: (_v, p) => fmtOrDash(pointsWeeksAgo(p, 1, cw)) },
     {
-      key: "_implied_total", label: "ITT", title: "Implied Team Total", sortable: false,
+      key: "_implied_total", label: "ITT", title: "Implied Team Total",
       fmt: (_v, p) => impliedTotalCellHtml(p, thisWeekEntry(p, cw)),
     },
     {
@@ -431,6 +431,13 @@ function sortValue(p, key, data, filters) {
     return pts === undefined || pts === null ? -Infinity : pts;
   }
   if (key === "fp_week_pos_rank_label") return p.week_pos_rank ?? Infinity;
+  // The same number the ITT cell shows (impliedTotalCellHtml): the player's team's implied
+  // total this week - for a DST, the opposing offense's. No posted line yet / bye sorts last.
+  if (key === "_implied_total") {
+    const w = thisWeekEntry(p, cw);
+    const total = p.position === "DST" ? w.opponent_implied_total : w.implied_total;
+    return total === undefined || total === null ? -Infinity : total;
+  }
   if (key === "_season_avg") return seasonAvgPoints(p, cw) ?? -Infinity;
   if (key === "_wk3") return pointsWeeksAgo(p, 3, cw) ?? -Infinity;
   if (key === "_wk2") return pointsWeeksAgo(p, 2, cw) ?? -Infinity;
