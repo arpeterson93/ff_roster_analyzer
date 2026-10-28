@@ -244,7 +244,8 @@ def test_price_confidence_samples_only_ever_sees_winning_prices():
     # observation, never the real win/lose threshold).
     row = _bid_row(1, effective_cost_dollars=10.0, effective_starting_budget=40.0, team_id="winner_team")
     samples = price_confidence_samples([row], [2.0])
-    assert samples == pytest.approx([(0.25, 2.0)])
+    # Compared number by number: newer pytest refuses pytest.approx() on a list of tuples.
+    assert samples == [(pytest.approx(0.25), pytest.approx(2.0))]
 
 
 def test_price_confidence_samples_one_auction_one_vote():
@@ -253,7 +254,7 @@ def test_price_confidence_samples_one_auction_one_vote():
     contested = _bid_row(1, effective_cost_dollars=10.0, effective_starting_budget=40.0, team_id="winner_1")
     uncontested = _bid_row(2, add_player_id=99, effective_cost_dollars=8.0, effective_starting_budget=40.0, team_id="winner_2")
     samples = price_confidence_samples([contested, uncontested], [2.0, 2.0])
-    assert sorted(samples) == pytest.approx([(0.2, 2.0), (0.25, 2.0)])
+    assert sorted(samples) == [(pytest.approx(0.2), pytest.approx(2.0)), (pytest.approx(0.25), pytest.approx(2.0))]
 
 
 def test_build_event_won_rows_index_groups_across_leagues():
