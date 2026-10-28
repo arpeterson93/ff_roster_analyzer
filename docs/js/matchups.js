@@ -315,6 +315,16 @@ function chartSeriesFor(team, position, data, mode = "defense") {
   const hasCurrent = Object.values(detail.current || {}).some((weeks) => Object.keys(weeks).length > 0);
   const bySeason = hasCurrent ? detail.current : detail.prior || {};
   const season = hasCurrent ? data.recentResults?.current_season : data.recentResults?.prior_season;
+  // League benchmark for the flat line: the average points per team-week at this position over every
+  // game played so far this season (every team, every week). The same number serves both views - a
+  // league's average points scored equals its average points allowed.
+  const played = [];
+  Object.values(bySeason).forEach((weeksMap) =>
+    Object.values(weeksMap).forEach((e) => {
+      if (e.points !== null && e.points !== undefined) played.push(e.points);
+    })
+  );
+  const leagueAvg = played.length ? played.reduce((a, b) => a + b, 0) / played.length : null;
   const unitWeeks = {};
   Object.values(bySeason).forEach((weeks) => {
     Object.entries(weeks).forEach(([w, e]) => {
@@ -342,7 +352,7 @@ function chartSeriesFor(team, position, data, mode = "defense") {
     });
     return {
       weeks: rows.map((r) => r.week), points: rows.map((r) => r.points), opponents: rows.map((r) => r.defense),
-      oppAvg: defAvg, season, teams: Object.keys(bySeason).filter((t) => Object.keys(bySeason[t]).length).sort(),
+      oppAvg: defAvg, leagueAvg, season, teams: Object.keys(bySeason).filter((t) => Object.keys(bySeason[t]).length).sort(),
     };
   }
   const mine = bySeason[team] || {};
@@ -353,7 +363,7 @@ function chartSeriesFor(team, position, data, mode = "defense") {
     const others = Object.entries(unitWeeks[opponents[i]] || {}).filter(([k]) => Number(k) !== w).map(([, v]) => v);
     return others.length ? others.reduce((a, b) => a + b, 0) / others.length : null;
   });
-  return { weeks, points, opponents, oppAvg, season, teams: Object.keys(bySeason).filter((t) => Object.keys(bySeason[t]).length).sort() };
+  return { weeks, points, opponents, oppAvg, leagueAvg, season, teams: Object.keys(bySeason).filter((t) => Object.keys(bySeason[t]).length).sort() };
 }
 
 // Schedule strength from the OFFENSE's side: for each team's position group,
@@ -656,6 +666,7 @@ export function renderMatchups(container, data) {
         // The charted team's own color for its line; the opponent-average line is a neutral gray.
         const teamColor = chartTeamColor(teamSelect.value, cs.getPropertyValue("--card"));
         const avgColor = cs.getPropertyValue("--ink-500").trim() || "#7a7a73";
+        const leagueColor = cs.getPropertyValue("--ink-900").trim() || "#1b1b18"; // flat benchmark: dotted, no markers
         chartInstance = new window.Chart(canvas.getContext("2d"), {
           type: "line",
           data: {
@@ -666,6 +677,15 @@ export function renderMatchups(container, data) {
                 label: mode === "offense" ? "Opponent defense's avg allowed (their other games)" : "Opponent's season avg (their other games)",
                 data: series.oppAvg, borderColor: avgColor, backgroundColor: avgColor, borderDash: [6, 4], tension: 0.2,
               },
+              ...(series.leagueAvg === null
+                ? []
+                : [
+                    {
+                      label: "League Avg",
+                      data: series.weeks.map(() => series.leagueAvg),
+                      borderColor: leagueColor, backgroundColor: leagueColor, borderDash: [2, 4], borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 0, tension: 0,
+                    },
+                  ]),
             ],
           },
           options: {
