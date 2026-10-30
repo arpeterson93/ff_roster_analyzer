@@ -241,6 +241,82 @@ function wireSuggestionRows(suggestionsEl, suggestions, state, draw) {
   });
 }
 
+// League-wide tools (trade block / position needs): one row per partner
+// team, best offer first (see window.FFTrade.tradeBlockOffers /
+// positionNeedTrades). Rows are clickable (wireLeagueTradeRows) and load that
+// exact trade into the calculator above. Same desktop/mobile column pairing
+// as suggestionsTableHtml.
+function leagueTradesTableHtml(rows, playersById, teamsById, emptyMessage) {
+  if (!rows.length) return `<p class="muted small">${emptyMessage}</p>`;
+  const names = (ids) => ids.map((id) => escapeHtml(playersById.get(id)?.name ?? id)).join(", ");
+  const signed = (v) => `${v >= 0 ? "+" : ""}${fmt(v, 1)}`;
+  const body = rows
+    .map((r, i) => {
+      const partner = teamsById.get(r.partnerTeamId);
+      const give = names(r.giveA);
+      const get = names(r.giveB);
+      return `<tr class="clickable-row" data-league-trade-index="${i}">
+        <td>${escapeHtml(partner ? teamLabel(partner) : r.partnerTeamId)}</td>
+        <td class="desktop-col">${give}</td>
+        <td class="desktop-col">${get}</td>
+        <td class="mobile-col small"><div>Give: ${give}</div><div>Get: ${get}</div></td>
+        <td class="desktop-col">${signed(r.gainA)}</td>
+        <td class="desktop-col">${signed(r.gainB)}</td>
+        <td class="mobile-col small"><div>You: ${signed(r.gainA)}</div><div>Them: ${signed(r.gainB)}</div></td>
+      </tr>`;
+    })
+    .join("");
+  return `<table><thead><tr><th>Partner</th><th class="desktop-col">You give</th><th class="desktop-col">You get</th><th class="mobile-col">Players</th><th class="desktop-col">Your gain</th><th class="desktop-col">Their gain</th><th class="mobile-col">Gain</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+
+// Runs one of the league-wide searches (one trade search per other team, so
+// a few seconds for a full league) - same "paint the message first"
+// setTimeout as generateSuggestions. `myTeamId` is always side A.
+function runLeagueSearch(el, data, state, myTeamId, kind, playersById, draw) {
+  el.innerHTML = `<p class="muted small">Searching every team...</p>`;
+  setTimeout(() => {
+    const players = buildPlayersMap(data);
+    const weeks = [];
+    for (let w = data.meta.current_week; w <= data.meta.final_week; w++) weeks.push(w);
+    const otherRosters = {};
+    data.teams.forEach((t) => {
+      if (t.team_id !== myTeamId) otherRosters[t.team_id] = rosterIds(data, t.team_id);
+    });
+    const common = {
+      myRoster: rosterIds(data, myTeamId), otherRosters, players, freeAgentsByPos: buildFreeAgentsByPos(data), weeks,
+      slots: data.meta.slots, eligibility: data.meta.slot_eligibility, rosterSize: data.meta.roster_size,
+      maxResults: state.leagueTopN,
+    };
+    const rows = kind === "block"
+      ? window.FFTrade.tradeBlockOffers({ ...common, blockIds: [...state.blockIds] })
+      : window.FFTrade.positionNeedTrades({ ...common, needPositions: [...state.needPositions] });
+    if (kind === "block") state.blockResults = rows;
+    else state.needResults = rows;
+    const empty = kind === "block" ? "No team has a workable offer for those players." : "No trades found that bring back those positions.";
+    el.innerHTML = leagueTradesTableHtml(rows, playersById, data.teamsById, empty);
+    wireLeagueTradeRows(el, rows, state, myTeamId, draw);
+  }, 0);
+}
+
+// Same hand-off as a Suggested-trades row: set both teams and both sides'
+// players, redraw, and scroll the calculator into view.
+function wireLeagueTradeRows(el, rows, state, myTeamId, draw) {
+  el.querySelectorAll("tr[data-league-trade-index]").forEach((row) => {
+    row.addEventListener("click", () => {
+      const r = rows[Number(row.dataset.leagueTradeIndex)];
+      state.teamA = myTeamId;
+      state.teamB = r.partnerTeamId;
+      state.givesA = new Set(r.giveA);
+      state.givesB = new Set(r.giveB);
+      state.excludedA = new Set();
+      state.excludedB = new Set();
+      state.suggestions = [];
+      draw();
+      window.scrollTo({ top: document.getElementById("trade-result")?.offsetTop ?? 0, behavior: "smooth" });
+    });
+  });
+}
+
 function weeklyImpactTable(weeklyA, weeklyB, teamAName, teamBName, expandedWeek) {
   const rows = weeklyA
     .map((wa, i) => {
@@ -348,6 +424,9 @@ export function renderTrade(container, data) {
     excludedA: new Set(), excludedB: new Set(),
     sortMode: "position", expandedWeek: null,
     suggestions: [],
+    // League-wide tools (always run from the viewer's own team, defaultTeamA).
+    blockIds: new Set(), needPositions: new Set(), leagueTopN: 5,
+    blockResults: [], needResults: [],
   };
 
   function draw(opts) {
@@ -358,6 +437,34 @@ export function renderTrade(container, data) {
     const rostB = rosterIds(data, state.teamB).map((id) => playersById.get(id)).filter(Boolean);
 
     container.innerHTML = `
+      <div class="card">
+        <h3 style="margin:0 0 8px">League-wide trade tools <span class="muted small">(${escapeHtml(teamLabel(data.teamsById.get(defaultTeamA)))})</span></h3>
+        <div class="select-row">
+          <span class="trade-select-group">
+            <label>Show top:</label>
+            <select id="league-top-n">${[3, 5, 8, 11].map((n) => `<option value="${n}" ${n === state.leagueTopN ? "selected" : ""}>${n}</option>`).join("")}</select>
+          </span>
+        </div>
+        <details ${state.blockResults.length || state.blockIds.size ? "open" : ""}>
+          <summary><strong>Trade block</strong> <span class="muted small">- see what each team would offer for your players</span></summary>
+          <p class="muted small">Check the players you'd move. Each other team gets at most one offer (built from any of the checked players), best first, with no incoming player repeated. Click a row to load it into the calculator below.</p>
+          <div class="league-pick">${sortedRoster(rosterIds(data, defaultTeamA).map((id) => playersById.get(id)).filter(Boolean), "position")
+            .map((p) => `<label class="small" style="margin-right:12px;white-space:nowrap"><input type="checkbox" data-block-pick value="${p.id}" ${state.blockIds.has(p.id) ? "checked" : ""}> ${escapeHtml(p.name)} <span class="muted">${p.position}</span></label>`)
+            .join("")}</div>
+          <p><button id="league-block-run" type="button">Find offers</button></p>
+          <div class="table-wrap" id="league-block-results">${leagueTradesTableHtml(state.blockResults, playersById, data.teamsById, "Pick players and press Find offers.")}</div>
+        </details>
+        <details ${state.needResults.length || state.needPositions.size ? "open" : ""} style="margin-top:8px">
+          <summary><strong>Position needs</strong> <span class="muted small">- best trades to upgrade the positions you pick</span></summary>
+          <p class="muted small">Pick the positions you want to get stronger at. Each trade brings back at least one player at a picked position and never sends one out; at most one trade per team, no incoming player repeated.</p>
+          <div class="league-pick">${data.meta.positions
+            .filter((pos) => pos !== "K" && pos !== "DST")
+            .map((pos) => `<label class="small" style="margin-right:12px"><input type="checkbox" data-need-pick value="${pos}" ${state.needPositions.has(pos) ? "checked" : ""}> ${pos}</label>`)
+            .join("")}</div>
+          <p><button id="league-need-run" type="button">Find trades</button></p>
+          <div class="table-wrap" id="league-need-results">${leagueTradesTableHtml(state.needResults, playersById, data.teamsById, "Pick positions and press Find trades.")}</div>
+        </details>
+      </div>
       <div class="card">
         <div class="select-row">
           <span class="trade-select-group">
@@ -411,6 +518,32 @@ export function renderTrade(container, data) {
         <div id="trade-result"></div>
       </div>
     `;
+
+    container.querySelector("#league-top-n").addEventListener("change", (e) => {
+      state.leagueTopN = Number(e.target.value);
+    });
+    container.querySelectorAll("[data-block-pick]").forEach((cb) => {
+      cb.addEventListener("change", () => {
+        if (cb.checked) state.blockIds.add(cb.value);
+        else state.blockIds.delete(cb.value);
+      });
+    });
+    container.querySelectorAll("[data-need-pick]").forEach((cb) => {
+      cb.addEventListener("change", () => {
+        if (cb.checked) state.needPositions.add(cb.value);
+        else state.needPositions.delete(cb.value);
+      });
+    });
+    container.querySelector("#league-block-run").addEventListener("click", () => {
+      if (!state.blockIds.size) return;
+      runLeagueSearch(container.querySelector("#league-block-results"), data, state, defaultTeamA, "block", playersById, draw);
+    });
+    container.querySelector("#league-need-run").addEventListener("click", () => {
+      if (!state.needPositions.size) return;
+      runLeagueSearch(container.querySelector("#league-need-results"), data, state, defaultTeamA, "need", playersById, draw);
+    });
+    wireLeagueTradeRows(container.querySelector("#league-block-results"), state.blockResults, state, defaultTeamA, draw);
+    wireLeagueTradeRows(container.querySelector("#league-need-results"), state.needResults, state, defaultTeamA, draw);
 
     container.querySelector("#trade-team-a").addEventListener("change", (e) => {
       state.teamA = Number(e.target.value);

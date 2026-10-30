@@ -785,14 +785,23 @@ function tradeSuggestions(opts) {
   // even fully unlocked, and far fewer real candidates get missed.
   var verifyBudget = opts.verifyBudget || 2000;
   var maxResults = opts.maxResults || 15;
+  // Optional narrowing used by the league-wide tools below (tradeBlockOffers,
+  // positionNeedTrades): allowedA/allowedB restrict which ids may be GIVEN by
+  // that side (still evaluated against the full roster), and candidateFilter
+  // (giveA, giveB) -> bool drops raw combos before the heuristic ranking so a
+  // narrow search isn't crowded out by the verifyBudget cut.
+  var allowedASet = null, allowedBSet = null;
+  if (opts.allowedA) { allowedASet = {}; opts.allowedA.forEach(function (id) { allowedASet[id] = true; }); }
+  if (opts.allowedB) { allowedBSet = {}; opts.allowedB.forEach(function (id) { allowedBSet[id] = true; }); }
+  var candidateFilter = opts.candidateFilter || null;
 
   var lockedASet = {}; lockedA.forEach(function (id) { lockedASet[id] = true; });
   var lockedBSet = {}; lockedB.forEach(function (id) { lockedBSet[id] = true; });
   var excludedASet = {}; excludedA.forEach(function (id) { excludedASet[id] = true; });
   var excludedBSet = {}; excludedB.forEach(function (id) { excludedBSet[id] = true; });
   var isAutoEligible = function (id) { return !(players[id] && AUTO_TRADE_EXCLUDED_POSITIONS[players[id].position]); };
-  var poolA = topNByRosTotal(rosterA.filter(function (id) { return !lockedASet[id] && !excludedASet[id] && isAutoEligible(id); }), players, poolSize);
-  var poolB = topNByRosTotal(rosterB.filter(function (id) { return !lockedBSet[id] && !excludedBSet[id] && isAutoEligible(id); }), players, poolSize);
+  var poolA = topNByRosTotal(rosterA.filter(function (id) { return !lockedASet[id] && !excludedASet[id] && isAutoEligible(id) && (!allowedASet || allowedASet[id]); }), players, poolSize);
+  var poolB = topNByRosTotal(rosterB.filter(function (id) { return !lockedBSet[id] && !excludedBSet[id] && isAutoEligible(id) && (!allowedBSet || allowedBSet[id]); }), players, poolSize);
 
   var giveAOptions = sideOptions(lockedA, poolA, maxPerSide);
   var giveBOptions = sideOptions(lockedB, poolB, maxPerSide);
@@ -800,6 +809,7 @@ function tradeSuggestions(opts) {
   var raw = [];
   giveAOptions.forEach(function (giveA) {
     giveBOptions.forEach(function (giveB) {
+      if (candidateFilter && !candidateFilter(giveA, giveB)) return;
       var hA = heuristicGain(giveA, giveB, players), hB = heuristicGain(giveB, giveA, players);
       raw.push({ giveA: giveA, giveB: giveB, heuristic: Math.min(hA, hB) });
     });
@@ -827,6 +837,83 @@ function tradeSuggestions(opts) {
   return results.slice(0, maxResults);
 }
 
+// Shared by the two league-wide tools below: runs tradeSuggestions between
+// `myRoster` (side A) and each other team (side B) and hands back every
+// partner's ranked list, so a caller can keep ONE trade per partner team
+// instead of the pair-specific top-N tradeSuggestions returns on its own.
+// verifyBudget is deliberately much smaller than the single-pair default
+// (2000) since this runs once per other team in the league.
+function perPartnerSuggestions(opts, perPairOpts) {
+  var results = [];
+  Object.keys(opts.otherRosters).forEach(function (teamId) {
+    var base = {
+      rosterA: opts.myRoster, rosterB: opts.otherRosters[teamId],
+      players: opts.players, freeAgentsByPos: opts.freeAgentsByPos, weeks: opts.weeks,
+      slots: opts.slots, eligibility: opts.eligibility, rosterSize: opts.rosterSize,
+      maxPerSide: opts.maxPerSide || 2, verifyBudget: opts.verifyBudget || 300,
+    };
+    Object.keys(perPairOpts).forEach(function (k) { base[k] = perPairOpts[k]; });
+    tradeSuggestions(base).forEach(function (r) {
+      results.push({ partnerTeamId: Number(teamId), giveA: r.giveA, giveB: r.giveB, gainA: r.gainA, gainB: r.gainB, mutualBenefit: r.mutualBenefit });
+    });
+  });
+  return results;
+}
+
+// Greedy pick over a flat candidate list, best mutualBenefit first: at most
+// one trade per partner team, and no incoming player (giveB) used twice, so
+// the list is varied in both partner and target instead of five near-copies
+// of the same deal. maxGiveRepeat (optional) also caps how many picked trades
+// may send out the same player of mine. maxResults caps the list.
+function pickDiverse(candidates, maxResults, maxGiveRepeat) {
+  var sorted = candidates.slice().sort(function (x, y) { return y.mutualBenefit - x.mutualBenefit; });
+  var usedTeams = {}, usedTargets = {}, giveCount = {}, picked = [];
+  sorted.forEach(function (c) {
+    if (picked.length >= maxResults) return;
+    if (usedTeams[c.partnerTeamId]) return;
+    if (c.giveB.some(function (id) { return usedTargets[id]; })) return;
+    if (maxGiveRepeat && c.giveA.some(function (id) { return (giveCount[id] || 0) >= maxGiveRepeat; })) return;
+    usedTeams[c.partnerTeamId] = true;
+    c.giveB.forEach(function (id) { usedTargets[id] = true; });
+    c.giveA.forEach(function (id) { giveCount[id] = (giveCount[id] || 0) + 1; });
+    picked.push(c);
+  });
+  return picked;
+}
+
+// Trade block: opts.blockIds are my players I'm willing to move (any
+// non-empty subset may be offered). Returns each other team's best offer for
+// them, ranked by mutual benefit, at most one per partner and no incoming
+// player repeated. opts: myRoster, otherRosters {teamId: [ids]}, blockIds,
+// players, freeAgentsByPos, weeks, slots, eligibility, rosterSize, maxResults.
+function tradeBlockOffers(opts) {
+  if (!opts.blockIds || !opts.blockIds.length) return [];
+  var blockSet = {}; opts.blockIds.forEach(function (id) { blockSet[id] = true; });
+  var candidates = perPartnerSuggestions(opts, {
+    // Only the block players may leave my side (K/DST are still skipped by
+    // tradeSuggestions' auto pool, same as everywhere else).
+    allowedA: opts.blockIds, maxResults: 10,
+    candidateFilter: function (giveA) { return giveA.length > 0 && giveA.every(function (id) { return blockSet[id]; }); },
+  });
+  return pickDiverse(candidates, opts.maxResults || Infinity);
+}
+
+// Position needs: opts.needPositions (e.g. ["RB","WR"]) are positions I want
+// to upgrade. Every returned trade brings back at least one player at a need
+// position and sends none out, then the same one-per-partner / no repeated
+// target selection as tradeBlockOffers. Same opts otherwise.
+function positionNeedTrades(opts) {
+  if (!opts.needPositions || !opts.needPositions.length) return [];
+  var needSet = {}; opts.needPositions.forEach(function (pos) { needSet[pos] = true; });
+  var isNeed = function (id) { return !!(opts.players[id] && needSet[opts.players[id].position]); };
+  var candidates = perPartnerSuggestions(opts, {
+    allowedA: opts.myRoster.filter(function (id) { return !isNeed(id); }),
+    allowedB: null, maxResults: 15,
+    candidateFilter: function (giveA, giveB) { return giveB.some(isNeed); },
+  });
+  return pickDiverse(candidates, opts.maxResults || Infinity, 2);
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     evaluateTrade: evaluateTrade, evaluateTradeWithStreaming: evaluateTradeWithStreaming,
@@ -836,6 +923,7 @@ if (typeof module !== "undefined" && module.exports) {
     lineupAssignmentForWeek: lineupAssignmentForWeek,
     lineupAssignmentForWeekWithStreaming: lineupAssignmentForWeekWithStreaming,
     tradeSuggestions: tradeSuggestions,
+    tradeBlockOffers: tradeBlockOffers, positionNeedTrades: positionNeedTrades,
     positionValueMatrix: positionValueMatrix,
     positionValueByPlayer: positionValueByPlayer,
     positionValueTeamTotal: positionValueTeamTotal,
@@ -934,6 +1022,7 @@ if (typeof module !== "undefined" && module.exports) {
     lineupAssignmentForWeek: lineupAssignmentForWeek,
     lineupAssignmentForWeekWithStreaming: lineupAssignmentForWeekWithStreaming,
     tradeSuggestions: tradeSuggestions,
+    tradeBlockOffers: tradeBlockOffers, positionNeedTrades: positionNeedTrades,
     positionValueMatrix: positionValueMatrix,
     positionValueByPlayer: positionValueByPlayer,
     positionValueTeamTotal: positionValueTeamTotal,
