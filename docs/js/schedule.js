@@ -216,7 +216,14 @@ function actualAndProjectedTotal(m, side, data) {
   pids.forEach((pid) => {
     const p = resolvePlayer(pid, data);
     if (!p) return;
-    const { actual, projected } = actualAndProjected(p, m.week, lineupWeek, data);
+    const { actual, projected: perPlayerProjected } = actualAndProjected(p, m.week, lineupWeek, data);
+    // The team total's projection is the live-blended number (final game ->
+    // real points, mid-game -> points so far + remaining share, not started
+    // -> pregame projection), unlike the per-player cell which keeps the
+    // original pregame number visible for a finished player - otherwise the
+    // total would keep summing pregame projections for players already done.
+    const blended = m.week === data.meta.current_week && isLiveDataCurrent(data) ? lineupWeek.projected_points?.[p.id] : undefined;
+    const projected = blended !== undefined ? blended : perPlayerProjected;
     if (actual !== undefined && actual !== null) {
       actualSum += actual;
       anyActual = true;
