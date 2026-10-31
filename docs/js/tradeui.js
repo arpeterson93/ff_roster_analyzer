@@ -250,6 +250,7 @@ function leagueTradesTableHtml(rows, playersById, teamsById, emptyMessage) {
   if (!rows.length) return `<p class="muted small">${emptyMessage}</p>`;
   const names = (ids) => ids.map((id) => escapeHtml(playersById.get(id)?.name ?? id)).join(", ");
   const signed = (v) => `${v >= 0 ? "+" : ""}${fmt(v, 1)}`;
+  const hasNeed = rows.some((r) => r.needGain !== undefined);
   const body = rows
     .map((r, i) => {
       const partner = teamsById.get(r.partnerTeamId);
@@ -263,10 +264,11 @@ function leagueTradesTableHtml(rows, playersById, teamsById, emptyMessage) {
         <td class="desktop-col">${signed(r.gainA)}</td>
         <td class="desktop-col">${signed(r.gainB)}</td>
         <td class="mobile-col small"><div>You: ${signed(r.gainA)}</div><div>Them: ${signed(r.gainB)}</div></td>
+        ${hasNeed ? `<td class="${r.needGain > 0 ? "" : "delta-down"}" title="Change in your position value at the positions you picked">${signed(r.needGain)}</td>` : ""}
       </tr>`;
     })
     .join("");
-  return `<table><thead><tr><th>Partner</th><th class="desktop-col">You give</th><th class="desktop-col">You get</th><th class="mobile-col">Players</th><th class="desktop-col">Your gain</th><th class="desktop-col">Their gain</th><th class="mobile-col">Gain</th></tr></thead><tbody>${body}</tbody></table>`;
+  return `<table><thead><tr><th>Partner</th><th class="desktop-col">You give</th><th class="desktop-col">You get</th><th class="mobile-col">Players</th><th class="desktop-col">Your gain</th><th class="desktop-col">Their gain</th><th class="mobile-col">Gain</th>${hasNeed ? `<th title="Change in your position value at the positions you picked">Need &Delta;</th>` : ""}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
 // Runs one of the league-wide searches (one trade search per other team, so
@@ -285,7 +287,6 @@ function runLeagueSearch(el, data, state, myTeamId, kind, playersById, draw) {
     const common = {
       myRoster: rosterIds(data, myTeamId), otherRosters, players, freeAgentsByPos: buildFreeAgentsByPos(data), weeks,
       slots: data.meta.slots, eligibility: data.meta.slot_eligibility, rosterSize: data.meta.roster_size,
-      maxResults: state.leagueTopN,
     };
     const rows = kind === "block"
       ? window.FFTrade.tradeBlockOffers({ ...common, blockIds: [...state.blockIds] })
@@ -425,7 +426,7 @@ export function renderTrade(container, data) {
     sortMode: "position", expandedWeek: null,
     suggestions: [],
     // League-wide tools (always run from the viewer's own team, defaultTeamA).
-    blockIds: new Set(), needPositions: new Set(), leagueTopN: 5,
+    blockIds: new Set(), needPositions: new Set(),
     blockResults: [], needResults: [],
   };
 
@@ -439,15 +440,9 @@ export function renderTrade(container, data) {
     container.innerHTML = `
       <div class="card">
         <h3 style="margin:0 0 8px">League-wide trade tools <span class="muted small">(${escapeHtml(teamLabel(data.teamsById.get(defaultTeamA)))})</span></h3>
-        <div class="select-row">
-          <span class="trade-select-group">
-            <label>Show top:</label>
-            <select id="league-top-n">${[3, 5, 8, 11].map((n) => `<option value="${n}" ${n === state.leagueTopN ? "selected" : ""}>${n}</option>`).join("")}</select>
-          </span>
-        </div>
         <details ${state.blockResults.length || state.blockIds.size ? "open" : ""}>
           <summary><strong>Trade block</strong> <span class="muted small">- see what each team would offer for your players</span></summary>
-          <p class="muted small">Check the players you'd move. Each other team gets at most one offer (built from any of the checked players), best first, with no incoming player repeated. Click a row to load it into the calculator below.</p>
+          <p class="muted small">Check the players you'd move. Shows the 10 best offers (built from any of the checked players, no incoming player more than twice), plus the best offer from any team not already listed. Click a row to load it into the calculator below.</p>
           <div class="league-pick">${sortedRoster(rosterIds(data, defaultTeamA).map((id) => playersById.get(id)).filter(Boolean), "position")
             .map((p) => `<label class="small" style="margin-right:12px;white-space:nowrap"><input type="checkbox" data-block-pick value="${p.id}" ${state.blockIds.has(p.id) ? "checked" : ""}> ${escapeHtml(p.name)} <span class="muted">${p.position}</span></label>`)
             .join("")}</div>
@@ -456,7 +451,7 @@ export function renderTrade(container, data) {
         </details>
         <details ${state.needResults.length || state.needPositions.size ? "open" : ""} style="margin-top:8px">
           <summary><strong>Position needs</strong> <span class="muted small">- best trades to upgrade the positions you pick</span></summary>
-          <p class="muted small">Pick the positions you want to get stronger at. Each trade brings back at least one player at a picked position and never sends one out; at most one trade per team, no incoming player repeated.</p>
+          <p class="muted small">Pick the positions you want to get stronger at. Each trade brings back at least one player at a picked position. "Need Δ" is the change in your value at those positions (you can send one out if what comes back is better); trades that net a gain rank first, and a team with no gaining trade still shows its closest option in red. Shows the 10 best trades (no incoming player more than twice), plus the best from any team not already listed.</p>
           <div class="league-pick">${data.meta.positions
             .filter((pos) => pos !== "K" && pos !== "DST")
             .map((pos) => `<label class="small" style="margin-right:12px"><input type="checkbox" data-need-pick value="${pos}" ${state.needPositions.has(pos) ? "checked" : ""}> ${pos}</label>`)
@@ -519,9 +514,6 @@ export function renderTrade(container, data) {
       </div>
     `;
 
-    container.querySelector("#league-top-n").addEventListener("change", (e) => {
-      state.leagueTopN = Number(e.target.value);
-    });
     container.querySelectorAll("[data-block-pick]").forEach((cb) => {
       cb.addEventListener("change", () => {
         if (cb.checked) state.blockIds.add(cb.value);

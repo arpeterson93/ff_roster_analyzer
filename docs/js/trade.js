@@ -860,32 +860,39 @@ function perPartnerSuggestions(opts, perPairOpts) {
   return results;
 }
 
-// Greedy pick over a flat candidate list, best mutualBenefit first: at most
-// one trade per partner team, and no incoming player (giveB) used twice, so
-// the list is varied in both partner and target instead of five near-copies
-// of the same deal. maxGiveRepeat (optional) also caps how many picked trades
-// may send out the same player of mine. maxResults caps the list.
-function pickDiverse(candidates, maxResults, maxGiveRepeat) {
-  var sorted = candidates.slice().sort(function (x, y) { return y.mutualBenefit - x.mutualBenefit; });
-  var usedTeams = {}, usedTargets = {}, giveCount = {}, picked = [];
+// Same selection rule as engine/team_strength.py's trade_targets: rank by
+// mutualBenefit, skip any candidate whose incoming player has already
+// appeared diversityCap times (so one standout player can't flood the list
+// with near-copies of the same offer), keep the top LEAGUE_TRADES_TOP_N, then
+// add each remaining partner team's best surviving offer so every team is
+// represented. Sorted by mutualBenefit at the end.
+var LEAGUE_TRADES_TOP_N = 10;
+var LEAGUE_TRADES_DIVERSITY_CAP = 2;
+function pickDiverse(candidates) {
+  // `rank` (optional, set by positionNeedTrades) overrides mutualBenefit as
+  // the sort key; the displayed gains are never touched by it.
+  var key = function (c) { return c.rank !== undefined ? c.rank : c.mutualBenefit; };
+  var sorted = candidates.slice().sort(function (x, y) { return key(y) - key(x); });
+  var getCounts = {}, diverse = [];
   sorted.forEach(function (c) {
-    if (picked.length >= maxResults) return;
-    if (usedTeams[c.partnerTeamId]) return;
-    if (c.giveB.some(function (id) { return usedTargets[id]; })) return;
-    if (maxGiveRepeat && c.giveA.some(function (id) { return (giveCount[id] || 0) >= maxGiveRepeat; })) return;
-    usedTeams[c.partnerTeamId] = true;
-    c.giveB.forEach(function (id) { usedTargets[id] = true; });
-    c.giveA.forEach(function (id) { giveCount[id] = (giveCount[id] || 0) + 1; });
-    picked.push(c);
+    if (c.giveB.every(function (id) { return (getCounts[id] || 0) < LEAGUE_TRADES_DIVERSITY_CAP; })) {
+      diverse.push(c);
+      c.giveB.forEach(function (id) { getCounts[id] = (getCounts[id] || 0) + 1; });
+    }
   });
-  return picked;
+  var top = diverse.slice(0, LEAGUE_TRADES_TOP_N);
+  var represented = {};
+  top.forEach(function (c) { represented[c.partnerTeamId] = true; });
+  diverse.forEach(function (c) {
+    if (!represented[c.partnerTeamId]) { represented[c.partnerTeamId] = true; top.push(c); }
+  });
+  return top.sort(function (x, y) { return key(y) - key(x); });
 }
 
 // Trade block: opts.blockIds are my players I'm willing to move (any
-// non-empty subset may be offered). Returns each other team's best offer for
-// them, ranked by mutual benefit, at most one per partner and no incoming
-// player repeated. opts: myRoster, otherRosters {teamId: [ids]}, blockIds,
-// players, freeAgentsByPos, weeks, slots, eligibility, rosterSize, maxResults.
+// non-empty subset may be offered). Returns the top offers for them
+// across the league plus every other team's best (see pickDiverse). opts: myRoster, otherRosters {teamId: [ids]}, blockIds,
+// players, freeAgentsByPos, weeks, slots, eligibility, rosterSize.
 function tradeBlockOffers(opts) {
   if (!opts.blockIds || !opts.blockIds.length) return [];
   var blockSet = {}; opts.blockIds.forEach(function (id) { blockSet[id] = true; });
@@ -895,23 +902,50 @@ function tradeBlockOffers(opts) {
     allowedA: opts.blockIds, maxResults: 10,
     candidateFilter: function (giveA) { return giveA.length > 0 && giveA.every(function (id) { return blockSet[id]; }); },
   });
-  return pickDiverse(candidates, opts.maxResults || Infinity);
+  return pickDiverse(candidates);
 }
 
 // Position needs: opts.needPositions (e.g. ["RB","WR"]) are positions I want
-// to upgrade. Every returned trade brings back at least one player at a need
-// position and sends none out, then the same one-per-partner / no repeated
-// target selection as tradeBlockOffers. Same opts otherwise.
+// to upgrade. A trade qualifies when it brings back at least one player at a
+// need position. Trades are ranked first by whether my summed position value
+// (points above replacement, starting + depth) at those positions is higher
+// after the trade than before (sending out a player at a need position is
+// fine as long as what comes back nets better), then by mutual benefit;
+// ones that don't net a gain still appear, just below all that do. Then the same selection as
+// tradeBlockOffers (see pickDiverse). Each result also carries
+// needGain (the before/after change at the need positions). Same opts
+// otherwise.
 function positionNeedTrades(opts) {
   if (!opts.needPositions || !opts.needPositions.length) return [];
   var needSet = {}; opts.needPositions.forEach(function (pos) { needSet[pos] = true; });
   var isNeed = function (id) { return !!(opts.players[id] && needSet[opts.players[id].position]); };
+  var needValue = function (roster) {
+    var resolved = applyRosterConstraints({
+      roster: roster, players: opts.players, freeAgentsByPos: opts.freeAgentsByPos,
+      weeks: opts.weeks, slots: opts.slots, eligibility: opts.eligibility, rosterSize: opts.rosterSize,
+    }).roster;
+    var matrix = positionValueMatrix({
+      teamPlayerIds: resolved, players: opts.players, freeAgentsByPos: opts.freeAgentsByPos,
+      weeks: opts.weeks, slots: opts.slots, eligibility: opts.eligibility,
+    });
+    var total = 0;
+    Object.keys(matrix).forEach(function (label) { if (needSet[label]) total += matrix[label].total; });
+    return total;
+  };
+  var before = needValue(opts.myRoster);
   var candidates = perPartnerSuggestions(opts, {
-    allowedA: opts.myRoster.filter(function (id) { return !isNeed(id); }),
-    allowedB: null, maxResults: 15,
+    maxResults: 40,
     candidateFilter: function (giveA, giveB) { return giveB.some(isNeed); },
+  }).map(function (c) {
+    var rosters = afterRosters(c.giveA, c.giveB, opts.myRoster, opts.otherRosters[c.partnerTeamId]);
+    c.needGain = needValue(rosters.afterRosterA) - before;
+    // Trades that don't net a gain at the need positions are kept (so a team
+    // with nothing better still shows its closest option) but always rank
+    // below every trade that does.
+    c.rank = (c.needGain > 0 ? 1e6 : 0) + c.mutualBenefit;
+    return c;
   });
-  return pickDiverse(candidates, opts.maxResults || Infinity, 2);
+  return pickDiverse(candidates);
 }
 
 if (typeof module !== "undefined" && module.exports) {
