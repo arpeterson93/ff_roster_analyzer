@@ -78,6 +78,10 @@ const _NAME_SUFFIXES = new Set(["jr", "jr.", "sr", "sr.", "ii", "iii", "iv", "v"
 // Brown") still loses some fidelity - fine for a space-constrained mobile
 // label, not meant as a full name parser.
 export function shortName(name) {
+  // A defense is "Seahawks D/ST" - initialing it gives "S. D/ST", which says
+  // nothing. The team nickname alone is already short enough.
+  const dst = /^(.+?)\s+D\/ST$/i.exec((name || "").trim());
+  if (dst) return dst[1];
   const parts = (name || "").trim().split(/\s+/);
   if (parts.length < 2) return name || "";
   let end = parts.length - 1;
