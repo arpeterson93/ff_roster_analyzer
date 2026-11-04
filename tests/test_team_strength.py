@@ -630,17 +630,58 @@ def test_position_value_matrix_starter_can_go_negative():
 
 
 def test_position_value_matrix_true_bye_contributes_zero_not_negative():
-    # A single-RB team whose only RB is on bye (0.0 that week, same sentinel
-    # engine/valuation.py already uses) has no real asset to devalue - 0,
-    # not "0 minus a positive replacement value" (which would be negative).
+    # A single-RB team whose only RB is on bye in week 1 (0.0 that week, same
+    # sentinel engine/valuation.py already uses) has no real asset to devalue
+    # that week - 0, not "0 minus a positive replacement value" (which would
+    # be negative). He plays (and equals the wire) in week 2, so he is not a
+    # dead player (see the test below).
     slots = {"RB": 1}
     eligibility = {"RB": {"RB"}}
-    weeks = [1]
-    players = {"only_rb": _wk("only_rb", "RB", {1: 0.0})}
-    free_agents = {"RB": [_wk("fa_rb", "RB", {1: 12.0})]}
+    weeks = [1, 2]
+    players = {"only_rb": _wk("only_rb", "RB", {1: 0.0, 2: 12.0})}
+    free_agents = {"RB": [_wk("fa_rb", "RB", {1: 12.0, 2: 12.0})]}
     result = position_value_matrix(["only_rb"], players, free_agents, weeks, slots, eligibility)
     assert result["RB"]["starting_value"] == 0.0
     assert result["RB"]["depth_value"] == 0.0
+
+
+def test_position_value_dead_starter_is_charged_the_replacement_he_fails_to_provide():
+    # A lone QB projected 0.0 every remaining week (a backup who isn't
+    # playing) is not a bye: the QB slot is really empty, so he carries a
+    # negative starting value (0 minus the best free agent), not a neutral 0.
+    slots = {"QB": 1}
+    eligibility = {"QB": {"QB"}}
+    weeks = [1, 2]
+    players = {"dead_qb": _wk("dead_qb", "QB", {1: 0.0, 2: 0.0})}
+    free_agents = {"QB": [_wk("fa_qb", "QB", {1: 15.0, 2: 16.0})]}
+    result = position_value_by_player(["dead_qb"], players, free_agents, weeks, slots, eligibility)
+    assert result["dead_qb"]["starting_value"] == pytest.approx(-31.0)
+
+
+def test_position_value_dead_player_not_charged_when_a_real_starter_fills_the_slot():
+    slots = {"QB": 1}
+    eligibility = {"QB": {"QB"}}
+    weeks = [1, 2]
+    players = {"qb": _wk("qb", "QB", {1: 20.0, 2: 20.0}), "dead_qb": _wk("dead_qb", "QB", {1: 0.0, 2: 0.0})}
+    free_agents = {"QB": [_wk("fa_qb", "QB", {1: 15.0, 2: 16.0})]}
+    result = position_value_by_player(["qb", "dead_qb"], players, free_agents, weeks, slots, eligibility)
+    assert result["dead_qb"]["starting_value"] == 0.0
+    assert result["qb"]["starting_value"] == pytest.approx(9.0)
+
+
+def test_pickups_suggest_the_best_free_agent_when_the_only_starter_is_dead():
+    slots = {"QB": 1}
+    eligibility = {"QB": {"QB"}}
+    weeks = [1, 2]
+    players = {"dead_qb": _wk("dead_qb", "QB", {1: 0.0, 2: 0.0})}
+    fa = _wk("fa_qb", "QB", {1: 15.0, 2: 16.0})
+    players["fa_qb"] = fa
+    free_agents = {"QB": [fa, _wk("fa_qb2", "QB", {1: 10.0, 2: 10.0})]}
+    values = position_value_by_player(["dead_qb"], players, free_agents, weeks, slots, eligibility)
+    gains = {}
+    result = pickups(["dead_qb"], players, values, free_agents, weeks, slots, eligibility, 5, all_gains=gains)
+    assert result[0]["add"] == "fa_qb" and result[0]["drop"] == "dead_qb"
+    assert gains["fa_qb"] == pytest.approx(31.0)
 
 
 def test_position_value_matrix_below_replacement_starter_is_negative_not_zeroed():

@@ -192,6 +192,14 @@ def position_value_by_player(
     depth_value = {pid: 0.0 for pid in team_player_ids}
     weekly: dict[str, dict[int, dict]] = {pid: {} for pid in team_player_ids}
 
+    # A rostered player projected at exactly 0 in EVERY remaining week (a
+    # backup who isn't playing, a player out for the year) is not a bye - he
+    # fills no slot all season. If a starting slot has no positive candidate
+    # at all, the lost replacement value is charged to one of these (see
+    # below) instead of silently counting as 0, which made a lone dead QB
+    # look neutral and hid the team's real need at the position.
+    dead = sorted(pid for pid in team_player_ids if pid in players and all(players[pid].weekly.get(w, 0.0) <= 0 for w in weeks))
+
     for w in weeks:
         candidates = {
             pid: (players[pid].position, players[pid].weekly.get(w, 0.0))
@@ -203,7 +211,18 @@ def position_value_by_player(
             elig = eligibility.get(base_label, set())
             pool = [pid for pid, (pos, _) in candidates.items() if pos in elig and pid not in claimed]
             if not pool:
-                continue  # true bye/no candidate - no asset here, contributes nothing
+                # No positive candidate. A single-week bye (or nobody rostered
+                # at all) is no asset and contributes nothing; but if a dead
+                # player (above) sits in this slot's eligibility, the slot is
+                # really empty and he is charged the replacement he fails to
+                # provide.
+                holder = next((pid for pid in dead if players[pid].position in elig and pid not in claimed), None)
+                if holder is not None:
+                    replacement, replacement_id = best_available(elig, w)
+                    starting_value[holder] -= replacement
+                    weekly[holder][w] = {"starting_value": -replacement, "depth_value": 0.0, "replacement_id": replacement_id}
+                    claimed.add(holder)
+                continue
             starter = max(pool, key=lambda pid: candidates[pid][1])
             replacement, replacement_id = best_available(elig, w)
             v = candidates[starter][1] - replacement

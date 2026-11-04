@@ -471,6 +471,14 @@ function positionValueByPlayer(opts) {
   var startingValue = {}, depthValue = {}, weekly = {};
   teamPlayerIds.forEach(function (pid) { startingValue[pid] = 0; depthValue[pid] = 0; weekly[pid] = {}; });
 
+  // Twin of engine/team_strength.py's `dead`: rostered players projected at 0
+  // in EVERY remaining week (not a single-week bye) - charged the lost
+  // replacement value when a starting slot has no positive candidate.
+  var dead = teamPlayerIds.filter(function (pid) {
+    var p = players[pid];
+    return p && weeks.every(function (w) { return !((p.weekly && p.weekly[w] !== undefined ? p.weekly[w] : 0) > 0); });
+  }).sort();
+
   weeks.forEach(function (w) {
     var candidates = {};
     teamPlayerIds.forEach(function (pid) {
@@ -485,7 +493,20 @@ function positionValueByPlayer(opts) {
       var pool = Object.keys(candidates).filter(function (pid) {
         return elig.indexOf(candidates[pid].pos) !== -1 && !claimed[pid];
       });
-      if (pool.length === 0) return; // true bye/no candidate - no asset here, contributes nothing
+      if (pool.length === 0) {
+        // No positive candidate: a single-week bye / nobody rostered is no
+        // asset (contributes nothing), but a dead player in this slot's
+        // eligibility means the slot is really empty - charge him the
+        // replacement he fails to provide (see `dead` above).
+        var holder = dead.filter(function (pid) { return elig.indexOf(players[pid].position) !== -1 && !claimed[pid]; })[0];
+        if (holder !== undefined) {
+          var rep = bestAvailable(elig, w);
+          startingValue[holder] -= rep.value;
+          weekly[holder][w] = { startingValue: -rep.value, depthValue: 0, replacementId: rep.id };
+          claimed[holder] = true;
+        }
+        return;
+      }
       pool.sort(function (a, b) { return candidates[b].pts - candidates[a].pts; });
       var starter = pool[0];
       var replacement = bestAvailable(elig, w);
