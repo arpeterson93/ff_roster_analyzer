@@ -1720,3 +1720,11 @@ details[open] summary { margin-bottom: 8px; }
 .faabl-lens h3 { margin: 0 0 4px; font-size: 13px; }
 .faabl-lens ul { margin: 4px 0 0; padding-left: 18px; font-size: 12px; }
 @media (max-width: 600px) { .faabl-grid td { min-width: 60px; } }
+
+.faabl-model-grid { display: grid; grid-template-columns: minmax(260px, 420px) 1fr; gap: 24px; align-items: start; margin-top: 8px; }
+.faabl-model-grid h4, #tab-faab h4 { margin: 8px 0 4px; font-size: 13px; }
+.faabl-scatter { width: 100%; aspect-ratio: 1; background: var(--paper); border: 1px solid var(--border); border-radius: 6px; }
+.faabl-scatter circle { fill: var(--accent); fill-opacity: 0.55; }
+.faabl-scatter .diag { stroke: var(--ink-500); stroke-width: 0.5; stroke-dasharray: 2 2; vector-effect: non-scaling-stroke; }
+.faabl-comps { margin: 2px 0 0; padding-left: 16px; text-align: left; font-size: 11px; white-space: normal; }
+@media (max-width: 700px) { .faabl-model-grid { grid-template-columns: 1fr; } }

@@ -15,6 +15,14 @@ For The O League this joins three things already in this directory:
                                   league had no enforced cap then; see
                                   build_training_table.build_effective_budgets)
 
+It also writes `<slug>-model-backtest.json` - the FAAB model's held-out historical
+predictions (eval_pooled.json) next to what actually happened, for the FAAB tab's
+"model vs reality" section: {"won": [[season, week, name, pos, actual_pct,
+predicted_median_pct, p_bid]], "calib": [[p_bid, bid_happened 0/1]]}. Only rows
+from this league; a "won" row is a real winning bid, "calib" covers every row
+where the outcome was a real bid or no bid at all (cancelled/invalid claims are
+neither, so they are left out).
+
 Output: {"budgets": {season: budget}, "rows": [raw bid rows + "position"]}.
 Rows keep only the fields engine/faab_league.py reads. Seasons from 2026 on are
 NOT frozen here - the pipeline pulls the live season itself.
@@ -57,6 +65,24 @@ def build(slug: str) -> dict:
     return {"budgets": {str(k): v for k, v in sorted(budget_by_season.items())}, "rows": rows}
 
 
+def build_backtest(slug: str) -> dict | None:
+    from ingest.config import load_league_config
+
+    path = HERE / "eval_pooled.json"
+    if not path.exists():
+        return None
+    league_id = load_league_config(slug)["league_id"]
+    rows = [r for r in json.loads(path.read_text(encoding="utf-8")) if r.get("source_league_id") == league_id]
+    if not rows:
+        return None
+    won = [
+        [r["season"], r["week"], r["name"], r["position"], round(r["actual_pct"], 5), round(r["comp_conditional_price"], 5), round(r["comp_bid_probability"], 4)]
+        for r in rows if r["signal"] == "won"
+    ]
+    calib = [[round(r["comp_bid_probability"], 4), 1 if r["signal"] in ("won", "outbid") else 0] for r in rows if r["signal"] in ("won", "outbid", "no_bid")]
+    return {"source": "held-out evaluation of the pooled model on this league's own past bids", "won": won, "calib": calib}
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--slug", default="o-league")
@@ -66,6 +92,10 @@ def main() -> None:
     write_json(path, out, separators=(",", ":"))
     missing = sum(1 for r in out["rows"] if not r["position"])
     print(f"wrote {path.name}: {len(out['rows'])} rows, {missing} without a position, budgets {out['budgets']}")
+    backtest = build_backtest(args.slug)
+    if backtest:
+        write_json(HERE / f"{args.slug}-model-backtest.json", backtest, separators=(",", ":"))
+        print(f"wrote {args.slug}-model-backtest.json: {len(backtest['won'])} won bids, {len(backtest['calib'])} calibration rows")
 
 
 if __name__ == "__main__":

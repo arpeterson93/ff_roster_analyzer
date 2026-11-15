@@ -55,7 +55,7 @@ from engine.play_log import (
 from engine.points_against import dst_points_against_detail, points_against_detail, with_kick_attempts, with_remaining_schedule
 from engine.scoring import ScoringRules
 from engine import standings_stage
-from engine.faab_league import build_faab_league
+from engine.faab_league import build_faab_league, processed_weeks_of, snapshot_entries, update_estimate_log
 from engine.history import load_and_build as load_history
 from engine.xfp_play_log import expected_plays_for_player
 from engine.team_strength import (
@@ -327,7 +327,10 @@ def _faab_week_override(current_week: int, week_started: int | None) -> int:
 _FAAB_HISTORY_DIR = Path(__file__).resolve().parent.parent / "tools" / "faab_history"
 
 
-def _compute_faab_league(cfg: dict, client: EspnClient, players_out: list[dict], season: int, current_week: int) -> dict:
+def _compute_faab_league(
+    cfg: dict, client: EspnClient, players_out: list[dict], season: int, current_week: int,
+    faab_estimates: dict | None = None, prior_estimate_log: dict | None = None, faab_week: int | None = None,
+) -> tuple[dict, dict | None]:
     """faab_league.json - this league's own FAAB transaction history (see
     engine/faab_league.py). History = the frozen <slug>-tx-history.json (if the
     league has one - only The O League does so far) plus the live season,
@@ -355,7 +358,21 @@ def _compute_faab_league(cfg: dict, client: EspnClient, players_out: list[dict],
     except Exception as exc:
         logger.warning("faab_league: acquisition budget unavailable: %s", exc)
         budget = None
-    return build_faab_league(season=season, frozen=frozen, live_rows=live_rows, live_budget=budget, baselines=baselines)
+    # Model tracking: snapshot what the estimator says for the week whose waivers
+    # are about to run, then join the log to what the league actually paid.
+    estimate_log = prior_estimate_log
+    if faab_estimates and faab_week is not None:
+        estimate_log = update_estimate_log(
+            prior_estimate_log, snapshot_entries(faab_estimates, players_out), season, faab_week,
+            processed_weeks_of(live_rows, season), datetime.now(timezone.utc).isoformat(),
+        )
+    backtest_path = _FAAB_HISTORY_DIR / f"{slug}-model-backtest.json"
+    backtest = json.loads(backtest_path.read_text(encoding="utf-8")) if backtest_path.exists() else None
+    out = build_faab_league(
+        season=season, frozen=frozen, live_rows=live_rows, live_budget=budget, baselines=baselines,
+        estimate_log=estimate_log, backtest=backtest,
+    )
+    return out, estimate_log
 
 
 def _compute_faab_estimates(
@@ -840,6 +857,7 @@ def run_league(
     skip: frozenset[str] = frozenset(),
     prior_players: list[dict] | None = None,
     prior_last_updates: dict[str, str] | None = None,
+    prior_faab_log: dict | None = None,
 ) -> dict:
     """Runs the full pipeline for one league. Returns {filename: json-serializable-object}.
 
@@ -2014,9 +2032,13 @@ def run_league(
         _log_checkpoint("faab_estimates_done")
 
     faab_league_out = None
+    faab_estimate_log = None
     if "faab" not in skip:
         try:
-            faab_league_out = _compute_faab_league(cfg, client, players_out, season, current_week)
+            faab_league_out, faab_estimate_log = _compute_faab_league(
+                cfg, client, players_out, season, current_week,
+                faab_estimates=faab_estimates_out, prior_estimate_log=prior_faab_log, faab_week=faab_current_week,
+            )
         except Exception as exc:
             logger.warning("faab_league: history build failed, skipping faab_league.json this run: %s", exc)
 
@@ -2056,6 +2078,8 @@ def run_league(
         result["faab_estimates.json"] = faab_estimates_out
     if faab_league_out is not None:
         result["faab_league.json"] = faab_league_out
+    if faab_estimate_log is not None:
+        result["faab_estimate_log.json"] = faab_estimate_log
     return result
 
 
@@ -2072,6 +2096,15 @@ def _load_prior_players(out_dir: Path, season: int) -> list[dict] | None:
             return None
         return json.loads((out_dir / "players.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, KeyError):
+        return None
+
+
+def _load_prior_faab_log(out_dir: Path) -> dict | None:
+    """This league's faab_estimate_log.json from the last run (restored from the
+    site-data baseline - see _load_prior_players), None if there isn't one."""
+    try:
+        return json.loads((out_dir / "faab_estimate_log.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
         return None
 
 
@@ -2108,7 +2141,8 @@ def main() -> int:
         try:
             prior_players = _load_prior_players(out_root / cfg["slug"], cfg["season"])
             prior_last_updates = _load_prior_last_updates(out_root / cfg["slug"])
-            files = run_league(cfg, skip=skip, prior_players=prior_players, prior_last_updates=prior_last_updates)
+            prior_faab_log = _load_prior_faab_log(out_root / cfg["slug"])
+            files = run_league(cfg, skip=skip, prior_players=prior_players, prior_last_updates=prior_last_updates, prior_faab_log=prior_faab_log)
         except Exception:
             logger.exception("league %s failed", cfg["slug"])
             any_failed = True

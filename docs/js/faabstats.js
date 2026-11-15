@@ -164,3 +164,59 @@ export function leagueLens(fl, pos, week, currentSeason) {
     .slice(0, 6);
   return { ...cell, basis, bucket, pos, comparable, budget, totalPosWins: posWins.length };
 }
+
+// ---- model vs reality ----
+// Predictions and outcomes are both fractions of the season's budget. "miss" =
+// actual winning bid - model median, so a positive miss means the model bid too low.
+
+const CALIB_EDGES = [0, 0.05, 0.1, 0.2, 0.35, 0.5, 1.0001];
+
+function missStats(pairs) {
+  // pairs: [{pos, pred, actual}]
+  const by = new Map();
+  const add = (key, pr) => { if (!by.has(key)) by.set(key, []); by.get(key).push(pr); };
+  pairs.forEach((pr) => { add("All", pr); add(pr.pos || "?", pr); });
+  return [...by.entries()].map(([pos, list]) => {
+    const miss = list.map((x) => x.actual - x.pred);
+    const abs = miss.map(Math.abs);
+    return {
+      pos, n: list.length,
+      pred: summarize(list.map((x) => x.pred)).p50, actual: summarize(list.map((x) => x.actual)).p50,
+      bias: summarize(miss).p50, mae: abs.reduce((a, b) => a + b, 0) / abs.length,
+      within: abs.filter((v) => v <= 0.03).length / abs.length, // inside 3 points of budget
+    };
+  }).sort((a, b) => (a.pos === "All" ? -1 : b.pos === "All" ? 1 : a.pos.localeCompare(b.pos)));
+}
+
+function calibration(points) {
+  // points: [[p_bid, 1|0]] -> predicted-vs-actual bid rate per probability bucket
+  return CALIB_EDGES.slice(0, -1).map((lo, i) => {
+    const hi = CALIB_EDGES[i + 1];
+    const inB = points.filter(([p]) => p >= lo && p < hi);
+    return {
+      lo, hi: Math.min(hi, 1), n: inB.length,
+      predicted: inB.length ? inB.reduce((a, [p]) => a + p, 0) / inB.length : null,
+      actual: inB.length ? inB.reduce((a, [, y]) => a + y, 0) / inB.length : null,
+    };
+  });
+}
+
+// Historical held-out backtest (model_backtest in faab_league.json).
+export function backtestStats(bt, pos = null) {
+  if (!bt || !bt.won || !bt.won.length) return null;
+  const won = bt.won.filter((r) => !pos || r[3] === pos).map((r) => ({ season: r[0], week: r[1], name: r[2], pos: r[3], actual: r[4], pred: r[5], p: r[6] }));
+  return { won, byPos: missStats(won), calib: calibration(bt.calib || []) };
+}
+
+// This season's live tracking (model_log in faab_league.json).
+export function liveModelStats(log, pos = null) {
+  const rows = (log || []).filter((r) => !pos || r.pos === pos);
+  const settled = rows.filter((r) => r.status !== "pending");
+  const won = rows.filter((r) => r.status === "won" && r.win_pct !== null && r.med !== null);
+  return {
+    rows, pending: rows.length - settled.length, settled: settled.length,
+    bids: rows.filter((r) => r.status === "won" || r.status === "lost"),
+    won, byPos: won.length ? missStats(won.map((r) => ({ pos: r.pos, pred: r.med, actual: r.win_pct }))) : [],
+    calib: calibration(settled.filter((r) => r.p !== null).map((r) => [r.p, r.status === "no_bid" ? 0 : 1])),
+  };
+}

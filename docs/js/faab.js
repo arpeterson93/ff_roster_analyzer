@@ -10,7 +10,7 @@ import { fmt, escapeHtml, getYourTeam } from "./state.js";
 import { teamLabel } from "./colors.js";
 import {
   leagueRows, applyFilter, isContestedWin, ratioStat, summarize, auctionStats, managerStats,
-  spendByWeek, pctByWeek, weekBucket, globalBaseline, THIN_N,
+  spendByWeek, pctByWeek, weekBucket, globalBaseline, THIN_N, backtestStats, liveModelStats,
 } from "./faabstats.js";
 
 const POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST"];
@@ -175,6 +175,55 @@ export function renderFaab(container, data, slug) {
       </tr>`;
     }).join("");
 
+
+    // ---------- model vs reality ----------
+    const live = liveModelStats(fl.model_log, st.pos);
+    const bt = backtestStats(fl.model_backtest, st.pos);
+    const sgn = (v) => (v === null || v === undefined ? "–" : `${v >= 0 ? "+" : "−"}${fmt(Math.abs(v) * 100, 1)}`);
+    const missTable = (list) => list.map((m) => `<tr><td><strong>${m.pos}</strong></td><td>${m.n}</td><td>${pct1(m.pred)}</td><td>${pct1(m.actual)}</td>
+        <td style="${ratioStyle(m.pred ? m.actual / m.pred : null)}" title="Median of (actual winning bid − model median), in points of budget. Positive = the model bid too low.">${sgn(m.bias)}</td>
+        <td>${fmt(m.mae * 100, 1)}</td><td>${pct0(m.within)}</td></tr>`).join("");
+    const missHead = `<thead><tr><th>Pos</th><th>Won bids</th><th>Model said</th><th>Actually won at</th><th>Typical miss (pts)</th><th title="Average distance between model and result, in points of budget">Avg error</th><th title="Share of bids where the model landed within 3 points of budget">Within 3 pts</th></tr></thead>`;
+    const calibTable = (cal) => `<table class="faabl-table"><thead><tr><th>Model's P(bid)</th><th>Players</th><th>Said (avg)</th><th>Actually bid on</th></tr></thead><tbody>${cal.filter((c) => c.n).map((c) => `<tr><td>${pct0(c.lo)} – ${pct0(c.hi)}</td><td>${c.n}</td><td>${pct0(c.predicted)}</td><td style="${ratioStyle(c.predicted ? c.actual / c.predicted : null)}">${pct0(c.actual)}</td></tr>`).join("")}</tbody></table>`;
+
+    const compsHtml = (comps) => comps && comps.length
+      ? `<details><summary class="muted small">${comps.length} comps</summary><ul class="faabl-comps">${comps.map((c) => `<li>${escapeHtml(c.n || "?")} <span class="muted">(${c.s} wk ${c.w})</span> paid ${pct1(c.p)}</li>`).join("")}</ul></details>` : "";
+    const liveRows = live.bids.slice().sort((a, b) => b.week - a.week || (b.win_pct ?? 0) - (a.win_pct ?? 0)).map((r) => {
+      const miss = r.status === "won" && r.win_pct !== null && r.med !== null ? r.win_pct - r.med : null;
+      return `<tr><td>Wk ${r.week}</td><td>${escapeHtml(r.name || "?")} <span class="muted small">${escapeHtml(r.pos || "")}</span></td>
+        <td>${pct1(r.med)}${dollars(r.med)}</td>
+        <td>${r.status === "won" ? `<span class="seed-up">${pct1(r.win_pct)}</span>${dollars(r.win_pct)}` : `<span class="seed-down" title="Only losing claims were logged for this player">outbid</span>`}</td>
+        <td style="${miss === null ? "" : ratioStyle(r.med ? r.win_pct / r.med : null)}">${sgn(miss)}</td>
+        <td>${r.n_bids ?? "–"}</td><td class="muted">${pct0(r.p)}</td><td>${compsHtml(r.comps)}</td></tr>`;
+    }).join("");
+
+    const liveSection = live.rows.length
+      ? `<h3>This season, tracked live <span class="muted small">(${live.rows.length} player-weeks priced · ${live.settled} settled · ${live.pending} awaiting waivers)</span></h3>
+         ${live.won.length ? `<div class="table-wrap"><table class="faabl-table">${missHead}<tbody>${missTable(live.byPos)}</tbody></table></div>` : `<p class="muted small">No winning bids settled yet - the first comparison appears once a tracked week's waivers have run.</p>`}
+         ${live.bids.length ? `<div class="table-wrap"><table class="faabl-table"><thead><tr><th>Week</th><th>Player</th><th>Model median</th><th>Result</th><th title="Winning bid minus model median, points of budget">Miss</th><th>Bids</th><th title="The model's chance that anyone bids">P(bid)</th><th>Neighbours</th></tr></thead><tbody>${liveRows}</tbody></table></div>` : ""}
+         ${live.settled ? `<h4>Did players it expected bids on get them? <span class="muted small">(this season)</span></h4><div class="table-wrap">${calibTable(live.calib)}</div>` : ""}`
+      : `<p class="muted">Live tracking hasn't started for this league yet. Each full data refresh before a week's waivers clear now records what the model says; once they run, this shows how it did, player by player.</p>`;
+
+    const scatMax = bt ? Math.max(0.1, ...bt.won.map((r) => Math.min(0.4, Math.max(r.pred, r.actual)))) : 0.1;
+    const dots = bt ? bt.won.map((r) => `<circle cx="${Math.min(100, (r.pred / scatMax) * 100)}" cy="${100 - Math.min(100, (r.actual / scatMax) * 100)}" r="1.3"><title>${escapeHtml(r.name)} ${r.season} wk ${r.week}: model ${pct1(r.pred)}, won ${pct1(r.actual)}</title></circle>`).join("") : "";
+    const btSection = bt
+      ? `<h3>Historical backtest <span class="muted small">(${bt.won.length} real winning bids, ${Math.min(...bt.won.map((r) => r.season))}–${Math.max(...bt.won.map((r) => r.season))}; the model never saw these when predicting them)</span></h3>
+         <div class="table-wrap"><table class="faabl-table">${missHead}<tbody>${missTable(bt.byPos)}</tbody></table></div>
+         <div class="faabl-model-grid">
+           <div><h4>Model vs actual</h4><svg class="faabl-scatter" viewBox="0 0 100 100" preserveAspectRatio="none"><line x1="0" y1="100" x2="100" y2="0" class="diag"/>${dots}</svg>
+             <p class="small muted">Each dot is one winning bid. On the line = the model nailed it; <strong>above</strong> = the league paid more than the model said. Axes to ${fmt(scatMax * 100, 0)}% of budget.</p></div>
+           <div><h4>Did it expect the bids that happened?</h4>${calibTable(bt.calib)}<p class="small muted">If the model says 40%, about 40% of those players should draw a bid.</p></div>
+         </div>`
+      : "";
+
+    const modelCard = (live.rows.length || bt) ? `
+      <div class="card">
+        <h2>Model vs reality</h2>
+        <p class="small muted">The FAAB Lab's nearest-neighbour model prices a player from similar past situations across the pooled leagues. This is how those prices compared with what this league actually paid. All numbers are % of budget; "miss" is actual minus model, so a positive miss means the model bid too low${st.pos ? ` (showing ${st.pos} only)` : ""}.</p>
+        ${liveSection}
+        ${btSection}
+      </div>` : "";
+
     // ---------- transaction log ----------
     const q = st.q.trim().toLowerCase();
     const logAll = applyFilter(rows, { seasons: st.seasons, pos: st.pos, team: st.team }).filter((r) => {
@@ -253,6 +302,8 @@ export function renderFaab(container, data, slug) {
         </tr></thead><tbody>${mgrRows}</tbody></table></div>
         <p class="small muted">Overpay = median gap between a manager's winning bid and the next best bid, on contested wins (a high number means leaving money on the table). Win % counts real bids only.</p>
       </div>
+
+      ${modelCard}
 
       <div class="card">
         <h2>Transactions <span class="muted small">(${logAll.length.toLocaleString()})</span></h2>

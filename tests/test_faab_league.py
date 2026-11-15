@@ -51,3 +51,69 @@ def test_no_history_at_all_is_an_empty_but_valid_file():
 def test_week_buckets_match_baseline_builder():
     from tools.faab_history.build_global_baselines import WEEK_BUCKETS as BASELINE_BUCKETS
     assert WEEK_BUCKETS == BASELINE_BUCKETS
+
+
+# ---------------- model tracking (snapshot -> freeze -> join) ----------------
+
+from engine.faab_league import join_model_log, processed_weeks_of, snapshot_entries, update_estimate_log  # noqa: E402
+
+
+def _est(med=0.08, p=0.5, comps=None, **extra):
+    base = {
+        "inputs": {"week": 6}, "conditional_price": {"comp_based_median": med, "comp_based_mean": med + 0.01, "regression": 0.05},
+        "bid_probability": {"comp_based_median": p, "regression": 0.4}, "single_backing_flag": False,
+        "comps": comps or [{"name": "Old Guy", "season": 2023, "week": 5, "pct_of_remaining_budget": 0.07, "weight_capped": 0.4}],
+    }
+    base.update(extra)
+    return base
+
+
+PLAYERS = [
+    {"id": "g1", "espn_id": 101, "name": "Alpha", "position": "RB"},
+    {"id": "g2", "espn_id": 102, "name": "Beta", "position": "WR"},
+    {"id": "g3", "espn_id": 103, "name": "Gamma", "position": "TE"},
+]
+
+
+def test_snapshot_skips_players_the_model_declines_to_price():
+    est = {"g1": _est(), "g2": {"below_relevance_threshold": True, "inputs": {"week": 6}}, "g3": {"unranked": True}}
+    snap = snapshot_entries(est, PLAYERS)
+    assert list(snap) == ["101"]
+    assert snap["101"]["med"] == 0.08 and snap["101"]["p"] == 0.5 and snap["101"]["comps"][0]["n"] == "Old Guy"
+
+
+def test_log_rewrites_week_until_waivers_process_then_freezes():
+    first = update_estimate_log(None, {"101": {"med": 0.1}}, 2026, 6, set(), "t1")
+    second = update_estimate_log(first, {"101": {"med": 0.2}}, 2026, 6, set(), "t2")  # still before the clear: newer snapshot wins
+    assert second["weeks"]["6"]["players"]["101"]["med"] == 0.2 and not second["weeks"]["6"]["frozen"]
+    after = update_estimate_log(second, {"101": {"med": 0.9}}, 2026, 6, {6}, "t3")  # waivers ran: contaminated, ignored
+    assert after["weeks"]["6"]["players"]["101"]["med"] == 0.2 and after["weeks"]["6"]["frozen"]
+    # a week first seen already processed is never logged; a new season starts clean
+    assert "7" not in update_estimate_log(after, {"102": {}}, 2026, 7, {6, 7}, "t4")["weeks"]
+    assert update_estimate_log(after, {"101": {}}, 2027, 1, set(), "t5")["weeks"].keys() == {"1"}
+
+
+def test_join_classifies_won_lost_no_bid_and_pending():
+    log = {"season": 2026, "weeks": {
+        "6": {"frozen": True, "players": {
+            "101": {"name": "Alpha", "pos": "RB", "med": 0.08, "mean": 0.09, "reg": 0.05, "p": 0.6, "single": False, "comps": [{"n": "x"}]},
+            "102": {"name": "Beta", "pos": "WR", "med": 0.03, "mean": 0.03, "reg": 0.02, "p": 0.2, "single": False, "comps": [{"n": "y"}]},
+            "103": {"name": "Gamma", "pos": "TE", "med": 0.02, "mean": 0.02, "reg": 0.02, "p": 0.1, "single": False, "comps": []},
+        }},
+        "7": {"frozen": False, "players": {"101": {"name": "Alpha", "pos": "RB", "med": 0.1, "mean": 0.1, "reg": 0.1, "p": 0.5, "single": False, "comps": []}}},
+    }}
+    raw = [
+        _row(6, 1, 101, "won", 8.0, season=2026), _row(6, 2, 101, "outbid", 6.0, season=2026),
+        _row(6, 3, 102, "outbid", 2.0, season=2026),  # only losing claims on Beta
+    ]
+    norm = normalize_rows(raw, {2026: 100.0})
+    got = {(r["week"], r["player_id"]): r for r in join_model_log(log, norm, {"2026": 100.0}, processed_weeks_of(raw, 2026))}
+    assert got[(6, 101)]["status"] == "won" and got[(6, 101)]["win_pct"] == 0.08 and got[(6, 101)]["n_bids"] == 2 and got[(6, 101)]["comps"] == [{"n": "x"}]
+    assert got[(6, 102)]["status"] == "lost" and got[(6, 102)]["win_pct"] is None
+    assert got[(6, 103)]["status"] == "no_bid" and got[(6, 103)]["comps"] is None
+    assert got[(7, 101)]["status"] == "pending"
+
+
+def test_build_carries_model_log_and_backtest():
+    out = build_faab_league(season=2026, frozen=None, live_rows=[], live_budget=None, baselines=None, estimate_log=None, backtest={"won": []})
+    assert out["model_log"] == [] and out["model_backtest"] == {"won": []}
