@@ -4,6 +4,7 @@ import { waiverLabel } from "./availability.js";
 import { openModal, closeModal } from "./modal.js";
 import { blocksForPosition, groupedHeaderHtml, statCellsHtml } from "./statcolumns.js";
 import { loadWatchlist, setWatched } from "./watchlist.js";
+import { leagueLens, THIN_N } from "./faabstats.js";
 
 // Bar-per-play chart (x = elapsed game time, y = points scored on THAT
 // play) plus a top-plays table, for weeks with a per-play breakdown (see
@@ -994,6 +995,35 @@ function teamInterestSection(teamInterest, data) {
 // Three deliberately-explainable numbers (see engine/faab_estimate.py) -
 // the comps table IS the explanation for comp_based, not just supporting
 // detail, so it's shown in full rather than collapsed away.
+// "In this league" strip for the FAAB Lab: how this league's winning bids for
+// this position compare with the pooled leagues the global estimate is built
+// from (faab_league.json via faabstats.js's leagueLens), the global estimate
+// scaled by that ratio, and the most recent comparable winning bids here.
+// Absent entirely when the league has no FAAB history yet.
+function leagueLensSection(player, data, est) {
+  const fl = data.faabLeague;
+  if (!fl || !fl.rows || !fl.rows.length) return "";
+  const week = (est.inputs || {}).week;
+  const lens = leagueLens(fl, player.position, week, fl.season);
+  if (!lens || lens.shrunk === null || lens.shrunk === undefined) return "";
+  const budget = lens.budget || fl.budgets[String(Math.max(...Object.keys(fl.budgets).map(Number)))] || null;
+  const dollars = (p) => (budget ? ` <span class="muted">(≈$${fmt(p * budget, 0)})</span>` : "");
+  const base = (est.conditional_price || {}).comp_based_median;
+  const hasBase = base !== undefined && base !== null && base > 0 && !est.single_backing_flag;
+  const adjusted = hasBase ? base * lens.shrunk : null;
+  const where = lens.basis === "bucket" ? `${player.position}, weeks ${lens.bucket}` : `${player.position}, all season`;
+  const direction = Math.abs(lens.shrunk - 1) < 0.1 ? "about the same as" : lens.shrunk > 1 ? "above" : "below";
+  const comps = lens.comparable.map((r) => `<li>${r.season} wk ${r.week}: ${escapeHtml(r.name || "?")} - $${fmt(r.bid, 2)} <span class="muted">(${fmt(r.pct * 100, 1)}% of budget${r.n_bids > 1 ? `, ${r.n_bids} bidders` : ""})</span></li>`).join("");
+  return `
+    <div class="faabl-lens">
+      <h3>In this league</h3>
+      <p class="small" style="margin:0">${escapeHtml(where)} winning bids here run <strong>${fmt(lens.shrunk, 2)}×</strong> the pooled median - ${direction} the other leagues behind the estimate above${lens.n < THIN_N ? ` <span class="muted">(thin: only ${lens.n} past wins)</span>` : ` <span class="muted">(${lens.n} past wins)</span>`}.</p>
+      ${adjusted !== null ? `<p class="small" style="margin:4px 0 0">Global median ${fmt(base * 100, 1)}%${dollars(base)} → <strong>league-adjusted ${fmt(adjusted * 100, 1)}%</strong>${dollars(adjusted)}.</p>` : ""}
+      ${comps ? `<details><summary class="small">Recent winning ${escapeHtml(player.position)} bids in this league</summary><ul>${comps}</ul></details>` : ""}
+    </div>
+  `;
+}
+
 function faabEstimateSection(player, data) {
   const est = (data.faabEstimates || {})[player.id];
   if (!est) return "";
@@ -1334,6 +1364,8 @@ function faabEstimateSection(player, data) {
     <p class="muted small">% of your league's starting budget</p>
     <div class="faab-method-grid">${methodCards}</div>
     <div data-price-dist-section>${distHtml}</div>
+
+    ${leagueLensSection(player, data, est)}
 
     ${thisPlayerSection}
 

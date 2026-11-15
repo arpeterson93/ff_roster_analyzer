@@ -362,6 +362,24 @@ class EspnClient:
             time.sleep(_REQUEST_PACING_SEC)
         return result
 
+    def get_faab_season_transactions(self, season: int, weeks: list[int], *, cents_scale: bool) -> list[dict]:
+        """Every waiver/free-agent transaction for `weeks` of `season`, raw
+        (pre-collapse/classify) - reuses tools.faab_history.pull_o_league_bids's
+        own per-week fetch so live rows are shaped exactly like the frozen
+        history's. One ESPN request per week; a week that fails is skipped."""
+        from tools.faab_history.pull_o_league_bids import fetch_week
+
+        rows: list[dict] = []
+        for week in weeks:
+            rows.extend(fetch_week(self._league, season, week, cents_scale=cents_scale))
+        return rows
+
+    def get_acquisition_budget(self) -> float | None:
+        """This season's real FAAB budget (acquisitionSettings.acquisitionBudget), None if unavailable."""
+        data = self._league.espn_request.league_get(params={"view": "mSettings"})
+        budget = (data.get("settings", {}).get("acquisitionSettings", {}) or {}).get("acquisitionBudget")
+        return float(budget) if budget else None
+
     def get_waiver_status_espn_ids(self) -> set[int]:
         """ESPN ids of players currently on waivers - see get_waiver_clear_times."""
         return set(self.get_waiver_clear_times())

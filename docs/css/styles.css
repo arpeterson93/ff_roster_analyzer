@@ -1689,3 +1689,34 @@ details[open] summary { margin-bottom: 8px; }
 .path-needs-title.sub { color: var(--ink-500); margin-top: 6px; }
 .path-needs ul { margin: 4px 0 0; padding-left: 18px; font-size: 13px; }
 .path-needs li { margin: 3px 0; }
+
+/* ---- FAAB tab (docs/js/faab.js) ---- */
+.faabl-table td, .faabl-table th { text-align: right; white-space: nowrap; }
+.faabl-table td:first-child, .faabl-table th:first-child { text-align: left; }
+.faabl-table th[data-sort] { cursor: pointer; }
+.faabl-total td { font-weight: 700; border-top: 2px solid var(--border); }
+.faabl-grid td { text-align: center; min-width: 78px; }
+.faabl-grid .grid-n { display: block; font-size: 10px; color: var(--ink-500); }
+.faabl-legend { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-bottom: 8px; font-size: 12px; }
+.faabl-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.faabl-swatch.league, .faabl-range.league .faabl-box { background: var(--accent); }
+.faabl-swatch.pooled, .faabl-range.pooled .faabl-box { background: var(--ink-500); opacity: 0.6; }
+.faabl-dist { display: flex; flex-direction: column; gap: 8px; padding-bottom: 22px; position: relative; }
+.faabl-dist-row { display: grid; grid-template-columns: 36px 1fr 44px; gap: 8px; align-items: center; }
+.faabl-dist-label { font-weight: 700; font-size: 13px; }
+.faabl-dist-bars { display: flex; flex-direction: column; gap: 3px; }
+.faabl-range { position: relative; height: 10px; }
+.faabl-whisker { position: absolute; top: 4px; height: 2px; background: var(--ink-500); opacity: 0.5; }
+.faabl-box { position: absolute; top: 0; height: 10px; border-radius: 2px; }
+.faabl-med { position: absolute; top: -1px; width: 2px; height: 12px; background: var(--ink-900); }
+.faabl-axis { position: relative; height: 14px; margin-left: 44px; margin-right: 52px; font-size: 10px; color: var(--ink-500); }
+.faabl-axis span { position: absolute; transform: translateX(-50%); }
+.faabl-weeks { display: flex; gap: 4px; align-items: flex-end; height: 110px; padding-bottom: 16px; }
+.faabl-week { flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; position: relative; min-width: 0; }
+.faabl-week-bar { width: 100%; background: var(--accent); border-radius: 2px 2px 0 0; min-height: 1px; }
+.faabl-week-bar.alt { background: var(--green-600); }
+.faabl-week span { position: absolute; bottom: -16px; font-size: 10px; color: var(--ink-500); }
+.faabl-lens { border: 1px solid var(--border); border-left: 4px solid var(--amber-500); border-radius: 8px; padding: 8px 12px; margin: 10px 0; }
+.faabl-lens h3 { margin: 0 0 4px; font-size: 13px; }
+.faabl-lens ul { margin: 4px 0 0; padding-left: 18px; font-size: 12px; }
+@media (max-width: 600px) { .faabl-grid td { min-width: 60px; } }

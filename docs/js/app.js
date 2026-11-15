@@ -10,6 +10,7 @@ import { renderSchedule } from "./schedule.js";
 import { renderSettings } from "./settings.js";
 import { renderTrends } from "./trends.js";
 import { renderHistory } from "./history.js";
+import { renderFaab } from "./faab.js";
 
 const VIEWS = {
   strength: renderStrength,
@@ -18,6 +19,7 @@ const VIEWS = {
   trade: renderTrade,
   matchups: renderMatchups,
   standings: renderStandings,
+  faab: renderFaab,
   schedule: renderSchedule,
   trends: renderTrends,
   history: renderHistory,

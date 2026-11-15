@@ -55,6 +55,7 @@ from engine.play_log import (
 from engine.points_against import dst_points_against_detail, points_against_detail, with_kick_attempts, with_remaining_schedule
 from engine.scoring import ScoringRules
 from engine import standings_stage
+from engine.faab_league import build_faab_league
 from engine.history import load_and_build as load_history
 from engine.xfp_play_log import expected_plays_for_player
 from engine.team_strength import (
@@ -321,6 +322,40 @@ def _faab_week_override(current_week: int, week_started: int | None) -> int:
     current_week itself, and everything derived from it (Rankings, Start/
     Sit's default week, projections), stays on ESPN's real value untouched."""
     return current_week + 1 if week_started == current_week else current_week
+
+
+_FAAB_HISTORY_DIR = Path(__file__).resolve().parent.parent / "tools" / "faab_history"
+
+
+def _compute_faab_league(cfg: dict, client: EspnClient, players_out: list[dict], season: int, current_week: int) -> dict:
+    """faab_league.json - this league's own FAAB transaction history (see
+    engine/faab_league.py). History = the frozen <slug>-tx-history.json (if the
+    league has one - only The O League does so far) plus the live season,
+    pulled here every full run so it fills in week by week. Per-league
+    `faab_history` config: cents_scale (does ESPN report this league's bidAmount
+    in cents - default no) and freeagent_flat_cost (house fee for an uncontested
+    add - default 0)."""
+    from tools.faab_history.pull_o_league_bids import classify, collapse_contingent_bids
+
+    slug = cfg["slug"]
+    hist_cfg = cfg.get("faab_history") or {}
+    frozen_path = _FAAB_HISTORY_DIR / f"{slug}-tx-history.json"
+    frozen = json.loads(frozen_path.read_text(encoding="utf-8")) if frozen_path.exists() else None
+    baselines_path = _FAAB_HISTORY_DIR / "global_price_baselines.json"
+    baselines = json.loads(baselines_path.read_text(encoding="utf-8")) if baselines_path.exists() else None
+
+    weeks = list(range(1, min(current_week, 17) + 1))
+    raw = client.get_faab_season_transactions(season, weeks, cents_scale=bool(hist_cfg.get("cents_scale", False)))
+    live_rows = classify(collapse_contingent_bids(raw), float(hist_cfg.get("freeagent_flat_cost", 0.0)))
+    position_by_espn_id = {p["espn_id"]: p["position"] for p in players_out if p.get("espn_id") is not None}
+    for r in live_rows:
+        r["position"] = position_by_espn_id.get(r["add_player_id"])
+    try:
+        budget = client.get_acquisition_budget()
+    except Exception as exc:
+        logger.warning("faab_league: acquisition budget unavailable: %s", exc)
+        budget = None
+    return build_faab_league(season=season, frozen=frozen, live_rows=live_rows, live_budget=budget, baselines=baselines)
 
 
 def _compute_faab_estimates(
@@ -1978,6 +2013,13 @@ def run_league(
             faab_estimates_out = {}
         _log_checkpoint("faab_estimates_done")
 
+    faab_league_out = None
+    if "faab" not in skip:
+        try:
+            faab_league_out = _compute_faab_league(cfg, client, players_out, season, current_week)
+        except Exception as exc:
+            logger.warning("faab_league: history build failed, skipping faab_league.json this run: %s", exc)
+
     result = {
         "meta.json": meta,
         "players.json": players_out,
@@ -2012,6 +2054,8 @@ def run_league(
         result["game_log_plays.json"] = game_log_plays_out
     if "faab" not in skip:
         result["faab_estimates.json"] = faab_estimates_out
+    if faab_league_out is not None:
+        result["faab_league.json"] = faab_league_out
     return result
 
 

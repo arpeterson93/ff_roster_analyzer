@@ -9,6 +9,9 @@ scoring_format: half       # standard | half | ppr  -> FantasyPros page family
 settings_sheet_id: 1RDRiu5rqS0Vh1Jge36tr5cTN_o9GmSUrJbK_APiRq1Q    # Google Sheet id for live-editable settings (see README "Settings sheet") - same sheet as o-league, rows scoped by league_slug
 faab_model:
   enabled: true            # estimates for currently-WAIVERS-status free agents (see engine/faab_estimate.py) - trained on the pooled multi-league table (tools/faab_history/combined-training-table.parquet), not this league's own history (AGS has none), confirmed 2026-09 that AGS itself uses real FAAB bidding
+faab_history:            # FAAB tab's league-specific history (engine/faab_league.py) - the live season is pulled every full run
+  cents_scale: false       # true only if ESPN reports this league's bidAmount in cents (raw 2225 = $22.25). The O League's legacy 2019-2025 history was; its 2026+ seasons are plain dollars
+  freeagent_flat_cost: 0.0 # house fee charged for an uncontested free-agent add (0 = none, ESPN's own default)
 valuation:
   curve_seasons: [2022, 2023, 2024, 2025]
   curve_min_games: 8
