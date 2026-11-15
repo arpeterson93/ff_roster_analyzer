@@ -1,6 +1,7 @@
 import { fmt, escapeHtml, getYourTeam } from "./state.js";
 import { colorForRatio, teamLabel } from "./colors.js";
 import { scoreOf } from "./schedule.js";
+import { renderPaths } from "./paths.js";
 
 // Sort indicator + clickable <th> - same tiny local convention matchups.js's
 // own sortTh/toggleSort/sortRows twin uses (kept as a self-contained copy
@@ -98,7 +99,31 @@ function valueFor(row, key) {
   return null;
 }
 
+// Table <-> Paths toggle, remembered per league across tab switches.
+const viewBySlug = new Map();
+
 export function renderStandings(container, data, slug) {
+  const view = viewBySlug.get(slug) || "table";
+  container.innerHTML = `<div class="seg-toggle" role="tablist">
+      <button data-view="table" class="${view === "table" ? "active" : ""}">Table</button>
+      <button data-view="paths" class="${view === "paths" ? "active" : ""}">Paths</button>
+    </div><div id="standings-body"></div>`;
+  container.querySelectorAll(".seg-toggle button").forEach((b) =>
+    b.addEventListener("click", () => {
+      viewBySlug.set(slug, b.dataset.view);
+      renderStandings(container, data, slug);
+    })
+  );
+  const body = container.querySelector("#standings-body");
+  if (view === "paths") renderPaths(body, data, slug);
+  else renderStandingsTable(body, data, slug, (teamId) => {
+    viewBySlug.set(slug, "paths");
+    renderStandings(container, data, slug);
+    renderPaths(container.querySelector("#standings-body"), data, slug, { teamId });
+  });
+}
+
+function renderStandingsTable(container, data, slug, openPaths) {
   const teamsById = data.teamsById;
   const yourTeamId = getYourTeam(slug);
   const allRows = data.standings.map((s) => ({ ...s, team: teamsById.get(s.team_id), ros: rosStatsFor(s.team_id, data) }));
@@ -136,7 +161,7 @@ export function renderStandings(container, data, slug) {
         const isYours = s.team_id === yourTeamId;
         return `<tr class="${isYours ? "your-team-row" : ""}">
           <td class="sticky-seed">${s.seed ?? "–"}</td>
-          <td class="sticky-team">${isYours ? "<strong>" : ""}${escapeHtml(s.team ? teamLabel(s.team) : s.team_id)}${isYours ? "</strong>" : ""}</td>
+          <td class="sticky-team${data.simPaths && data.simPaths.games ? " path-link" : ""}" data-team="${s.team_id}" title="Open this team's playoff paths">${isYours ? "<strong>" : ""}${escapeHtml(s.team ? teamLabel(s.team) : s.team_id)}${isYours ? "</strong>" : ""}</td>
           <td>${escapeHtml(s.division)}</td>
           <td>${s.wins}-${s.losses}${s.ties ? "-" + s.ties : ""}</td>
           <td>${fmt(s.points_for, 1)}</td>
@@ -188,6 +213,9 @@ export function renderStandings(container, data, slug) {
       </div>
     `;
 
+    container.querySelectorAll("td.path-link").forEach((td) => {
+      td.addEventListener("click", () => openPaths(Number(td.dataset.team)));
+    });
     container.querySelectorAll("th[data-sort-key]").forEach((th) => {
       th.addEventListener("click", () => {
         toggleSort(sortState, th.dataset.sortKey);

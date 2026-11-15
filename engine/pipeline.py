@@ -1853,10 +1853,11 @@ def run_league(
     )
     _log_checkpoint("live_win_pct_inputs_built")
 
+    sim_paths_out: dict = {}
     schedule_out, standings_out = standings_stage.standings_outputs(
         espn_teams, espn_matchups, settings, sim_cfg, current_week,
         team_week_mean, team_week_sd, team_live_mean_sd, live_points_by_team,
-        week_started=week_started,
+        week_started=week_started, paths_out=sim_paths_out,
     )
     division_count = len(set(settings.divisions.keys()) & {t.division_id for t in espn_teams})
 
@@ -1984,6 +1985,7 @@ def run_league(
         "lineups.json": lineups_out,
         "matchups.json": matchups_out,
         "standings.json": standings_out,
+        "sim_paths.json": sim_paths_out,
         "recent_results.json": recent_results,
         "points_against.json": points_against,
         "schedule.json": schedule_out,

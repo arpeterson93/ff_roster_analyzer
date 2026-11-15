@@ -178,10 +178,11 @@ def run_league(cfg: dict, data_root: Path, id_map: ids_mod.IdMap, remaining_frac
         fallback_sd_by_pos=position_week_sd,
     )
 
+    sim_paths_out: dict = {}
     schedule_out, standings_out = standings_stage.standings_outputs(
         espn_teams, espn_matchups, settings, cfg["sim"], current_week,
         team_week_mean, team_week_sd, team_live_mean_sd, live_points_by_team,
-        week_started=True,
+        week_started=True, paths_out=sim_paths_out,
     )
 
     live_teams_out = {}
@@ -207,6 +208,7 @@ def run_league(cfg: dict, data_root: Path, id_map: ids_mod.IdMap, remaining_frac
 
     _write_json(out_dir / "schedule.json", schedule_out)
     _write_json(out_dir / "standings.json", standings_out)
+    _write_json(out_dir / "sim_paths.json", sim_paths_out)
     _write_json(out_dir / "live.json", live_out)
 
 

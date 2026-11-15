@@ -1639,3 +1639,53 @@ details[open] summary { margin-bottom: 8px; }
 /* Standings "Thru Wk N" seed movement vs. today's seed. */
 .seed-up { color: var(--green-600); font-weight: 600; }
 .seed-down { color: var(--red-600); font-weight: 600; }
+
+/* ---- Standings > Paths view (docs/js/paths.js) ---- */
+.seg-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 12px; }
+.seg-toggle button { border: 0; background: var(--card); color: var(--ink-700); padding: 6px 16px; font-size: 13px; cursor: pointer; }
+.seg-toggle button.active { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.standings-table td.path-link { cursor: pointer; }
+.standings-table td.path-link:hover { text-decoration: underline; }
+.path-headline { display: flex; flex-wrap: wrap; gap: 20px; align-items: center; margin: 4px 0 8px; }
+.path-big { font-size: 28px; font-weight: 700; line-height: 1.1; }
+.path-dist { flex: 1; min-width: 200px; }
+.path-distbar { display: flex; border-radius: 4px; overflow: hidden; width: 100%; background: var(--border); }
+.path-seg { display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: #fff; min-width: 0; overflow: hidden; }
+.path-games { display: flex; flex-direction: column; gap: 6px; }
+.path-game { display: grid; grid-template-columns: 44px 1fr 22px 1fr 76px; gap: 6px; align-items: center; }
+.path-game.flat { opacity: 0.55; }
+.path-game.own .path-wk { color: var(--accent); font-weight: 700; }
+.path-wk { font-size: 12px; color: var(--ink-500); }
+.path-at { font-size: 11px; color: var(--ink-500); text-align: center; }
+.path-swing { font-size: 12px; text-align: right; font-weight: 600; white-space: nowrap; }
+.path-side { display: flex; justify-content: space-between; gap: 6px; align-items: center; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--ink-900); cursor: pointer; font-size: 13px; min-width: 0; text-align: left; }
+.path-side .path-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.path-side .path-pct { font-weight: 700; flex-shrink: 0; }
+.path-side .path-pct.up { color: var(--green-600); }
+.path-side .path-pct.down { color: var(--red-600); }
+.path-side.me .path-name { font-weight: 700; }
+.path-side.root { border-color: var(--green-600); }
+.path-side.picked { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.path-side.picked .path-pct { color: inherit; }
+.path-ladder td, .path-ladder th { text-align: center; }
+.path-ladder td:last-child { min-width: 140px; }
+.path-flat { display: flex; flex-direction: column; gap: 6px; }
+.path-flat > summary { cursor: pointer; margin: 4px 0; }
+@media (max-width: 600px) {
+  .path-game { grid-template-columns: 1fr 1fr; }
+  .path-at { display: none; }
+  .path-wk { order: 1; }
+  .path-swing { order: 2; }
+  .path-game > .path-side:nth-of-type(1) { order: 3; }
+  .path-game > .path-side:nth-of-type(2) { order: 4; }
+  .path-side { font-size: 12px; padding: 6px 8px; }
+}
+
+.path-side .path-pct small { display: block; font-size: 10px; font-weight: 600; opacity: 0.85; text-align: right; }
+.path-swing.tier-must { color: var(--red-600); font-weight: 800; }
+.path-game.tier-must .path-side.root { border-width: 2px; }
+.path-needs { border: 1px solid var(--red-600); border-radius: 8px; padding: 8px 12px; margin: 8px 0; }
+.path-needs-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--red-600); font-weight: 700; }
+.path-needs-title.sub { color: var(--ink-500); margin-top: 6px; }
+.path-needs ul { margin: 4px 0 0; padding-left: 18px; font-size: 13px; }
+.path-needs li { margin: 3px 0; }

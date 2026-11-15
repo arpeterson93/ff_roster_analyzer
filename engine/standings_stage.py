@@ -16,6 +16,7 @@ from engine.standings import (
     compute_current_seeds,
     matchup_win_probability,
     simulate_playoffs,
+    encode_paths,
 )
 from ingest.settings_sheet import parse_seeding_config
 
@@ -102,6 +103,7 @@ def standings_outputs(
     live_points_by_team: dict[int, dict[str, float]],
     *,
     week_started: bool,
+    paths_out: dict | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """(schedule_out, standings_out) - real records/seeds plus simulated
     playoff odds. `week_started` gates the current week's matchup rows'
@@ -109,7 +111,10 @@ def standings_outputs(
     actually kicked off - true whenever engine/live.py calls this at all
     (its own gate already confirmed a live/recently-finished game), computed
     by the full/refresh caller from ingest.nfl_data.week_for_kickoff so a
-    nightly run before kickoff doesn't show a spurious 0-0 "(live)" score."""
+    nightly run before kickoff doesn't show a spurious 0-0 "(live)" score.
+
+    paths_out: optional dict, filled with the sim_paths.json payload (see
+    engine.standings.encode_paths) when passed."""
     remaining = [
         RemainingMatchup(week=m.week, home_team_id=m.home_team_id, away_team_id=m.away_team_id)
         for m in espn_matchups if not m.played and m.week <= settings.reg_season_count
@@ -163,11 +168,15 @@ def standings_outputs(
         TeamState(team_id=t.team_id, division_id=t.division_id, wins=t.wins, losses=t.losses, ties=t.ties, points_for=t.points_for)
         for t in espn_teams
     ]
+    raw_paths: dict | None = {} if paths_out is not None else None
     sim_results = simulate_playoffs(
         team_states, remaining, sim_team_week_mean, sim_team_week_sd,
         iterations=sim_cfg["iterations"], seed=sim_cfg["seed"],
         playoff_team_count=settings.playoff_team_count, division_winners_first=sim_cfg["division_winners_first"],
+        paths=raw_paths,
     )
+    if paths_out is not None:
+        paths_out.update(encode_paths(raw_paths))
 
     # --- current seed (real, not simulated) ---
     # Uses configurable per-seed tiebreakers (see docs/js/settings.js and

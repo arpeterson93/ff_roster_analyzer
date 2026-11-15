@@ -1,6 +1,7 @@
 """Monte Carlo playoff-odds simulation."""
 from __future__ import annotations
 
+import base64
 import math
 from dataclasses import dataclass
 
@@ -194,8 +195,15 @@ def simulate_playoffs(
     playoff_team_count: int,
     division_winners_first: bool,
     bye_seeds: int | None = None,
+    paths: dict | None = None,
 ) -> dict[int, dict]:
-    """Ties count as 0.5 win (tie_rule=NONE); tiebreak is total points scored,
+    """paths: optional out-parameter. When a dict is passed it is filled with
+    the raw per-iteration outcomes the Playoff Paths view needs ("team_ids",
+    "base_wins", "games" as (week, home_id, away_id, home_won bool array) and
+    "seed_of", an iterations x teams int array, 0 = missed the playoffs) -
+    see encode_paths. Leaves the return value untouched.
+
+    Ties count as 0.5 win (tie_rule=NONE); tiebreak is total points scored,
     per the verified league settings (playoff_seed_tie_rule=TOTAL_POINTS_SCORED).
 
     bye_seeds: how many top seeds the Bye% column credits with a first-round
@@ -218,6 +226,7 @@ def simulate_playoffs(
     for m in remaining_matchups:
         matchups_by_week.setdefault(m.week, []).append(m)
 
+    game_outcomes: list[tuple[int, int, int, np.ndarray]] = []
     for week in sorted(matchups_by_week):
         for m in matchups_by_week[week]:
             h_mean = team_week_mean.get((m.home_team_id, week), 0.0)
@@ -235,6 +244,7 @@ def simulate_playoffs(
             home_wins = h_score > a_score
             away_wins = a_score > h_score
             tie = ~home_wins & ~away_wins
+            game_outcomes.append((week, m.home_team_id, m.away_team_id, home_wins))
             wins[:, hi] += home_wins * 1.0 + tie * 0.5
             wins[:, ai] += away_wins * 1.0 + tie * 0.5
 
@@ -269,6 +279,17 @@ def simulate_playoffs(
         for team_i in div_winners:
             division_winner[it, team_i] = True
 
+    if paths is not None:
+        paths.update(
+            team_ids=team_ids,
+            base_wins=[t.wins + 0.5 * t.ties for t in teams],
+            games=game_outcomes,
+            seed_of=seed_of,
+            iterations=iterations,
+            playoff_team_count=playoff_team_count,
+            bye_seeds=bye_seeds,
+        )
+
     result: dict[int, dict] = {}
     for tid in team_ids:
         i = idx[tid]
@@ -282,3 +303,31 @@ def simulate_playoffs(
             "iterations": iterations,
         }
     return result
+
+
+def _b64(arr: np.ndarray) -> str:
+    return base64.b64encode(arr.tobytes()).decode("ascii")
+
+
+def encode_paths(paths: dict) -> dict:
+    """JSON-able form of simulate_playoffs' `paths` out-parameter, for the
+    Standings page's Playoff Paths view (docs/js/paths.js decodes it).
+
+    Per game: the home-won outcome of every iteration as a bitstring (numpy
+    packbits, MSB first, base64); a tie counts as an away win, which is
+    immaterial for continuous scores. Per team: one byte per iteration, its
+    seed (0 = missed the playoffs). A team's final win total is NOT stored -
+    the client rebuilds it from base_wins plus the game bits."""
+    seed_of = paths["seed_of"]
+    return {
+        "iterations": paths["iterations"],
+        "playoff_team_count": paths["playoff_team_count"],
+        "bye_seeds": paths["bye_seeds"],
+        "team_ids": paths["team_ids"],
+        "base_wins": paths["base_wins"],
+        "games": [
+            {"week": week, "home": home, "away": away, "bits": _b64(np.packbits(home_won))}
+            for week, home, away, home_won in paths["games"]
+        ],
+        "seeds": {str(tid): _b64(seed_of[:, i].astype(np.uint8)) for i, tid in enumerate(paths["team_ids"])},
+    }

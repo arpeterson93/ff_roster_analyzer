@@ -210,3 +210,36 @@ def test_division_winners_seeded_first():
     assert result[2]["seed_probs"][1] == pytest.approx(1.0)  # stronger division winner -> seed 1
     assert result[1]["seed_probs"][2] == pytest.approx(1.0)  # weaker division winner -> seed 2
     assert result[3]["playoff_odds"] == pytest.approx(0.0)  # division runner-up, no spots left
+
+
+def test_simulate_playoffs_paths_roundtrip_and_leave_results_unchanged():
+    import base64
+    import numpy as np
+    from engine.standings import RemainingMatchup, encode_paths
+
+    teams = [TeamState(team_id=i, division_id=0, wins=float(i), losses=0, ties=0, points_for=100.0 * i) for i in (1, 2, 3, 4)]
+    remaining = [RemainingMatchup(week=5, home_team_id=1, away_team_id=2), RemainingMatchup(week=5, home_team_id=3, away_team_id=4)]
+    means = {(i, 5): 100.0 for i in (1, 2, 3, 4)}
+    sds = {(i, 5): 20.0 for i in (1, 2, 3, 4)}
+    kw = dict(iterations=1001, seed=7, playoff_team_count=2, division_winners_first=False)
+
+    plain = simulate_playoffs(teams, remaining, means, sds, **kw)
+    paths: dict = {}
+    with_paths = simulate_playoffs(teams, remaining, means, sds, paths=paths, **kw)
+    assert plain == with_paths
+
+    enc = encode_paths(paths)
+    assert enc["iterations"] == 1001 and enc["team_ids"] == [1, 2, 3, 4] and enc["base_wins"] == [1.0, 2.0, 3.0, 4.0]
+    assert [(g["week"], g["home"], g["away"]) for g in enc["games"]] == [(5, 1, 2), (5, 3, 4)]
+
+    def unpack(b64, n):
+        return np.unpackbits(np.frombuffer(base64.b64decode(b64), dtype=np.uint8))[:n]
+
+    home_won = [unpack(g["bits"], 1001) for g in enc["games"]]
+    seeds = {tid: np.frombuffer(base64.b64decode(enc["seeds"][str(tid)]), dtype=np.uint8) for tid in (1, 2, 3, 4)}
+    # Rebuilding each team's playoff odds from the stored bits/seeds matches the sim's own aggregate.
+    for tid in (1, 2, 3, 4):
+        assert float(np.mean(seeds[tid] > 0)) == pytest.approx(plain[tid]["playoff_odds"])
+    # Final wins rebuilt from the game bits match expected_wins.
+    w1 = 1.0 + home_won[0]
+    assert float(np.mean(w1)) == pytest.approx(plain[1]["expected_wins"])
