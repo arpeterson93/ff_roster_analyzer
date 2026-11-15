@@ -165,27 +165,18 @@ def standings_outputs(
         schedule_out.append(row)
 
     team_states = [
-        TeamState(team_id=t.team_id, division_id=t.division_id, wins=t.wins, losses=t.losses, ties=t.ties, points_for=t.points_for)
+        TeamState(team_id=t.team_id, division_id=t.division_id, wins=t.wins, losses=t.losses, ties=t.ties, points_for=t.points_for, points_against=t.points_against)
         for t in espn_teams
     ]
-    raw_paths: dict | None = {} if paths_out is not None else None
-    sim_results = simulate_playoffs(
-        team_states, remaining, sim_team_week_mean, sim_team_week_sd,
-        iterations=sim_cfg["iterations"], seed=sim_cfg["seed"],
-        playoff_team_count=settings.playoff_team_count, division_winners_first=sim_cfg["division_winners_first"],
-        paths=raw_paths,
-    )
-    if paths_out is not None:
-        paths_out.update(encode_paths(raw_paths))
-
-    # --- current seed (real, not simulated) ---
-    # Uses configurable per-seed tiebreakers (see docs/js/settings.js and
-    # README's "Settings sheet" section) rather than simulate_playoffs' fixed
-    # wins->PF sim tiebreak, which stays as-is (a reasonable approximation
-    # for a 10000-iteration Monte Carlo forecast, not the real current
-    # standings). Falls back to today's behavior - division_winners_first +
-    # wins->PF for every seed - until seeding is actually configured in the
-    # settings sheet, so unconfigured leagues don't silently change.
+    # --- seeding rules (shared by the simulation and the real current seed) ---
+    # Configurable per-seed tiebreakers (see docs/js/settings.js and README's
+    # "Settings sheet" section): which seeds are division winners, and each
+    # seed's own tiebreak chain (e.g. The O League's seed 6 = most points for
+    # among the teams outside seeds 1-5). The simulation seeds every simulated
+    # season with the SAME rules the real standings use. Falls back to
+    # division_winners_first + wins->PF for every seed until seeding is
+    # actually configured in the settings sheet, so unconfigured leagues don't
+    # silently change.
     division_count = len(set(settings.divisions.keys()) & {t.division_id for t in espn_teams})
     division_tiebreak_order, seed_configs = parse_seeding_config(sim_cfg.get("seeding_raw", {}))
     if not division_tiebreak_order:
@@ -195,6 +186,16 @@ def standings_outputs(
             n: SeedConfig(division_priority=sim_cfg["division_winners_first"] and n <= division_count, tiebreak_order=["wins", "points_for"])
             for n in range(1, settings.playoff_team_count + 1)
         }
+    raw_paths: dict | None = {} if paths_out is not None else None
+    sim_results = simulate_playoffs(
+        team_states, remaining, sim_team_week_mean, sim_team_week_sd,
+        iterations=sim_cfg["iterations"], seed=sim_cfg["seed"],
+        playoff_team_count=settings.playoff_team_count, division_winners_first=sim_cfg["division_winners_first"],
+        paths=raw_paths, seed_configs=seed_configs, division_tiebreak_order=division_tiebreak_order,
+    )
+    if paths_out is not None:
+        paths_out.update(encode_paths(raw_paths))
+
     seed_team_states = [
         SeedTeamState(
             team_id=t.team_id, division_id=t.division_id, wins=t.wins, losses=t.losses, ties=t.ties,

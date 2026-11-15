@@ -243,3 +243,60 @@ def test_simulate_playoffs_paths_roundtrip_and_leave_results_unchanged():
     # Final wins rebuilt from the game bits match expected_wins.
     w1 = 1.0 + home_won[0]
     assert float(np.mean(w1)) == pytest.approx(plain[1]["expected_wins"])
+
+
+def test_simulate_playoffs_honours_per_seed_tiebreaks_pf_decides_last_seed():
+    from engine.standings import SeedConfig
+
+    # Eight teams, one division, no games left: team 8 has the FEWEST wins but by far the most points.
+    wins = {1: 8, 2: 7, 3: 6, 4: 5, 5: 4, 6: 3, 7: 3, 8: 2}
+    pf = {1: 900, 2: 880, 3: 860, 4: 840, 5: 820, 6: 700, 7: 710, 8: 1500}
+    teams = [TeamState(team_id=i, division_id=0, wins=float(wins[i]), losses=0, ties=0, points_for=float(pf[i]), points_against=500.0 + i) for i in wins]
+    cfgs = {n: SeedConfig(division_priority=False, tiebreak_order=["wins", "points_for"]) for n in range(1, 6)}
+    cfgs[6] = SeedConfig(division_priority=False, tiebreak_order=["points_for", "points_against"])
+    kw = dict(iterations=5, seed=1, playoff_team_count=6, division_winners_first=False)
+
+    legacy = simulate_playoffs(teams, [], {}, {}, **kw)
+    seeded = simulate_playoffs(teams, [], {}, {}, seed_configs=cfgs, division_tiebreak_order=["wins", "points_for"], **kw)
+    # Old fixed rule: sixth-best record (3 wins, higher PF = team 7) takes seed 6.
+    assert legacy[7]["playoff_odds"] == 1.0 and legacy[8]["playoff_odds"] == 0.0
+    # Configured rule: seed 6 is the best PF of everyone outside seeds 1-5 -> team 8 despite 2 wins.
+    assert seeded[8]["seed_probs"][6] == 1.0 and seeded[7]["playoff_odds"] == 0.0
+    for t in (1, 2, 3, 4, 5):
+        assert seeded[t]["seed_probs"][t] == 1.0
+
+
+def test_simulate_playoffs_division_priority_seeds_then_wildcards():
+    from engine.standings import SeedConfig
+
+    # Two divisions; the worst-record team (4) wins division B outright, so it must take a top seed ahead of better-record wildcards.
+    teams = [
+        TeamState(team_id=1, division_id=0, wins=9.0, losses=0, ties=0, points_for=900.0),
+        TeamState(team_id=2, division_id=0, wins=8.0, losses=0, ties=0, points_for=890.0),
+        TeamState(team_id=3, division_id=1, wins=3.0, losses=0, ties=0, points_for=500.0),
+        TeamState(team_id=4, division_id=1, wins=2.0, losses=0, ties=0, points_for=400.0),
+    ]
+    cfgs = {1: SeedConfig(True, ["wins"]), 2: SeedConfig(True, ["wins"]), 3: SeedConfig(False, ["wins", "points_for"])}
+    res = simulate_playoffs(teams, [], {}, {}, iterations=3, seed=1, playoff_team_count=3, division_winners_first=True,
+                            seed_configs=cfgs, division_tiebreak_order=["wins", "points_for"])
+    assert res[1]["seed_probs"][1] == 1.0 and res[3]["seed_probs"][2] == 1.0 and res[2]["seed_probs"][3] == 1.0
+    assert res[4]["playoff_odds"] == 0.0 and res[3]["division_win_odds"] == 1.0
+
+
+def test_encode_paths_carries_final_pf_and_last_seed_rule():
+    import base64
+    import numpy as np
+    from engine.standings import RemainingMatchup, SeedConfig, encode_paths
+
+    teams = [TeamState(team_id=i, division_id=0, wins=0.0, losses=0, ties=0, points_for=100.0 * i, points_against=10.0 * i) for i in (1, 2, 3)]
+    remaining = [RemainingMatchup(week=5, home_team_id=1, away_team_id=2)]
+    cfgs = {1: SeedConfig(False, ["wins"]), 2: SeedConfig(False, ["points_for", "points_against"])}
+    paths: dict = {}
+    simulate_playoffs(teams, remaining, {(1, 5): 100.0, (2, 5): 90.0}, {(1, 5): 10.0, (2, 5): 10.0}, iterations=50, seed=3,
+                      playoff_team_count=2, division_winners_first=False, seed_configs=cfgs, division_tiebreak_order=["wins"], paths=paths)
+    enc = encode_paths(paths)
+    assert enc["last_seed_tiebreak"] == ["points_for", "points_against"] and enc["base_pf"] == [100.0, 200.0, 300.0]
+    pf = np.frombuffer(base64.b64decode(enc["pf"]["3"]), dtype="<u2") / 10.0
+    assert np.all(pf == 300.0)  # team 3 has no game left: its final PF is its current PF
+    pf1 = np.frombuffer(base64.b64decode(enc["pf"]["1"]), dtype="<u2") / 10.0
+    assert np.all(pf1 > 100.0) and np.allclose(pf1, paths["pf"][:, 0], atol=0.051)

@@ -40,7 +40,21 @@ export function decodePaths(raw) {
       else a[i] += 2;
     }
   });
-  return { n, games, seeds, wins2, teamIds: raw.team_ids, playoffCount: raw.playoff_team_count, byeSeeds: raw.bye_seeds };
+  // Final points scored per sim (tenths, little-endian uint16) - only present in newer builds.
+  let pf = null, basePf = null;
+  if (raw.pf) {
+    pf = new Map();
+    raw.team_ids.forEach((tid) => {
+      const b = b64ToBytes(raw.pf[String(tid)]);
+      const arr = new Float32Array(n);
+      for (let i = 0; i < n; i++) arr[i] = (b[2 * i] | (b[2 * i + 1] << 8)) / 10;
+      pf.set(tid, arr);
+    });
+    basePf = new Map(raw.team_ids.map((tid, k) => [tid, raw.base_pf[k]]));
+  }
+  // The last seed is decided by points scored (not record) when its first tiebreak is points_for.
+  const pfDecidesLast = !!(pf && raw.last_seed_tiebreak && raw.last_seed_tiebreak[0] === "points_for");
+  return { n, games, seeds, wins2, pf, basePf, pfDecidesLast, teamIds: raw.team_ids, playoffCount: raw.playoff_team_count, byeSeeds: raw.bye_seeds };
 }
 
 // picks: Map gameIndex -> "home" | "away". Returns {mask, count} of the sims
@@ -185,6 +199,59 @@ export function winsLadder(sim, teamId, mask) {
     });
 }
 
+// The points-for race for the LAST seed. Where that seed goes to the most
+// points scored among everyone outside the other seeds, the bar a team must
+// clear is different in every sim (it depends on who ends up in seeds 1..N-1).
+// For each sim where `teamId` finishes outside seeds 1..N-1, the bar is the
+// highest final PF among the OTHER teams outside seeds 1..N-1: the team makes
+// the last seed exactly when it beats that bar. Returns null if the sims carry no PF.
+export function pfRace(sim, teamId, mask) {
+  if (!sim.pf) return null;
+  const last = sim.playoffCount;
+  const mySeeds = sim.seeds.get(teamId), myPf = sim.pf.get(teamId);
+  const others = sim.teamIds.filter((t) => t !== teamId);
+  let count = 0, top = 0, viaLast = 0, outside = 0;
+  const bars = [], mine = [], gaps = [];
+  const rivals = new Map();
+  for (let i = 0; i < sim.n; i++) {
+    if (!mask[i]) continue;
+    count++;
+    const s = mySeeds[i];
+    if (s >= 1 && s < last) { top++; continue; }
+    outside++;
+    if (s === last) viaLast++;
+    let barPf = -Infinity, barTeam = null;
+    for (const t of others) {
+      const ts = sim.seeds.get(t)[i];
+      if (ts >= 1 && ts < last) continue; // in the top seeds: not part of this race
+      const v = sim.pf.get(t)[i];
+      if (v > barPf) { barPf = v; barTeam = t; }
+    }
+    if (barTeam === null) continue;
+    bars.push(barPf); mine.push(myPf[i]); gaps.push(barPf - myPf[i]);
+    const r = rivals.get(barTeam) || { team_id: barTeam, n: 0, finalPf: [], gap: [] };
+    r.n++; r.finalPf.push(barPf); r.gap.push(barPf - myPf[i]);
+    rivals.set(barTeam, r);
+  }
+  const base = sim.basePf.get(teamId);
+  const myGames = sim.games.filter((g) => g.home === teamId || g.away === teamId).length;
+  return {
+    count, outside, top: count ? top / count : null, viaLast: count ? viaLast / count : null,
+    madeWhenOutside: outside ? viaLast / outside : null,
+    bar: summarize(bars), mine: summarize(mine), basePf: base, myGames,
+    rivals: [...rivals.values()]
+      .map((r) => ({ team_id: r.team_id, share: r.n / (bars.length || 1), basePf: sim.basePf.get(r.team_id), finalPf: summarize(r.finalPf), gap: summarize(r.gap) }))
+      .sort((a, b) => b.share - a.share),
+  };
+}
+
+function summarize(values) {
+  const s = Array.from(values).sort((a, b) => a - b);
+  if (!s.length) return { n: 0, p25: null, p50: null, p75: null };
+  const q = (f) => { const pos = (s.length - 1) * f, lo = Math.floor(pos), hi = Math.ceil(pos); return s[lo] + (s[hi] - s[lo]) * (pos - lo); };
+  return { n: s.length, p25: q(0.25), p50: q(0.5), p75: q(0.75) };
+}
+
 // ---------- rendering ----------
 
 const pct = (x) => (x === null || x === undefined ? "–" : `${fmt(x * 100, 0)}%`);
@@ -248,6 +315,7 @@ export function renderPaths(container, data, slug, { teamId } = {}) {
       }
     }
 
+    const pfr = sim.pfDecidesLast && count ? pfRace(sim, tid, mask) : null;
     const lev = leverageRows(sim, tid, st.picks, st.metric);
     const rows = lev.rows;
     const musts = mustHaves(rows);
@@ -270,6 +338,37 @@ export function renderPaths(container, data, slug, { teamId } = {}) {
     const sorted = rows.slice().sort((a, b) =>
       st.sortBy === "week" ? a.g.week - b.g.week || b.swing - a.swing : b.swing - a.swing || a.g.week - b.g.week
     );
+
+
+    // Points-for race card: shown when the last seed is decided by points scored and this team actually lives in that race.
+    let pfCard = "";
+    if (pfr && pfr.outside >= 50 && (pfr.viaLast >= 0.03 || (odds.playoff ?? 0) < 0.97)) {
+      const lastSeed = sim.playoffCount;
+      const viaTopShare = odds.playoff ? pfr.top / odds.playoff : 0;
+      const viaPfShare = odds.playoff ? pfr.viaLast / odds.playoff : 0;
+      const gamesLeft = pfr.myGames;
+      const need = pfr.bar.p50 - pfr.basePf;
+      const projMine = pfr.mine.p50 - pfr.basePf;
+      const perGame = gamesLeft ? need / gamesLeft : null;
+      const projPerGame = gamesLeft ? projMine / gamesLeft : null;
+      const rivalRows = pfr.rivals.slice(0, 6).map((r) => `
+        <tr><td>${escapeHtml(teamName(r.team_id))}</td><td>${pct(r.share)}</td>
+          <td>${fmt(r.basePf, 1)} <span class="muted small">(${r.basePf - pfr.basePf >= 0 ? "+" : "−"}${fmt(Math.abs(r.basePf - pfr.basePf), 1)} vs you)</span></td>
+          <td>${fmt(r.finalPf.p50, 0)}</td>
+          <td title="Median final-PF gap on you in the sims where this team is the bar; negative = you finished ahead of them but still missed because someone else got in">${r.gap.p50 >= 0 ? "+" : "−"}${fmt(Math.abs(r.gap.p50), 0)}</td></tr>`).join("");
+      pfCard = `
+      <div class="card">
+        <h2>The points-for race <span class="muted small">(seed ${lastSeed} goes to the most points scored outside seeds 1-${lastSeed - 1}, not to the best record)</span></h2>
+        <p>You finish outside the top ${lastSeed - 1} in <strong>${pct(pfr.outside / pfr.count)}</strong> of sims, and take seed ${lastSeed} in <strong>${pct(pfr.madeWhenOutside)}</strong> of those.
+          Of your playoff odds, about <strong>${pct(viaTopShare)}</strong> come from finishing in the top ${lastSeed - 1} and <strong>${pct(viaPfShare)}</strong> from winning the points race.</p>
+        ${viaPfShare >= 0.4 ? `<p class="small"><strong>This is mostly a points race for ${escapeHtml(teamName(tid))}.</strong> Wins still matter, but mainly because they come with the points that clear the bar, and because they shape who else lands in the top ${lastSeed - 1}.</p>` : ""}
+        <p>The bar moves from sim to sim with who occupies seeds 1-${lastSeed - 1}: median <strong>${fmt(pfr.bar.p50, 0)}</strong> points (middle half ${fmt(pfr.bar.p25, 0)}-${fmt(pfr.bar.p75, 0)}).
+          You have <strong>${fmt(pfr.basePf, 1)}</strong>, so you need roughly <strong>${fmt(Math.max(0, need), 0)}</strong> more over your last ${gamesLeft} game${gamesLeft === 1 ? "" : "s"}${perGame !== null ? ` (<strong>${fmt(Math.max(0, perGame), 1)}</strong>/game; the sim has you scoring ${fmt(projPerGame, 1)}/game)` : ""}.</p>
+        <h3>Who you have to pass</h3>
+        <div class="table-wrap"><table class="path-ladder"><thead><tr><th>Team</th><th title="Share of the sims where you're outside the top ${lastSeed - 1} that this team is the highest-scoring team you must beat">Is the bar</th><th>PF now</th><th>Median final PF</th><th title="Median points they finish ahead of you, when they're the bar">Gap on you</th></tr></thead><tbody>${rivalRows}</tbody></table></div>
+        <p class="small muted">Computed from the same sims, so it follows your what-if picks above. Tiebreaks beyond points scored (points against) are included in the sim; head-to-head is not.</p>
+      </div>`;
+    }
 
     const sideBtn = (r, side) => {
       const id = side === "home" ? r.g.home : r.g.away;
@@ -341,6 +440,8 @@ export function renderPaths(container, data, slug, { teamId } = {}) {
           : `All ${sim.n.toLocaleString()} sims. Tap a team below to assume it wins that game.`}
           ${lowSample ? `<span class="seed-down"> Few sims match - treat these odds as rough.</span>` : ""}</p>
       </div>
+
+      ${pfCard}
 
       <div class="card">
         <h2>Who to root for <span class="muted small">(${metricLabel.toLowerCase()} odds for ${escapeHtml(teamName(tid))} if each side wins, and the change from now · ★ = root for · MUST = missing it leaves ${pct(Math.max(MUST_ABS, MUST_REL * (baseline ?? 0)))} or less)</span></h2>

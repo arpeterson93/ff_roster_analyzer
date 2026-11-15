@@ -31,6 +31,7 @@ class TeamState:
     losses: float
     ties: float
     points_for: float
+    points_against: float = 0.0  # only the per-seed tiebreak chain reads it (see simulate_playoffs' seed_configs)
 
 
 @dataclass
@@ -196,6 +197,8 @@ def simulate_playoffs(
     division_winners_first: bool,
     bye_seeds: int | None = None,
     paths: dict | None = None,
+    seed_configs: dict[int, "SeedConfig"] | None = None,
+    division_tiebreak_order: list[str] | None = None,
 ) -> dict[int, dict]:
     """paths: optional out-parameter. When a dict is passed it is filled with
     the raw per-iteration outcomes the Playoff Paths view needs ("team_ids",
@@ -203,8 +206,18 @@ def simulate_playoffs(
     "seed_of", an iterations x teams int array, 0 = missed the playoffs) -
     see encode_paths. Leaves the return value untouched.
 
-    Ties count as 0.5 win (tie_rule=NONE); tiebreak is total points scored,
-    per the verified league settings (playoff_seed_tie_rule=TOTAL_POINTS_SCORED).
+    seed_configs / division_tiebreak_order: the league's per-seed seeding rules
+    (the same SeedConfig compute_current_seeds uses for the real standings).
+    When given, every simulated season is seeded by them - seed by seed, each
+    either the next-best division winner or the best remaining team by that
+    seed's own tiebreak chain (e.g. The O League's seed 6 = most points for
+    among teams outside seeds 1-5, regardless of record). head_to_head cannot
+    be evaluated per simulated season and is skipped if configured. Left None,
+    the older fixed rule applies: division winners first (when
+    division_winners_first), then everyone by wins and points scored.
+
+    Ties count as 0.5 win (tie_rule=NONE); the default tiebreak is total points
+    scored, per the verified league settings (playoff_seed_tie_rule=TOTAL_POINTS_SCORED).
 
     bye_seeds: how many top seeds the Bye% column credits with a first-round
     bye - defaults to bracket_bye_count(playoff_team_count) (the standard
@@ -221,6 +234,7 @@ def simulate_playoffs(
 
     wins = np.tile(np.array([t.wins + 0.5 * t.ties for t in teams], dtype=float), (iterations, 1))
     pf = np.tile(np.array([t.points_for for t in teams], dtype=float), (iterations, 1))
+    pa = np.tile(np.array([t.points_against for t in teams], dtype=float), (iterations, 1))
 
     matchups_by_week: dict[int, list[RemainingMatchup]] = {}
     for m in remaining_matchups:
@@ -240,6 +254,8 @@ def simulate_playoffs(
             hi, ai = idx[m.home_team_id], idx[m.away_team_id]
             pf[:, hi] += h_score
             pf[:, ai] += a_score
+            pa[:, hi] += a_score
+            pa[:, ai] += h_score
 
             home_wins = h_score > a_score
             away_wins = a_score > h_score
@@ -254,28 +270,67 @@ def simulate_playoffs(
     seed_of = np.zeros((iterations, n), dtype=int)
     division_winner = np.zeros((iterations, n), dtype=bool)
 
+    div_order = [c for c in (division_tiebreak_order or ["wins", "points_for"]) if c != "head_to_head"] or ["wins", "points_for"]
+    division_ids = sorted(set(division_of))
+    members_of = {d: [i for i in range(n) if division_of[i] == d] for d in division_ids}
+
+    def seed_one_season(w, p, a) -> tuple[list[int], list[int]]:
+        """(seeds in order, division winners) for one simulated season."""
+        def key_for(order):
+            def key(i):
+                parts = []
+                for c in order:
+                    if c == "wins":
+                        parts.append(-w[i])
+                    elif c == "points_for":
+                        parts.append(-p[i])
+                    elif c == "points_against":
+                        parts.append(-a[i])  # higher PA preferred, same convention as compute_current_seeds
+                parts.append(i)
+                return tuple(parts)
+            return key
+
+        if seed_configs is None:
+            remaining = list(range(n))
+            seeds: list[int] = []
+            div_winners: list[int] = []
+            if division_winners_first:
+                for d in division_ids:
+                    if members_of[d]:
+                        div_winners.append(min(members_of[d], key=lambda i: (-w[i], -p[i])))
+                div_winners.sort(key=lambda i: (-w[i], -p[i]))
+                seeds.extend(div_winners)
+                remaining = [i for i in remaining if i not in div_winners]
+            remaining.sort(key=lambda i: (-w[i], -p[i]))
+            seeds.extend(remaining)
+            return seeds[:playoff_team_count], div_winners
+
+        div_key = key_for(div_order)
+        div_winners = [min(members_of[d], key=div_key) for d in division_ids if members_of[d]]
+        dw_queue = sorted(div_winners, key=div_key)
+        assigned: set[int] = set()
+        seeds = []
+        for seed_n in range(1, playoff_team_count + 1):
+            cfg = seed_configs.get(seed_n)
+            while dw_queue and dw_queue[0] in assigned:
+                dw_queue.pop(0)
+            if cfg and cfg.division_priority and dw_queue:
+                chosen = dw_queue.pop(0)
+            else:
+                pool = [i for i in range(n) if i not in assigned]
+                if not pool:
+                    break
+                order = [c for c in (cfg.tiebreak_order if cfg and cfg.tiebreak_order else div_order) if c != "head_to_head"] or div_order
+                chosen = min(pool, key=key_for(order))
+            seeds.append(chosen)
+            assigned.add(chosen)
+        return seeds, div_winners
+
     for it in range(iterations):
-        w, p = wins[it], pf[it]
-        remaining = list(range(n))
-        seeds: list[int] = []
-        div_winners: list[int] = []
-
-        if division_winners_first:
-            for d in sorted(set(division_of)):
-                members = [i for i in remaining if division_of[i] == d]
-                if members:
-                    div_winners.append(min(members, key=lambda i: (-w[i], -p[i])))
-            div_winners.sort(key=lambda i: (-w[i], -p[i]))
-            seeds.extend(div_winners)
-            remaining = [i for i in remaining if i not in div_winners]
-
-        remaining.sort(key=lambda i: (-w[i], -p[i]))
-        seeds.extend(remaining)
-        seeds = seeds[:playoff_team_count]
-
-        for s, team_i in enumerate(seeds, start=1):
+        seeds, div_winners = seed_one_season(wins[it], pf[it], pa[it])
+        for s_, team_i in enumerate(seeds, start=1):
             made_playoffs[it, team_i] = True
-            seed_of[it, team_i] = s
+            seed_of[it, team_i] = s_
         for team_i in div_winners:
             division_winner[it, team_i] = True
 
@@ -285,6 +340,9 @@ def simulate_playoffs(
             base_wins=[t.wins + 0.5 * t.ties for t in teams],
             games=game_outcomes,
             seed_of=seed_of,
+            pf=pf,
+            base_pf=[t.points_for for t in teams],
+            last_seed_tiebreak=(seed_configs.get(playoff_team_count).tiebreak_order if seed_configs and seed_configs.get(playoff_team_count) else None),
             iterations=iterations,
             playoff_team_count=playoff_team_count,
             bye_seeds=bye_seeds,
@@ -330,4 +388,8 @@ def encode_paths(paths: dict) -> dict:
             for week, home, away, home_won in paths["games"]
         ],
         "seeds": {str(tid): _b64(seed_of[:, i].astype(np.uint8)) for i, tid in enumerate(paths["team_ids"])},
+        # Final points scored per team per sim, in tenths as little-endian uint16 (a season's PF is far below 6553.5).
+        "pf": {str(tid): _b64(np.round(paths["pf"][:, i] * 10).astype("<u2")) for i, tid in enumerate(paths["team_ids"])},
+        "base_pf": paths["base_pf"],
+        "last_seed_tiebreak": paths.get("last_seed_tiebreak"),
     }
