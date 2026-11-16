@@ -30,7 +30,7 @@ strength:
   max_pickups: 10
   max_trade_targets: 10
 sim:
-  iterations: 10000
+  iterations: 50000
   seed: 2026
   division_winners_first: true
 history:                         # see engine/history.py; raw data lives in data/history/o-league/
