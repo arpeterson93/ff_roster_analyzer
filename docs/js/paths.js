@@ -73,6 +73,15 @@ export function conditionMask(sim, picks, exceptGame = -1) {
   return { mask, count };
 }
 
+// Plain win probability for a game's home side: share of ALL sims it won
+// (ignores picks, so it stays the pre-scenario number).
+export function homeWinProb(sim, gi) {
+  const hw = sim.games[gi].homeWon;
+  let c = 0;
+  for (let i = 0; i < sim.n; i++) c += hw[i];
+  return sim.n ? c / sim.n : null;
+}
+
 // Seed distribution (index 0 = out) plus playoff/bye odds for one team over a mask.
 export function teamOdds(sim, teamId, mask) {
   const seeds = sim.seeds.get(teamId);
@@ -377,9 +386,10 @@ export function renderPaths(container, data, slug, { teamId } = {}) {
       const best = r.best === side;
       const isMe = id === tid;
       const delta = v === null || baseline === null ? "" : v - baseline > 0.005 ? "up" : v - baseline < -0.005 ? "down" : "";
-      const wp = r.sp.homeWinPct === null ? null : side === "home" ? r.sp.homeWinPct : 1 - r.sp.homeWinPct;
+      const hwp = homeWinProb(sim, r.gi);
+      const wp = hwp === null ? null : side === "home" ? hwp : 1 - hwp;
       return `<button class="path-side ${r.picked === side ? "picked" : ""} ${best ? "root" : ""} ${isMe ? "me" : ""}" data-game="${r.gi}" data-side="${side}" title="${escapeHtml(teamName(id))} wins (sims: ${wp === null ? "–" : fmt(wp * 100, 0) + "% chance"}) - your ${metricLabel.toLowerCase()} odds: ${pct(v)}">
-        <span class="path-name">${best ? "★ " : ""}${escapeHtml(teamName(id))}</span>
+        <span class="path-name">${best ? "★ " : ""}${escapeHtml(teamName(id))}<span class="path-wp" title="Chance to win this matchup (from the sims)">${wp === null ? "" : fmt(wp * 100, 0) + "% to win"}</span></span>
         <span class="path-pct ${delta}">${pct(v)}${v === null || baseline === null || Math.abs(v - baseline) < 0.005 ? "" : `<small>${v > baseline ? "+" : "−"}${fmt(Math.abs(v - baseline) * 100, 0)}</small>`}</span>
       </button>`;
     };

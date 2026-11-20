@@ -1728,3 +1728,6 @@ details[open] summary { margin-bottom: 8px; }
 .faabl-scatter .diag { stroke: var(--ink-500); stroke-width: 0.5; stroke-dasharray: 2 2; vector-effect: non-scaling-stroke; }
 .faabl-comps { margin: 2px 0 0; padding-left: 16px; text-align: left; font-size: 11px; white-space: normal; }
 @media (max-width: 700px) { .faabl-model-grid { grid-template-columns: 1fr; } }
+
+.path-side .path-name { display: flex; flex-direction: column; min-width: 0; }
+.path-side .path-wp { font-size: 10px; font-weight: 500; color: var(--ink-500); }
