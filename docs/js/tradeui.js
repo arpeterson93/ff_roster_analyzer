@@ -364,6 +364,25 @@ function lineupForWeekHtml(teamName, afterRoster, players, freeAgentsByPos, week
   return `<div class="trade-side"><h3 class="small">${escapeHtml(teamName)} - Wk ${week} (post-trade)</h3><table><tbody>${starterRows}${benchRows}</tbody></table></div>`;
 }
 
+// Playoff odds for one side of the trade: the post-trade odds big, and the
+// change vs. no trade (plus the old number) beneath in small green/red text.
+// `o` is {before: {playoff}, after: {playoff}} from window.FFOdds.evaluateTrade,
+// or null when odds can't be computed (offseason / no remaining games).
+function playoffOddsHtml(o) {
+  if (!o) return "";
+  const before = o.before.playoff * 100;
+  const after = o.after.playoff * 100;
+  const delta = after - before;
+  const pct = (v) => `${v >= 10 || v === 0 ? v.toFixed(0) : v.toFixed(1)}%`;
+  const flat = Math.abs(delta) < 0.05;
+  const cls = flat ? "muted" : delta > 0 ? "delta-up" : "delta-down";
+  const deltaText = flat ? "no change" : `${delta > 0 ? "+" : "−"}${Math.abs(delta).toFixed(1)} pts`;
+  return `<div class="trade-odds" title="Chance of making the playoffs, simulated with this team's weekly projections shifted by the trade (same random draws before and after, so the change is meaningful)">
+    <div>Playoff odds: <strong>${pct(after)}</strong></div>
+    <div class="small ${cls}">${deltaText} <span class="muted">(from ${pct(before)})</span></div>
+  </div>`;
+}
+
 function renderResult(container, result, teamAName, teamBName, ctx) {
   const verdict = result.favors === "even" ? "Roughly even" : result.favors === "a" ? `Favors ${teamAName}` : `Favors ${teamBName}`;
   container.innerHTML = `
@@ -373,11 +392,13 @@ function renderResult(container, result, teamAName, teamBName, ctx) {
         <h3>${escapeHtml(teamAName)}</h3>
         <div>Lineup total: ${fmt(result.sideA.before, 1)} → ${fmt(result.sideA.after, 1)} (<strong>${result.sideA.gain >= 0 ? "+" : ""}${fmt(result.sideA.gain, 1)}</strong>)</div>
         <div class="muted small">Gives ${fmt(result.sideA.rawGiven, 1)} ROS pts, gets ${fmt(result.sideA.rawReceived, 1)} ROS pts</div>
+        ${playoffOddsHtml(ctx.odds && ctx.odds.a)}
       </div>
       <div class="trade-side card">
         <h3>${escapeHtml(teamBName)}</h3>
         <div>Lineup total: ${fmt(result.sideB.before, 1)} → ${fmt(result.sideB.after, 1)} (<strong>${result.sideB.gain >= 0 ? "+" : ""}${fmt(result.sideB.gain, 1)}</strong>)</div>
         <div class="muted small">Gives ${fmt(result.sideB.rawGiven, 1)} ROS pts, gets ${fmt(result.sideB.rawReceived, 1)} ROS pts</div>
+        ${playoffOddsHtml(ctx.odds && ctx.odds.b)}
       </div>
     </div>
     <details open>
@@ -419,6 +440,30 @@ export function renderTrade(container, data) {
   // setPendingTrade) right before switching to this tab - one-shot, so a
   // later manual visit to this tab doesn't keep re-seeding the same pick.
   const pending = consumePendingTrade();
+  // Playoff-odds sim inputs (docs/js/playoffodds.js) - built once, the no-trade
+  // baseline run is cached since every trade compares against the same one.
+  // null when there's nothing left to simulate (offseason, regular season over).
+  let oddsInputs;
+  let oddsBaseline = null;
+  function tradeOdds(teamAId, teamBId, result) {
+    if (!window.FFOdds) return null;
+    try {
+      if (oddsInputs === undefined) {
+        oddsInputs = window.FFOdds.buildInputs({
+          meta: data.meta, standings: data.standings, schedule: data.schedule, lineups: data.lineups, live: data.live,
+        });
+      }
+      if (!oddsInputs) return null;
+      if (!oddsBaseline) oddsBaseline = window.FFOdds.simulate(oddsInputs, null);
+      const out = window.FFOdds.evaluateTrade(oddsInputs, teamAId, teamBId, result, undefined, oddsBaseline);
+      if (!out[teamAId].before || !out[teamBId].before) return null;
+      return { a: out[teamAId], b: out[teamBId] };
+    } catch (err) {
+      console.error("playoff odds failed", err);
+      return null;
+    }
+  }
+
   const state = {
     teamA: pending?.teamA ?? defaultTeamA, teamB: pending?.teamB ?? defaultTeamB,
     givesA: new Set(pending?.givesA || []), givesB: new Set(pending?.givesB || []),
@@ -662,7 +707,7 @@ export function renderTrade(container, data) {
         rosterA: rostA.map((p) => p.id), rosterB: rostB.map((p) => p.id), players, freeAgentsByPos, weeks,
         slots, eligibility,
       });
-      const ctx = { expandedWeek: state.expandedWeek, players, freeAgentsByPos, slots, eligibility, playersById: data.playersById };
+      const ctx = { expandedWeek: state.expandedWeek, players, freeAgentsByPos, slots, eligibility, playersById: data.playersById, odds: tradeOdds(state.teamA, state.teamB, result) };
       renderResult(resultEl, result, teamLabel(teamA), teamLabel(teamB), ctx);
     }
   }
