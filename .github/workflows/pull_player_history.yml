@@ -1,0 +1,37 @@
+# One-off, manually triggered: pulls every season's draft + transactions for the
+# O League from ESPN using the repo's existing ESPN cookie secrets, and uploads
+# the raw JSON as a run artifact (download with `gh run download`). Nothing is
+# committed. See tools/history/pull_player_history.py.
+name: Pull player history
+on:
+  workflow_dispatch:
+    inputs:
+      seasons:
+        description: "e.g. 2014-2026 (default: every season)"
+        required: false
+        default: ""
+permissions:
+  contents: read
+jobs:
+  pull:
+    runs-on: ubuntu-latest
+    env:
+      ESPN_S2_OLEAGUE: ${{ secrets.ESPN_S2_OLEAGUE }}
+      SWID_OLEAGUE: ${{ secrets.SWID_OLEAGUE }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: pip install requests pyyaml python-dotenv
+      - name: Pull draft + transactions
+        env:
+          SEASONS: ${{ github.event.inputs.seasons }}
+        run: |
+          if [ -n "$SEASONS" ]; then ARGS="--seasons $SEASONS"; else ARGS=""; fi
+          python -m tools.history.pull_player_history --league o-league $ARGS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: player-history
+          path: data/history/o-league/player_history/
+          retention-days: 7
