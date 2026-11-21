@@ -103,3 +103,21 @@ def test_js_odds_match_python_sim_and_trade_shift_is_directional(tmp_path):
     assert out["after"]["6"]["playoff"] < out["before"]["6"]["playoff"]
     # Probabilities across the field still sum to the playoff field size.
     assert sum(v["playoff"] for v in out["after"].values()) == pytest.approx(6.0, abs=1e-6)
+
+
+@pytest.mark.skipif(NODE is None, reason="no node binary available")
+def test_js_mutual_trade_scoring_rules():
+    out = json.loads(subprocess.run([NODE, str(ROOT / "tests" / "js" / "run_odds_score.js")], capture_output=True, text=True, check=True).stdout)
+    c = out["cases"]
+    assert c["both_gain"]["mutual"] and c["both_gain"]["score"] == pytest.approx(0.02)  # min of the two gains
+    assert c["both_gain"]["rival"] == {"teamId": 3, "delta": pytest.approx(-0.03)}  # worst-hit other team
+    assert not c["one_loses"]["mutual"]
+    assert c["within_tolerance"]["mutual"]  # -0.2 pts is inside the half-point tolerance
+    assert c["partner_locked_ok"]["mutual"] and c["partner_locked_ok"]["score"] == pytest.approx(0.1)  # locked side ignored for score
+    assert not c["partner_locked_loses_points"]["mutual"]  # a locked side must not lose points
+    assert c["both_locked"]["score"] is None  # -Infinity serialises to null: odds can't rank this trade
+    assert not c["no_gain"]["mutual"]  # nobody gains
+    # Any mutual trade outranks any non-mutual one.
+    assert c["both_gain"]["rank"] > c["one_loses"]["rank"]
+    # Diversity cap: the same incoming player appears at most twice; -Infinity entries dropped.
+    assert out["picked"] == [5, 4, 2]

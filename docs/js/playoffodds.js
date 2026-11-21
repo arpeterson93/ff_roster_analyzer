@@ -274,12 +274,78 @@ function oddsEvaluateTrade(inp, teamAId, teamBId, result, opts, baseline) {
   var after = oddsSimulate(inp, oddsAdjustmentsFromTrade(inp, teamAId, teamBId, result), opts);
   var out = {};
   [teamAId, teamBId].forEach(function (id) { out[id] = { before: before[id], after: after[id] }; });
+  // The whole field's before/after, for "who else does this trade help/hurt".
+  out.field = { before: before, after: after };
+  return out;
+}
+
+// --- ranking trades by playoff-odds change ---
+// A trade is "mutual" when neither side's odds fall by more than ODDS_TOLERANCE
+// (a probability, 0.005 = half a point) and at least one side gains at least
+// ODDS_MIN_GAIN. A side that can't move (odds ~0% or ~100% before AND after)
+// has no meaningful odds delta, so it's skipped for the score and instead must
+// not lose on points (pointsGain >= 0). Both sides immovable -> odds can't
+// rank this trade at all (score -Infinity).
+var ODDS_TOLERANCE = 0.005;
+var ODDS_MIN_GAIN = 0.005;
+var ODDS_IMMOVABLE_LOW = 0.01;
+var ODDS_IMMOVABLE_HIGH = 0.99;
+
+function oddsIsImmovable(side) {
+  var b = side.before.playoff, a = side.after.playoff;
+  return (b < ODDS_IMMOVABLE_LOW && a < ODDS_IMMOVABLE_LOW) || (b > ODDS_IMMOVABLE_HIGH && a > ODDS_IMMOVABLE_HIGH);
+}
+
+// odds: oddsEvaluateTrade's return; pointsGainA/B: evaluateTrade*'s side
+// gains. Returns {deltaA, deltaB, score, mutual, rank, rival}. score = the
+// smaller of the movable sides' deltas (so balanced trades beat lopsided
+// ones); rank puts every mutual trade above every non-mutual one.
+function oddsScoreTrade(odds, teamAId, teamBId, pointsGainA, pointsGainB) {
+  var sa = odds[teamAId], sb = odds[teamBId];
+  var deltaA = sa.after.playoff - sa.before.playoff;
+  var deltaB = sb.after.playoff - sb.before.playoff;
+  var immA = oddsIsImmovable(sa), immB = oddsIsImmovable(sb);
+  var movable = [];
+  if (!immA) movable.push(deltaA);
+  if (!immB) movable.push(deltaB);
+
+  var rival = null;
+  if (odds.field) {
+    Object.keys(odds.field.after).forEach(function (id) {
+      if (Number(id) === teamAId || Number(id) === teamBId) return;
+      var d = odds.field.after[id].playoff - odds.field.before[id].playoff;
+      if (rival === null || d < rival.delta) rival = { teamId: Number(id), delta: d };
+    });
+  }
+  if (!movable.length) return { deltaA: deltaA, deltaB: deltaB, score: -Infinity, mutual: false, rank: -Infinity, rival: rival };
+
+  var score = Math.min.apply(null, movable);
+  var best = Math.max.apply(null, movable);
+  var immovableOk = (!immA || pointsGainA >= 0) && (!immB || pointsGainB >= 0);
+  var mutual = score >= -ODDS_TOLERANCE && best >= ODDS_MIN_GAIN && immovableOk;
+  var rank = (mutual ? 10 : 0) + score + 0.01 * (deltaA + deltaB) - (immovableOk ? 0 : 0.5);
+  return { deltaA: deltaA, deltaB: deltaB, score: score, mutual: mutual, rank: rank, rival: rival };
+}
+
+// Best-ranked entries first, but no incoming player (giveB) used more than
+// `cap` times so one standout can't flood the list with near-copies - same
+// idea as trade.js's pickDiverse, keyed on the odds rank instead.
+function oddsPickTop(entries, n, cap) {
+  var sorted = entries.filter(function (e) { return e.rank > -Infinity; }).sort(function (x, y) { return y.rank - x.rank; });
+  var counts = {}, out = [];
+  for (var i = 0; i < sorted.length && out.length < n; i++) {
+    var e = sorted[i];
+    if (e.giveB.every(function (id) { return (counts[id] || 0) < cap; })) {
+      out.push(e);
+      e.giveB.forEach(function (id) { counts[id] = (counts[id] || 0) + 1; });
+    }
+  }
   return out;
 }
 
 var FFOdds = {
   buildInputs: oddsBuildInputs, simulate: oddsSimulate, evaluateTrade: oddsEvaluateTrade,
-  adjustmentsFromTrade: oddsAdjustmentsFromTrade, parseSeedingConfig: oddsParseSeedingConfig,
+  adjustmentsFromTrade: oddsAdjustmentsFromTrade, scoreTrade: oddsScoreTrade, pickTop: oddsPickTop, parseSeedingConfig: oddsParseSeedingConfig,
   bracketByeCount: oddsBracketByeCount,
 };
 if (typeof module !== "undefined" && module.exports) {

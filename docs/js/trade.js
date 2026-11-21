@@ -32,8 +32,25 @@ function expandSlots(slots) {
 // evaluation) via a bitmask DP over which players are used - equivalent to
 // engine/lineup.py's Hungarian-algorithm solution, just specialized to
 // return only the total. Fine for roster-sized inputs (<= ~20 players).
+//
+// Pruned to players who could actually start before the DP runs (exact, not an
+// approximation): at a position with K slots that accept it, only that
+// position's top-K scorers can ever be in an optimal lineup - any lower-ranked
+// same-position player can be swapped for an unused higher-ranked one at no
+// loss. Cuts a 17-man roster to ~10, i.e. the 2^n state space ~100x smaller.
 function optimalLineupTotal(players, slots, eligibility) {
   var slotList = expandSlots(slots);
+  var cap = {};
+  slotList.forEach(function (sl) {
+    (eligibility[sl.base] || []).forEach(function (pos) { cap[pos] = (cap[pos] || 0) + 1; });
+  });
+  var byPos = {};
+  players.forEach(function (pl) { if (cap[pl.pos]) (byPos[pl.pos] = byPos[pl.pos] || []).push(pl); });
+  players = [];
+  Object.keys(byPos).forEach(function (pos) {
+    byPos[pos].sort(function (x, y) { return y.pts - x.pts; });
+    players = players.concat(byPos[pos].slice(0, cap[pos]));
+  });
   var n = players.length;
   var size = 1 << n;
   var dp = new Float64Array(size).fill(-1);
@@ -983,7 +1000,7 @@ if (typeof module !== "undefined" && module.exports) {
     positionValueByPlayer: positionValueByPlayer,
     positionValueTeamTotal: positionValueTeamTotal,
     applyRosterConstraints: applyRosterConstraints,
-    afterRosters: afterRosters,
+    afterRosters: afterRosters, perPartnerSuggestions: perPartnerSuggestions,
   };
 
   if (require.main === module) {
@@ -1082,6 +1099,6 @@ if (typeof module !== "undefined" && module.exports) {
     positionValueByPlayer: positionValueByPlayer,
     positionValueTeamTotal: positionValueTeamTotal,
     applyRosterConstraints: applyRosterConstraints,
-    afterRosters: afterRosters,
+    afterRosters: afterRosters, perPartnerSuggestions: perPartnerSuggestions,
   };
 }

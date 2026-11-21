@@ -22,6 +22,65 @@ export function buildPlayersMap(data) {
   return map;
 }
 
+// Playoff-odds sim context (docs/js/playoffodds.js), one per Trade tab render:
+// inputs are built once, the no-trade baseline run is cached (every trade
+// compares against the same one). `trade()` returns {a, b, field} for the two
+// teams or null when there's nothing to simulate (offseason, regular season
+// over) / the odds file didn't load.
+function makeOddsContext(data) {
+  let inputs;
+  let baseline = null;
+  const ctx = {
+    getInputs() {
+      if (inputs === undefined) {
+        try {
+          inputs = window.FFOdds
+            ? window.FFOdds.buildInputs({ meta: data.meta, standings: data.standings, schedule: data.schedule, lineups: data.lineups, live: data.live })
+            : null;
+        } catch (err) {
+          console.error("playoff odds inputs failed", err);
+          inputs = null;
+        }
+      }
+      return inputs;
+    },
+    baseline() {
+      if (!baseline) baseline = window.FFOdds.simulate(ctx.getInputs(), null);
+      return baseline;
+    },
+    trade(teamAId, teamBId, result) {
+      try {
+        if (!ctx.getInputs()) return null;
+        const out = window.FFOdds.evaluateTrade(ctx.getInputs(), teamAId, teamBId, result, undefined, ctx.baseline());
+        if (!out[teamAId].before || !out[teamBId].before) return null;
+        return { a: out[teamAId], b: out[teamBId], field: out.field };
+      } catch (err) {
+        console.error("playoff odds failed", err);
+        return null;
+      }
+    },
+  };
+  return ctx;
+}
+
+function oddsPct(v) {
+  const p = v * 100;
+  return `${p >= 10 || p === 0 ? p.toFixed(0) : p.toFixed(1)}%`;
+}
+
+// Small signed "+6.3 pts" span, green/red, or a muted "no change".
+function oddsDeltaSpan(delta) {
+  const d = delta * 100;
+  if (Math.abs(d) < 0.05) return `<span class="small muted">no change</span>`;
+  return `<span class="small ${d > 0 ? "delta-up" : "delta-down"}">${d > 0 ? "+" : "−"}${Math.abs(d).toFixed(1)} pts</span>`;
+}
+
+// New odds with the change beneath it (one table cell's worth).
+function oddsCellHtml(side) {
+  if (!side) return "–";
+  return `${oddsPct(side.after.playoff)}<div>${oddsDeltaSpan(side.after.playoff - side.before.playoff)}</div>`;
+}
+
 function rosterIds(data, teamId) {
   return data.players.filter((p) => p.fantasy_team_id === teamId).map((p) => p.id);
 }
@@ -113,23 +172,28 @@ function suggestionsTableHtml(suggestions, playersById) {
     return `<p class="muted small">No trades found that clear the fairness bar for this pair - try locking a player (click a box above) to search around them, or pick a different partner.</p>`;
   }
   const names = (ids) => ids.map((id) => escapeHtml(playersById.get(id)?.name ?? id)).join(", ");
+  const hasOdds = suggestions.some((s) => s.odds);
   const rows = suggestions
     .map((s, i) => {
       const giveA = names(s.giveA);
       const giveB = names(s.giveB);
       const gainA = `${s.gainA >= 0 ? "+" : ""}${fmt(s.gainA, 1)}`;
       const gainB = `${s.gainB >= 0 ? "+" : ""}${fmt(s.gainB, 1)}`;
+      const oA = s.odds ? oddsCellHtml(s.odds.a) : "";
+      const oB = s.odds ? oddsCellHtml(s.odds.b) : "";
+      const oddsMobile = s.odds ? `<div>A odds: ${oddsPct(s.odds.a.after.playoff)} ${oddsDeltaSpan(s.odds.a.after.playoff - s.odds.a.before.playoff)}</div><div>B odds: ${oddsPct(s.odds.b.after.playoff)} ${oddsDeltaSpan(s.odds.b.after.playoff - s.odds.b.before.playoff)}</div>` : "";
       return `<tr class="clickable-row" data-suggestion-index="${i}">
         <td class="desktop-col">${giveA}</td>
         <td class="desktop-col">${giveB}</td>
         <td class="mobile-col small"><div>A gives: ${giveA}</div><div>B gives: ${giveB}</div></td>
         <td class="desktop-col">${gainA}</td>
         <td class="desktop-col">${gainB}</td>
-        <td class="mobile-col small"><div>A gain: ${gainA}</div><div>B gain: ${gainB}</div></td>
+        ${hasOdds ? `<td class="desktop-col">${oA}</td><td class="desktop-col">${oB}</td>` : ""}
+        <td class="mobile-col small"><div>A gain: ${gainA}</div><div>B gain: ${gainB}</div>${oddsMobile}</td>
       </tr>`;
     })
     .join("");
-  return `<table><thead><tr><th class="desktop-col">Team A gives</th><th class="desktop-col">Team B gives</th><th class="mobile-col">Trade</th><th class="desktop-col">A gain</th><th class="desktop-col">B gain</th><th class="mobile-col">Gain</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table><thead><tr><th class="desktop-col">Team A gives</th><th class="desktop-col">Team B gives</th><th class="mobile-col">Trade</th><th class="desktop-col">A gain</th><th class="desktop-col">B gain</th>${hasOdds ? `<th class="desktop-col" title="Playoff odds after the trade, and the change">A odds</th><th class="desktop-col" title="Playoff odds after the trade, and the change">B odds</th>` : ""}<th class="mobile-col">Gain</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 // Small "(+1.2)"/"(-1.2)" span next to a value, green/red by sign - dropped
@@ -204,7 +268,7 @@ function rosterTransactionsHtml(transactions, playersById) {
 // message actually paint before the synchronous search blocks the main
 // thread - without it the browser would freeze straight from the click with
 // no feedback at all until the search finishes.
-function generateSuggestions(suggestionsEl, data, state, rostA, rostB, freeAgentsByPos, playersById, draw) {
+function generateSuggestions(suggestionsEl, data, state, rostA, rostB, freeAgentsByPos, playersById, draw, oddsCtx) {
   suggestionsEl.innerHTML = `<p class="muted small">Generating suggestions...</p>`;
   setTimeout(() => {
     const players = buildPlayersMap(data);
@@ -218,6 +282,17 @@ function generateSuggestions(suggestionsEl, data, state, rostA, rostB, freeAgent
       slots: data.meta.slots, eligibility: data.meta.slot_eligibility,
       rosterSize: data.meta.roster_size,
     });
+    // Playoff odds for each suggestion (same lineup-optimizer evaluation + sim
+    // the single-trade card uses) - ~15 rows, so cheap enough to do inline.
+    if (oddsCtx.getInputs()) {
+      suggestions.forEach((sg) => {
+        const result = window.FFTrade.evaluateTradeWithStreaming({
+          givesA: sg.giveA, givesB: sg.giveB, rosterA: rostA.map((p) => p.id), rosterB: rostB.map((p) => p.id),
+          players, freeAgentsByPos, weeks, slots: data.meta.slots, eligibility: data.meta.slot_eligibility,
+        });
+        sg.odds = oddsCtx.trade(state.teamA, state.teamB, result);
+      });
+    }
     state.suggestions = suggestions;
     suggestionsEl.innerHTML = suggestionsTableHtml(suggestions, playersById);
     wireSuggestionRows(suggestionsEl, suggestions, state, draw);
@@ -299,6 +374,107 @@ function runLeagueSearch(el, data, state, myTeamId, kind, playersById, draw) {
   }, 0);
 }
 
+// Playoff-odds trades table: one row per trade, both sides' odds after the
+// trade with the change beneath, and the rival the trade hurts most. Rows are
+// clickable via wireLeagueTradeRows (they carry partnerTeamId/giveA/giveB).
+function oddsTradesTableHtml(rows, playersById, teamsById) {
+  if (!rows.length) return `<p class="muted small">No trade found that moves either side's playoff odds - try again later in the season, when each game counts for more.</p>`;
+  const names = (ids) => ids.map((id) => escapeHtml(playersById.get(id)?.name ?? id)).join(", ");
+  const anyMutual = rows.some((r) => r.mutual);
+  const body = rows
+    .map((r, i) => {
+      const partner = teamsById.get(r.partnerTeamId);
+      const give = names(r.giveA);
+      const get = names(r.giveB);
+      const rival = r.rival && r.rival.delta * 100 <= -0.5
+        ? `<span class="small delta-down">${escapeHtml(teamLabel(teamsById.get(r.rival.teamId)))} −${Math.abs(r.rival.delta * 100).toFixed(1)}</span>`
+        : `<span class="small muted">–</span>`;
+      return `<tr class="clickable-row ${r.mutual ? "" : "muted"}" data-league-trade-index="${i}">
+        <td>${escapeHtml(partner ? teamLabel(partner) : r.partnerTeamId)}</td>
+        <td class="desktop-col">${give}</td>
+        <td class="desktop-col">${get}</td>
+        <td class="mobile-col small"><div>Give: ${give}</div><div>Get: ${get}</div></td>
+        <td>${oddsCellHtml(r.odds.a)}</td>
+        <td>${oddsCellHtml(r.odds.b)}</td>
+        <td class="desktop-col">${rival}</td>
+      </tr>`;
+    })
+    .join("");
+  const note = anyMutual
+    ? ""
+    : `<p class="muted small">No trade improves both sides' odds - these are the closest options (one side's odds drop).</p>`;
+  return `${note}<table><thead><tr><th>Partner</th><th class="desktop-col">You give</th><th class="desktop-col">You get</th><th class="mobile-col">Players</th><th>Your odds</th><th>Their odds</th><th class="desktop-col" title="The other team whose playoff odds this trade hurts most">Hurts most</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+
+// Mutually-beneficial-by-playoff-odds search (from the viewer's team against
+// every other team). Stage 1: the existing points-based search proposes ~20
+// candidates per partner. Stage 2: each is evaluated with the real lineup
+// optimizer and a fast (3k-iteration) playoff sim, ranked by FFOdds.scoreTrade.
+// Stage 3: the best dozen are re-simulated at full iterations so the numbers
+// shown match the single-trade card. Stage 2 runs in ~40ms slices so the page
+// stays responsive and can show progress.
+function runOddsSearch(el, data, state, myTeamId, playersById, draw, oddsCtx) {
+  const inputs = oddsCtx.getInputs();
+  if (!inputs) {
+    el.innerHTML = `<p class="muted small">No regular-season games left to simulate.</p>`;
+    return;
+  }
+  const run = (state.oddsRun = (state.oddsRun || 0) + 1);
+  el.innerHTML = `<p class="muted small">Generating candidate trades...</p>`;
+  setTimeout(() => {
+    const players = buildPlayersMap(data);
+    const weeks = [];
+    for (let w = data.meta.current_week; w <= data.meta.final_week; w++) weeks.push(w);
+    const freeAgentsByPos = buildFreeAgentsByPos(data);
+    const slots = data.meta.slots;
+    const eligibility = data.meta.slot_eligibility;
+    const myRoster = rosterIds(data, myTeamId);
+    const otherRosters = {};
+    data.teams.forEach((t) => {
+      if (t.team_id !== myTeamId) otherRosters[t.team_id] = rosterIds(data, t.team_id);
+    });
+    const candidates = window.FFTrade.perPartnerSuggestions(
+      { myRoster, otherRosters, players, freeAgentsByPos, weeks, slots, eligibility, rosterSize: data.meta.roster_size },
+      { maxResults: 20 },
+    );
+    const evalOne = (c, simOpts, baseline) => {
+      const result = window.FFTrade.evaluateTradeWithStreaming({
+        givesA: c.giveA, givesB: c.giveB, rosterA: myRoster, rosterB: otherRosters[c.partnerTeamId],
+        players, freeAgentsByPos, weeks, slots, eligibility,
+      });
+      const odds = window.FFOdds.evaluateTrade(inputs, myTeamId, c.partnerTeamId, result, simOpts, baseline);
+      const sc = window.FFOdds.scoreTrade(odds, myTeamId, c.partnerTeamId, result.sideA.gain, result.sideB.gain);
+      return { partnerTeamId: c.partnerTeamId, giveA: c.giveA, giveB: c.giveB, odds: { a: odds[myTeamId], b: odds[c.partnerTeamId] }, ...sc };
+    };
+
+    const screen = { iterations: 3000 };
+    const screenBase = window.FFOdds.simulate(inputs, null, screen);
+    const scored = [];
+    let i = 0;
+    const step = () => {
+      if (!el.isConnected || state.oddsRun !== run) return; // superseded by a newer search / redraw
+      const t0 = performance.now();
+      while (i < candidates.length && performance.now() - t0 < 40) {
+        scored.push(evalOne(candidates[i], screen, screenBase));
+        i++;
+      }
+      if (i < candidates.length) {
+        el.innerHTML = `<p class="muted small">Simulating playoff odds... ${i}/${candidates.length} candidate trades</p>`;
+        setTimeout(step, 0);
+        return;
+      }
+      const top = window.FFOdds.pickTop(scored, 12, 2);
+      const fullBase = oddsCtx.baseline();
+      const finals = top.map((c) => evalOne(c, undefined, fullBase));
+      finals.sort((x, y) => y.rank - x.rank);
+      state.oddsResults = finals;
+      el.innerHTML = oddsTradesTableHtml(finals, playersById, data.teamsById);
+      wireLeagueTradeRows(el, finals, state, myTeamId, draw);
+    };
+    step();
+  }, 0);
+}
+
 // Same hand-off as a Suggested-trades row: set both teams and both sides'
 // players, redraw, and scroll the calculator into view.
 function wireLeagueTradeRows(el, rows, state, myTeamId, draw) {
@@ -370,16 +546,9 @@ function lineupForWeekHtml(teamName, afterRoster, players, freeAgentsByPos, week
 // or null when odds can't be computed (offseason / no remaining games).
 function playoffOddsHtml(o) {
   if (!o) return "";
-  const before = o.before.playoff * 100;
-  const after = o.after.playoff * 100;
-  const delta = after - before;
-  const pct = (v) => `${v >= 10 || v === 0 ? v.toFixed(0) : v.toFixed(1)}%`;
-  const flat = Math.abs(delta) < 0.05;
-  const cls = flat ? "muted" : delta > 0 ? "delta-up" : "delta-down";
-  const deltaText = flat ? "no change" : `${delta > 0 ? "+" : "−"}${Math.abs(delta).toFixed(1)} pts`;
   return `<div class="trade-odds" title="Chance of making the playoffs, simulated with this team's weekly projections shifted by the trade (same random draws before and after, so the change is meaningful)">
-    <div>Playoff odds: <strong>${pct(after)}</strong></div>
-    <div class="small ${cls}">${deltaText} <span class="muted">(from ${pct(before)})</span></div>
+    <div>Playoff odds: <strong>${oddsPct(o.after.playoff)}</strong></div>
+    <div>${oddsDeltaSpan(o.after.playoff - o.before.playoff)} <span class="small muted">(from ${oddsPct(o.before.playoff)})</span></div>
   </div>`;
 }
 
@@ -440,29 +609,7 @@ export function renderTrade(container, data) {
   // setPendingTrade) right before switching to this tab - one-shot, so a
   // later manual visit to this tab doesn't keep re-seeding the same pick.
   const pending = consumePendingTrade();
-  // Playoff-odds sim inputs (docs/js/playoffodds.js) - built once, the no-trade
-  // baseline run is cached since every trade compares against the same one.
-  // null when there's nothing left to simulate (offseason, regular season over).
-  let oddsInputs;
-  let oddsBaseline = null;
-  function tradeOdds(teamAId, teamBId, result) {
-    if (!window.FFOdds) return null;
-    try {
-      if (oddsInputs === undefined) {
-        oddsInputs = window.FFOdds.buildInputs({
-          meta: data.meta, standings: data.standings, schedule: data.schedule, lineups: data.lineups, live: data.live,
-        });
-      }
-      if (!oddsInputs) return null;
-      if (!oddsBaseline) oddsBaseline = window.FFOdds.simulate(oddsInputs, null);
-      const out = window.FFOdds.evaluateTrade(oddsInputs, teamAId, teamBId, result, undefined, oddsBaseline);
-      if (!out[teamAId].before || !out[teamBId].before) return null;
-      return { a: out[teamAId], b: out[teamBId] };
-    } catch (err) {
-      console.error("playoff odds failed", err);
-      return null;
-    }
-  }
+  const oddsCtx = makeOddsContext(data);
 
   const state = {
     teamA: pending?.teamA ?? defaultTeamA, teamB: pending?.teamB ?? defaultTeamB,
@@ -472,7 +619,7 @@ export function renderTrade(container, data) {
     suggestions: [],
     // League-wide tools (always run from the viewer's own team, defaultTeamA).
     blockIds: new Set(), needPositions: new Set(),
-    blockResults: [], needResults: [],
+    blockResults: [], needResults: [], oddsResults: [], oddsRun: 0,
   };
 
   function draw(opts) {
@@ -493,6 +640,12 @@ export function renderTrade(container, data) {
             .join("")}</div>
           <p><button id="league-block-run" type="button">Find offers</button></p>
           <div class="table-wrap" id="league-block-results">${leagueTradesTableHtml(state.blockResults, playersById, data.teamsById, "Pick players and press Find offers.")}</div>
+        </details>
+        <details ${state.oddsResults.length ? "open" : ""} style="margin-top:8px">
+          <summary><strong>Playoff-odds trades</strong> <span class="muted small">- trades that raise both teams' playoff odds</span></summary>
+          <p class="muted small">Searches every team for trades where neither side's playoff odds fall (by more than half a point) and at least one rises - ranked by the smaller of the two gains, so balanced deals come first. A team that is already ~0% or ~100% can't move, so it only needs to not lose points. "Hurts most" is the other contender whose odds drop the most. Works best mid-to-late season. Click a row to load it into the calculator below.</p>
+          <p><button id="league-odds-run" type="button">Find playoff-odds trades</button></p>
+          <div class="table-wrap" id="league-odds-results">${state.oddsResults.length ? oddsTradesTableHtml(state.oddsResults, playersById, data.teamsById) : `<p class="muted small">Press Find playoff-odds trades.</p>`}</div>
         </details>
         <details ${state.needResults.length || state.needPositions.size ? "open" : ""} style="margin-top:8px">
           <summary><strong>Position needs</strong> <span class="muted small">- best trades to upgrade the positions you pick</span></summary>
@@ -579,6 +732,10 @@ export function renderTrade(container, data) {
       if (!state.needPositions.size) return;
       runLeagueSearch(container.querySelector("#league-need-results"), data, state, defaultTeamA, "need", playersById, draw);
     });
+    container.querySelector("#league-odds-run").addEventListener("click", () => {
+      runOddsSearch(container.querySelector("#league-odds-results"), data, state, defaultTeamA, playersById, draw, oddsCtx);
+    });
+    wireLeagueTradeRows(container.querySelector("#league-odds-results"), state.oddsResults, state, defaultTeamA, draw);
     wireLeagueTradeRows(container.querySelector("#league-block-results"), state.blockResults, state, defaultTeamA, draw);
     wireLeagueTradeRows(container.querySelector("#league-need-results"), state.needResults, state, defaultTeamA, draw);
 
@@ -601,10 +758,10 @@ export function renderTrade(container, data) {
       draw();
     });
     container.querySelector("#trade-suggest-refresh").addEventListener("click", () => {
-      generateSuggestions(container.querySelector("#trade-suggestions"), data, state, rostA, rostB, freeAgentsByPos, playersById, draw);
+      generateSuggestions(container.querySelector("#trade-suggestions"), data, state, rostA, rostB, freeAgentsByPos, playersById, draw, oddsCtx);
     });
     if (regenerateSuggestions) {
-      generateSuggestions(container.querySelector("#trade-suggestions"), data, state, rostA, rostB, freeAgentsByPos, playersById, draw);
+      generateSuggestions(container.querySelector("#trade-suggestions"), data, state, rostA, rostB, freeAgentsByPos, playersById, draw, oddsCtx);
     } else {
       wireSuggestionRows(container.querySelector("#trade-suggestions"), state.suggestions, state, draw);
     }
@@ -707,7 +864,7 @@ export function renderTrade(container, data) {
         rosterA: rostA.map((p) => p.id), rosterB: rostB.map((p) => p.id), players, freeAgentsByPos, weeks,
         slots, eligibility,
       });
-      const ctx = { expandedWeek: state.expandedWeek, players, freeAgentsByPos, slots, eligibility, playersById: data.playersById, odds: tradeOdds(state.teamA, state.teamB, result) };
+      const ctx = { expandedWeek: state.expandedWeek, players, freeAgentsByPos, slots, eligibility, playersById: data.playersById, odds: oddsCtx.trade(state.teamA, state.teamB, result) };
       renderResult(resultEl, result, teamLabel(teamA), teamLabel(teamB), ctx);
     }
   }
