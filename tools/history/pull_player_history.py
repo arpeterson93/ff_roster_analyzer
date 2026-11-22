@@ -55,7 +55,7 @@ def fetch(session: requests.Session, url: str, base_params: dict, views: list[st
     params = list(base_params.items()) + [("view", v) for v in views] + list((extra or {}).items())
     for attempt in range(3):
         try:
-            r = session.get(url, params=params, timeout=45)
+            r = session.get(url.rstrip("/") + "/communication/", params=params, timeout=45)
         except requests.RequestException:
             time.sleep(1.5 * (attempt + 1))
             continue
@@ -126,7 +126,7 @@ def pull_activity(session: requests.Session, url: str, base: dict) -> dict:
         r = None
         for attempt in range(3):
             try:
-                r = session.get(url, params=params, headers={"x-fantasy-filter": json.dumps(flt)}, timeout=45)
+                r = session.get(url.rstrip("/") + "/communication/", params=params, headers={"x-fantasy-filter": json.dumps(flt)}, timeout=45)
                 break
             except requests.RequestException:
                 time.sleep(1.5 * (attempt + 1))
@@ -136,7 +136,7 @@ def pull_activity(session: requests.Session, url: str, base: dict) -> dict:
         data = r.json()
         if isinstance(data, list):
             data = data[0] if data else {}
-        page = data.get("topics") or []
+        page = (data.get("topics") or (data.get("communication") or {}).get("topics")) or []
         info["pages"] += 1
         if not page:
             break
