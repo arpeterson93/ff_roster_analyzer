@@ -10,6 +10,10 @@ on:
         description: "e.g. 2014-2026 (default: every season)"
         required: false
         default: ""
+      rosters:
+        description: "also pull weekly mRoster snapshots (slow)"
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -27,8 +31,10 @@ jobs:
       - name: Pull draft + transactions
         env:
           SEASONS: ${{ github.event.inputs.seasons }}
+          ROSTERS: ${{ github.event.inputs.rosters }}
         run: |
           if [ -n "$SEASONS" ]; then ARGS="--seasons $SEASONS"; else ARGS=""; fi
+          if [ "$ROSTERS" = "true" ]; then ARGS="$ARGS --rosters"; fi
           python -m tools.history.pull_player_history --league o-league $ARGS
       - uses: actions/upload-artifact@v4
         with:
