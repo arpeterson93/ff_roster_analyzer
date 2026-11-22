@@ -94,6 +94,9 @@ def pull_season(session, league_id: int, season: int, current_season: int, with_
             tx_by_id[t["id"]] = t
     out["transactions"] = list(tx_by_id.values())
 
+    if with_activity:
+        out["activity"] = pull_activity(session, url, base)
+
     if with_rosters:
         rosters: dict[str, list] = {}
         for period in range(1, MAX_PERIOD + 1):
@@ -107,6 +110,41 @@ def pull_season(session, league_id: int, season: int, current_season: int, with_
                 rosters[str(period)] = week
         out["rosters"] = rosters
     return out
+
+
+def pull_activity(session: requests.Session, url: str, base: dict) -> dict:
+    """The league's 'recent activity' feed (kona_league_communication), paged. It
+    sometimes retains old adds/drops/trades that mTransactions2 has lost."""
+    topics: list = []
+    info = {"pages": 0, "status": None}
+    for offset in range(0, 5000, 50):
+        flt = {"topics": {"filterType": {"value": ["ACTIVITY_TRANSACTIONS"]}, "limit": 50, "limitPerMessageSet": {"value": 50},
+                          "offset": offset, "sortMessageDate": {"sortPriority": 1, "sortAsc": False},
+                          "sortFor": {"sortPriority": 2, "sortAsc": False},
+                          "filterIncludeMessageTypeIds": {"value": [178, 180, 179, 239, 181, 244, 183, 184, 185, 186]}}}
+        params = list(base.items()) + [("view", "kona_league_communication")]
+        r = None
+        for attempt in range(3):
+            try:
+                r = session.get(url, params=params, headers={"x-fantasy-filter": json.dumps(flt)}, timeout=45)
+                break
+            except requests.RequestException:
+                time.sleep(1.5 * (attempt + 1))
+        info["status"] = r.status_code if r is not None else -1
+        if r is None or r.status_code != 200:
+            break
+        data = r.json()
+        if isinstance(data, list):
+            data = data[0] if data else {}
+        page = data.get("topics") or []
+        info["pages"] += 1
+        if not page:
+            break
+        topics.extend(page)
+        if len(page) < 50:
+            break
+    info["topics"] = topics
+    return info
 
 
 def parse_seasons(spec: str | None, first: int, last: int) -> list[int]:
@@ -128,6 +166,7 @@ def main() -> int:
     ap.add_argument("--seasons", help="e.g. 2014-2018 or 2014,2016 (default: 2014..current)")
     ap.add_argument("--first", type=int, default=2014)
     ap.add_argument("--rosters", action="store_true", help="also pull weekly mRoster snapshots (slow; ownership is already derivable from draft + transactions)")
+    ap.add_argument("--activity", action="store_true", help="also pull the league activity feed (kona_league_communication)")
     args = ap.parse_args()
 
     cfg = yaml.safe_load(Path(f"config/leagues/{args.league}.yml").read_text(encoding="utf-8"))
@@ -145,7 +184,7 @@ def main() -> int:
     out_dir = Path("data/history") / args.league / "player_history"
     out_dir.mkdir(parents=True, exist_ok=True)
     for season in parse_seasons(args.seasons, args.first, current):
-        res = pull_season(session, league_id, season, current, args.rosters)
+        res = pull_season(session, league_id, season, current, args.rosters, args.activity)
         (out_dir / f"{season}.json").write_text(json.dumps(res, separators=(",", ":")), encoding="utf-8")
         if res["status"] != "ok":
             print(f"{season}: {res['status']}")
@@ -154,7 +193,7 @@ def main() -> int:
         kinds = {}
         for t in tx:
             kinds[t["type"]] = kinds.get(t["type"], 0) + 1
-        print(f"{season}: {len(res['draft']['picks'])} draft picks, {len(tx)} transactions {kinds}, {len(res.get('rosters', {}))} roster weeks")
+        print(f"{season}: {len(res['draft']['picks'])} draft picks, {len(tx)} transactions {kinds}, {len(res.get('rosters', {}))} roster weeks, {len((res.get('activity') or {}).get('topics', []))} activity topics")
     return 0
 
 

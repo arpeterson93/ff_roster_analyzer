@@ -14,6 +14,10 @@ on:
         description: "also pull weekly mRoster snapshots (slow)"
         type: boolean
         default: false
+      activity:
+        description: "also pull the league activity feed"
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -32,9 +36,11 @@ jobs:
         env:
           SEASONS: ${{ github.event.inputs.seasons }}
           ROSTERS: ${{ github.event.inputs.rosters }}
+          ACTIVITY: ${{ github.event.inputs.activity }}
         run: |
           if [ -n "$SEASONS" ]; then ARGS="--seasons $SEASONS"; else ARGS=""; fi
           if [ "$ROSTERS" = "true" ]; then ARGS="$ARGS --rosters"; fi
+          if [ "$ACTIVITY" = "true" ]; then ARGS="$ARGS --activity"; fi
           python -m tools.history.pull_player_history --league o-league $ARGS
       - uses: actions/upload-artifact@v4
         with:
