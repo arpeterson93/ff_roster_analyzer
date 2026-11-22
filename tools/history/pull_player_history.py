@@ -55,7 +55,7 @@ def fetch(session: requests.Session, url: str, base_params: dict, views: list[st
     params = list(base_params.items()) + [("view", v) for v in views] + list((extra or {}).items())
     for attempt in range(3):
         try:
-            r = session.get(url.rstrip("/") + "/communication/", params=params, timeout=45)
+            r = session.get(url, params=params, timeout=45)
         except requests.RequestException:
             time.sleep(1.5 * (attempt + 1))
             continue
