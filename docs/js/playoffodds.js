@@ -269,8 +269,8 @@ function oddsSimulate(inp, adjustments, opts) {
 // what was knowable THEN: the real record/PF/PA after that week, and every
 // team's strength = its average score so far (shrunk toward the league
 // average; the prior fades as games accumulate), with one pooled week-to-week
-// spread. Week 0 is the pre-season (everyone equal) and the final entry is the
-// real, lineup-based odds the Standings table shows.
+// spread. Used only for weeks before odds_history.json's recorded snapshots
+// begin; week 0 is the pre-season (everyone equal).
 var ODDS_RETRO_SHRINK_GAMES = 12; // ~ (weekly SD 18 / true team-talent SD 5)^2: one week of scoring says little about strength
 var ODDS_RETRO_SD_PRIOR_GAMES = 12;
 
@@ -339,14 +339,15 @@ function oddsRetrospective(parts, opts) {
     weeks.push({ week: w, inp: inp });
   }
   var iterations = opts.iterations || 5000;
-  var out = { weeks: [], series: {}, now: {}, lastWeek: lastWeek };
-  teams0.forEach(function (t) { out.series[t.id] = []; });
-  // Returns a step function so the UI can compute one week per tick.
-  out.total = weeks.length;
+  // opts.skip: weeks already covered by recorded snapshots (no need to rebuild them).
+  var todo = weeks.filter(function (x) { return !(opts.skip && opts.skip[x.week]); });
+  var out = { byWeek: {}, now: {}, lastWeek: lastWeek, total: todo.length };
+  // One week per call so the UI can interleave them with paints.
   out.step = function (i) {
-    var res = oddsSimulate(weeks[i].inp, null, { iterations: iterations, seed: opts.seed || ODDS_DEFAULT_SEED });
-    out.weeks.push(weeks[i].week);
-    teams0.forEach(function (t) { out.series[t.id].push({ playoff: res[t.id].playoff, bye: res[t.id].bye }); });
+    var res = oddsSimulate(todo[i].inp, null, { iterations: iterations, seed: opts.seed || ODDS_DEFAULT_SEED });
+    var row = {};
+    teams0.forEach(function (t) { row[t.id] = { playoff: res[t.id].playoff, bye: res[t.id].bye }; });
+    out.byWeek[todo[i].week] = row;
   };
   standings.forEach(function (s) { out.now[s.team_id] = { playoff: s.playoff_odds, bye: s.bye_odds }; });
   return out;

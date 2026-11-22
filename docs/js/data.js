@@ -32,7 +32,7 @@ async function fetchJsonOptional(path) {
 export async function loadLeagueData(slug) {
   if (cache.has(slug)) return cache.get(slug);
   const base = `data/${slug}`;
-  const [meta, players, teams, lineups, matchups, standings, recentResults, pointsAgainst, faValues, schedule, faabEstimates, faValuesDetail, gameLogPlays, live, history, simPaths, faabLeague] = await Promise.all([
+  const [meta, players, teams, lineups, matchups, standings, recentResults, pointsAgainst, faValues, schedule, faabEstimates, faValuesDetail, gameLogPlays, live, history, simPaths, faabLeague, oddsHistory] = await Promise.all([
     fetchJson(`${base}/meta.json`),
     fetchJson(`${base}/players.json`),
     fetchJson(`${base}/teams.json`),
@@ -56,12 +56,14 @@ export async function loadLeagueData(slug) {
     fetchJsonOptional(`${base}/sim_paths.json`),
     // This league's own FAAB transaction history (engine/faab_league.py) - the FAAB tab and the player modal's "in this league" strip.
     fetchJsonOptional(`${base}/faab_league.json`),
+    // Per-week playoff-odds snapshots (engine/odds_history.py) - Standings' Retrospective view.
+    fetchJsonOptional(`${base}/odds_history.json`),
   ]);
   const playersById = new Map(players.map((p) => [p.id, p]));
   const teamsById = new Map(teams.map((t) => [t.team_id, t]));
   const data = {
     meta, players, playersById, teams, teamsById, lineups, matchups, standings,
-    recentResults, pointsAgainst, faValues, schedule, faabEstimates, faValuesDetail, gameLogPlays, live, history, simPaths, faabLeague,
+    recentResults, pointsAgainst, faValues, schedule, faabEstimates, faValuesDetail, gameLogPlays, live, history, simPaths, faabLeague, oddsHistory,
   };
   cache.set(slug, data);
   return data;

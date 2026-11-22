@@ -54,7 +54,7 @@ from engine.play_log import (
 )
 from engine.points_against import dst_points_against_detail, points_against_detail, with_kick_attempts, with_remaining_schedule
 from engine.scoring import ScoringRules
-from engine import standings_stage
+from engine import odds_history, standings_stage
 from engine.faab_league import build_faab_league, processed_weeks_of, snapshot_entries, update_estimate_log
 from engine.history import load_and_build as load_history
 from engine.xfp_play_log import expected_plays_for_player
@@ -2108,6 +2108,13 @@ def _load_prior_faab_log(out_dir: Path) -> dict | None:
         return None
 
 
+def _load_json_or_none(path: Path) -> dict | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def _load_prior_last_updates(out_dir: Path) -> dict[str, str] | None:
     """Same "read off disk before this run overwrites it" pattern as
     _load_prior_players, for meta.json's own last_updates dict - unlike
@@ -2150,6 +2157,15 @@ def main() -> int:
 
         out_dir = out_root / cfg["slug"]
         out_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            files["odds_history.json"] = odds_history.merge(
+                cfg["season"],
+                _load_json_or_none(out_dir / "odds_history.json"),
+                _load_json_or_none(Path("data/history") / cfg["slug"] / "odds_history_seed.json"),
+                odds_history.snapshot_from_build(files["meta.json"], files["standings.json"]),
+            )
+        except Exception:
+            logger.exception("odds_history for %s skipped", cfg["slug"])
         for filename, data in files.items():
             with open(out_dir / filename, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False)

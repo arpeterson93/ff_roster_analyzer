@@ -1,8 +1,11 @@
 // Standings > Retrospective: each team's playoff (or bye) odds after every
 // completed week, as a line chart plus a ranked "after week N" table that
-// follows the pointer. The numbers come from FFOdds.retrospective (see
-// playoffodds.js for exactly how a past week is re-simulated); the last point
-// ("Now") is the real, lineup-based odds the Standings table shows.
+// follows the pointer. Each week's point is the odds the site actually
+// published right after that week finished (odds_history.json, recorded by
+// engine/odds_history.py: real rosters and projections as of then). Weeks that
+// predate the recording fall back to FFOdds.retrospective's results-only
+// re-simulation and are drawn dashed; the last point ("Now") is the current
+// Standings table.
 
 import { escapeHtml, getYourTeam } from "./state.js";
 import { teamLabel } from "./colors.js";
@@ -20,10 +23,14 @@ function load(data, slug) {
   const stamp = `${data.meta.generated_at}:${data.meta.weeks_complete}`;
   const hit = cache.get(slug);
   if (hit && hit.stamp === stamp) return hit;
+  const snaps = {};
+  ((data.oddsHistory && data.oddsHistory.snapshots) || []).forEach((s) => { snaps[s.week] = s; });
+  const skip = {};
+  Object.keys(snaps).forEach((w) => { skip[w] = true; });
   const result = window.FFOdds
-    ? window.FFOdds.retrospective({ meta: data.meta, standings: data.standings, schedule: data.schedule, lineups: data.lineups })
+    ? window.FFOdds.retrospective({ meta: data.meta, standings: data.standings, schedule: data.schedule, lineups: data.lineups }, { skip })
     : null;
-  const entry = { stamp, result, done: false, running: false };
+  const entry = { stamp, result, snaps, done: false, running: false };
   cache.set(slug, entry);
   return entry;
 }
@@ -65,23 +72,34 @@ export function renderRetro(container, data, slug) {
       <div id="retro-chart"></div>
       <div id="retro-legend" class="retro-legend"></div>
       <div id="retro-table"></div>
-      <p class="muted small">Weeks 0 to ${entry.result.lastWeek} re-simulate the season from only what was known at that point: the real record and points so far, each team's strength taken from its scoring average to date (pulled toward the league average early on), and the remaining schedule. Lineups and injuries from those weeks aren't kept, so earlier points are rougher than <strong>Now</strong>, which is the full lineup-based model from the Standings table.</p>
+      <p class="muted small">Each solid point is the odds this site published right after that week finished, using the rosters and projections it had then. <span id="retro-approx-note"></span><strong>Now</strong> is the current Standings table.</p>
     </div>`;
   const statusEl = container.querySelector("#retro-status");
   const chartEl = container.querySelector("#retro-chart");
   const legendEl = container.querySelector("#retro-legend");
   const tableEl = container.querySelector("#retro-table");
 
-  const valueAt = (id, i) => {
-    const R = entry.result;
-    const row = i < R.weeks.length ? R.series[id][i] : R.now[id];
-    return row ? row[state.metric] : 0;
+  const R = entry.result;
+  const weekList = [];
+  const lastW = Math.max(R.lastWeek, ...Object.keys(entry.snaps).map(Number));
+  for (let w = 0; w <= lastW; w++) weekList.push(w);
+  // Real snapshot when we have one, else the results-only estimate; the final slot is "Now".
+  const rowFor = (i, id) => {
+    if (i >= weekList.length) return R.now[id];
+    const w = weekList[i];
+    const snap = entry.snaps[w];
+    if (snap) { const t = snap.teams[String(id)]; return t ? t : null; }
+    return R.byWeek[w] ? R.byWeek[w][id] : null;
   };
-  const labels = () => entry.result.weeks.map((w) => (w === 0 ? "Pre" : `Wk ${w}`)).concat(["Now"]);
+  const isApprox = (i) => i < weekList.length && !entry.snaps[weekList[i]];
+  const valueAt = (id, i) => {
+    const row = rowFor(i, id);
+    return row && row[state.metric] != null ? row[state.metric] : 0;
+  };
+  const labels = () => weekList.map((w) => (w === 0 ? "Pre" : `Wk ${w}`)).concat(["Now"]);
 
   function drawChart() {
-    const R = entry.result;
-    const n = R.weeks.length + 1; // computed weeks + Now
+    const n = weekList.length + 1; // weeks + Now
     const W = 760, H = 340, L = 40, Rr = 14, T = 12, B = 30;
     const x = (i) => L + (n === 1 ? 0 : (i * (W - L - Rr)) / (n - 1));
     const y = (v) => T + (1 - v) * (H - T - B);
@@ -93,12 +111,14 @@ export function renderRetro(container, data, slug) {
     if (state.sel !== null) svg += `<line x1="${x(state.sel)}" x2="${x(state.sel)}" y1="${T}" y2="${H - B}" class="retro-guide"/>`;
     const order = teams.map((t) => t.id).filter((id) => !state.hidden.has(id)).sort((a, b) => (a === yourId) - (b === yourId));
     order.forEach((id) => {
-      const pts = [];
-      for (let i = 0; i < n; i++) pts.push(`${x(i).toFixed(1)},${y(valueAt(id, i)).toFixed(1)}`);
       const focus = state.focus;
       const dim = focus !== null && focus !== id;
       const w = id === yourId || focus === id ? 3.4 : 1.8;
-      svg += `<polyline points="${pts.join(" ")}" fill="none" stroke="${colorOf[id]}" stroke-width="${w}" stroke-linejoin="round" opacity="${dim ? 0.12 : 1}" data-team="${id}" class="retro-line"/>`;
+      // Segments that end on an estimated week are dashed; recorded ones are solid.
+      for (let i = 1; i < n; i++) {
+        const dash = isApprox(i) || isApprox(i - 1);
+        svg += `<line x1="${x(i - 1).toFixed(1)}" y1="${y(valueAt(id, i - 1)).toFixed(1)}" x2="${x(i).toFixed(1)}" y2="${y(valueAt(id, i)).toFixed(1)}" stroke="${colorOf[id]}" stroke-width="${w}" stroke-linecap="round"${dash ? ' stroke-dasharray="5 4"' : ""} opacity="${dim ? 0.12 : 1}" data-team="${id}" class="retro-line"/>`;
+      }
       const lastI = n - 1;
       svg += `<circle cx="${x(lastI)}" cy="${y(valueAt(id, lastI))}" r="${id === yourId || focus === id ? 4.5 : 3}" fill="${colorOf[id]}" opacity="${dim ? 0.12 : 1}"/>`;
     });
@@ -130,13 +150,13 @@ export function renderRetro(container, data, slug) {
   }
 
   function drawTable() {
-    const n = entry.result.weeks.length + 1;
+    const n = weekList.length + 1;
     const i = state.sel === null ? n - 1 : state.sel;
     const label = labels()[i];
     const rows = teams
       .map((t) => ({ id: t.id, v: valueAt(t.id, i), prev: i > 0 ? valueAt(t.id, i - 1) : null }))
       .sort((a, b) => b.v - a.v);
-    tableEl.innerHTML = `<h3 class="retro-h">${label === "Pre" ? "Before week 1" : label === "Now" ? "Now" : `After week ${entry.result.weeks[i]}`} <span class="muted small">(hover or tap the chart to change week)</span></h3>
+    tableEl.innerHTML = `<h3 class="retro-h">${label === "Pre" ? "Before week 1" : label === "Now" ? "Now" : `After week ${weekList[i]}${isApprox(i) ? " (estimated)" : ""}`} <span class="muted small">(hover or tap the chart to change week)</span></h3>
       <div class="table-wrap"><table class="retro-table"><thead><tr><th>Team</th><th class="r">${state.metric === "bye" ? "Bye" : "Playoff"}%</th><th class="r">Change</th></tr></thead><tbody>${rows
         .map((r) => {
           const d = r.prev === null ? null : r.v - r.prev;
@@ -146,6 +166,10 @@ export function renderRetro(container, data, slug) {
         })
         .join("")}</tbody></table></div>`;
   }
+
+  const approxWeeks = weekList.filter((w) => !entry.snaps[w]);
+  const noteEl = container.querySelector("#retro-approx-note");
+  if (noteEl && approxWeeks.length) noteEl.textContent = `Dashed ${approxWeeks.length === 1 ? "point" : "points"} (${approxWeeks.map((w) => (w === 0 ? "pre-season" : "week " + w)).join(", ")}) predate the recording and are estimated from results alone: the real record so far, with each team's strength taken from its scoring average, pulled toward the league average. `;
 
   function drawAll() { drawLegend(); drawChart(); drawTable(); }
 
