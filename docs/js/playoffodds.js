@@ -97,6 +97,18 @@ function oddsBuildInputs(parts) {
     });
   }
 
+  var setup = oddsSeedingSetup(meta, teams);
+  return {
+    teams: teams, games: games, mean: mean, sd: sd, liveWeek: liveWeek,
+    playoffTeamCount: setup.playoffTeamCount, byeSeeds: setup.byeSeeds,
+    divisionOrder: setup.divisionOrder, seedConfigs: setup.seedConfigs,
+  };
+}
+
+// Seeding rules shared by every sim input: how many make the playoffs, byes,
+// division tiebreak order and per-seed configs (head_to_head skipped).
+function oddsSeedingSetup(meta, teams) {
+  var settings = meta.settings || {};
   var parsed = oddsParseSeedingConfig(settings.seeding_raw);
   var divisionOrder = parsed.divisionOrder.length ? parsed.divisionOrder : ["wins", "points_for"];
   var playoffTeamCount = meta.playoff_team_count;
@@ -111,7 +123,6 @@ function oddsBuildInputs(parts) {
     }
   }
   return {
-    teams: teams, games: games, mean: mean, sd: sd, liveWeek: liveWeek,
     playoffTeamCount: playoffTeamCount, byeSeeds: oddsBracketByeCount(playoffTeamCount),
     divisionOrder: divisionOrder.filter(function (c) { return c !== "head_to_head"; }),
     seedConfigs: seedConfigs,
@@ -252,6 +263,95 @@ function oddsSimulate(inp, adjustments, opts) {
   return out;
 }
 
+// --- retrospective: "what were each team's odds after week N?" ---
+// The nightly pipeline only keeps today's projections, so past weeks can't be
+// replayed with the lineup model. Instead each past week is re-simulated from
+// what was knowable THEN: the real record/PF/PA after that week, and every
+// team's strength = its average score so far (shrunk toward the league
+// average; the prior fades as games accumulate), with one pooled week-to-week
+// spread. Week 0 is the pre-season (everyone equal) and the final entry is the
+// real, lineup-based odds the Standings table shows.
+var ODDS_RETRO_SHRINK_GAMES = 12; // ~ (weekly SD 18 / true team-talent SD 5)^2: one week of scoring says little about strength
+var ODDS_RETRO_SD_PRIOR_GAMES = 12;
+
+function oddsRetrospective(parts, opts) {
+  opts = opts || {};
+  var meta = parts.meta, standings = parts.standings, schedule = parts.schedule, lineups = parts.lineups || {};
+  if (!meta || !standings || !standings.length || !schedule) return null;
+  var regCount = meta.reg_season_count;
+  var playedWeeks = {};
+  schedule.forEach(function (m) { if (m.played && m.week <= regCount) playedWeeks[m.week] = true; });
+  var lastWeek = 0;
+  while (playedWeeks[lastWeek + 1]) lastWeek++;
+  if (lastWeek < 1) return null;
+
+  var teams0 = standings.map(function (s) { return { id: s.team_id, division: s.division }; });
+  var setup = oddsSeedingSetup(meta, teams0);
+  // Priors for week 0 come from today's lineup model (league-average mean / sd).
+  var priorSum = 0, priorN = 0, sdSum = 0, sdN = 0;
+  Object.keys(lineups).forEach(function (id) {
+    var e = lineups[id];
+    if (!e || !e.weeks) return;
+    Object.keys(e.weeks).forEach(function (w) {
+      var we = e.weeks[w];
+      if (we && typeof we.total === "number") { priorSum += we.total; priorN++; if (we.sd) { sdSum += we.sd; sdN++; } }
+    });
+  });
+  var priorMeanFallback = priorN ? priorSum / priorN : 100;
+  var priorSd = sdN ? sdSum / sdN : 20;
+
+  var weeks = [];
+  for (var w = 0; w <= lastWeek; w++) {
+    var recs = {}, scores = {};
+    teams0.forEach(function (t) { recs[t.id] = { wins: 0, pf: 0, pa: 0 }; scores[t.id] = []; });
+    var allScores = [];
+    schedule.forEach(function (m) {
+      if (!m.played || m.week > w || m.week > regCount || !recs[m.home_team_id] || !recs[m.away_team_id]) return;
+      var h = recs[m.home_team_id], a = recs[m.away_team_id];
+      h.pf += m.home_score; h.pa += m.away_score; a.pf += m.away_score; a.pa += m.home_score;
+      if (m.home_score > m.away_score) h.wins += 1; else if (m.away_score > m.home_score) a.wins += 1; else { h.wins += 0.5; a.wins += 0.5; }
+      scores[m.home_team_id].push(m.home_score); scores[m.away_team_id].push(m.away_score);
+      allScores.push(m.home_score, m.away_score);
+    });
+    var leagueMean = allScores.length ? allScores.reduce(function (x, y) { return x + y; }, 0) / allScores.length : priorMeanFallback;
+    var teamMean = {}, resid = 0, dof = 0;
+    teams0.forEach(function (t) {
+      var sc = scores[t.id], sum = sc.reduce(function (x, y) { return x + y; }, 0);
+      teamMean[t.id] = (sum + ODDS_RETRO_SHRINK_GAMES * leagueMean) / (sc.length + ODDS_RETRO_SHRINK_GAMES);
+      if (sc.length > 1) {
+        var m = sum / sc.length;
+        sc.forEach(function (x) { resid += (x - m) * (x - m); });
+        dof += sc.length - 1;
+      }
+    });
+    var sd = Math.sqrt((resid + ODDS_RETRO_SD_PRIOR_GAMES * priorSd * priorSd) / (dof + ODDS_RETRO_SD_PRIOR_GAMES));
+    var inp = {
+      teams: teams0.map(function (t) { return { id: t.id, division: t.division, wins: recs[t.id].wins, pf: recs[t.id].pf, pa: recs[t.id].pa }; }),
+      games: [], mean: {}, sd: {}, liveWeek: null,
+      playoffTeamCount: setup.playoffTeamCount, byeSeeds: setup.byeSeeds, divisionOrder: setup.divisionOrder, seedConfigs: setup.seedConfigs,
+    };
+    teams0.forEach(function (t) { inp.mean[t.id] = {}; inp.sd[t.id] = {}; });
+    schedule.forEach(function (m) {
+      if (m.week <= w || m.week > regCount) return;
+      inp.games.push({ week: m.week, home: m.home_team_id, away: m.away_team_id });
+      [m.home_team_id, m.away_team_id].forEach(function (id) { inp.mean[id][m.week] = teamMean[id]; inp.sd[id][m.week] = sd; });
+    });
+    weeks.push({ week: w, inp: inp });
+  }
+  var iterations = opts.iterations || 5000;
+  var out = { weeks: [], series: {}, now: {}, lastWeek: lastWeek };
+  teams0.forEach(function (t) { out.series[t.id] = []; });
+  // Returns a step function so the UI can compute one week per tick.
+  out.total = weeks.length;
+  out.step = function (i) {
+    var res = oddsSimulate(weeks[i].inp, null, { iterations: iterations, seed: opts.seed || ODDS_DEFAULT_SEED });
+    out.weeks.push(weeks[i].week);
+    teams0.forEach(function (t) { out.series[t.id].push({ playoff: res[t.id].playoff, bye: res[t.id].bye }); });
+  };
+  standings.forEach(function (s) { out.now[s.team_id] = { playoff: s.playoff_odds, bye: s.bye_odds }; });
+  return out;
+}
+
 // Per-week mean shifts for the two teams in a trade, from evaluateTrade*'s
 // weekly deltas. The in-progress current week is NOT shifted - its lineups are
 // already locked, a trade can't change it.
@@ -347,6 +447,7 @@ var FFOdds = {
   buildInputs: oddsBuildInputs, simulate: oddsSimulate, evaluateTrade: oddsEvaluateTrade,
   adjustmentsFromTrade: oddsAdjustmentsFromTrade, scoreTrade: oddsScoreTrade, pickTop: oddsPickTop, parseSeedingConfig: oddsParseSeedingConfig,
   bracketByeCount: oddsBracketByeCount,
+  retrospective: oddsRetrospective,
 };
 if (typeof module !== "undefined" && module.exports) {
   module.exports = FFOdds;

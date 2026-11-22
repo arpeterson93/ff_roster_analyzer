@@ -1644,6 +1644,18 @@ details[open] summary { margin-bottom: 8px; }
 /* ---- Standings > Paths view (docs/js/paths.js) ---- */
 .seg-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 12px; }
 .seg-toggle button { border: 0; background: var(--card); color: var(--ink-700); padding: 6px 16px; font-size: 13px; cursor: pointer; }
+.retro-controls { margin: 4px 0 8px; }
+.retro-svg { width: 100%; height: auto; display: block; }
+.retro-grid { stroke: var(--border); stroke-width: 1; }
+.retro-guide { stroke: var(--ink-700); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.6; }
+.retro-tick { fill: var(--ink-700); font-size: 11px; }
+.retro-legend { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; }
+.retro-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); background: var(--card); color: var(--ink-700); border-radius: 999px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
+.retro-chip.you { font-weight: 700; }
+.retro-chip.off { opacity: 0.4; text-decoration: line-through; }
+.retro .sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
+.retro-h { margin: 8px 0; font-size: 15px; }
+.retro-table .r { text-align: right; }
 .seg-toggle button.active { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .standings-table td.path-link { cursor: pointer; }
 .standings-table td.path-link:hover { text-decoration: underline; }

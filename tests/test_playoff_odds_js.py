@@ -121,3 +121,15 @@ def test_js_mutual_trade_scoring_rules():
     assert c["both_gain"]["rank"] > c["one_loses"]["rank"]
     # Diversity cap: the same incoming player appears at most twice; -Infinity entries dropped.
     assert out["picked"] == [5, 4, 2]
+
+
+@pytest.mark.skipif(NODE is None, reason="no node binary available")
+def test_js_retrospective_each_week_fills_the_playoff_field():
+    """Every week's odds across the league sum to the playoff field size; week 0 is
+    a pre-season coin-flip-ish spread and the sample team's odds move week to week."""
+    out = json.loads(subprocess.run([NODE, str(ROOT / "tests" / "js" / "run_odds_retro.js"), str(ROOT / "docs" / "data" / "o-league")],
+                                    capture_output=True, text=True, check=True).stdout)
+    assert out["weeks"] == list(range(out["lastWeek"] + 1))
+    for s in out["sums"]:
+        assert s == pytest.approx(out["playoffCount"], abs=1e-6)
+    assert len(set(out["sample"])) > 1

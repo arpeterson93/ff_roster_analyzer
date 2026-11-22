@@ -2,6 +2,7 @@ import { fmt, escapeHtml, getYourTeam } from "./state.js";
 import { colorForRatio, teamLabel } from "./colors.js";
 import { scoreOf } from "./schedule.js";
 import { renderPaths } from "./paths.js";
+import { renderRetro } from "./oddsretro.js";
 
 // Sort indicator + clickable <th> - same tiny local convention matchups.js's
 // own sortTh/toggleSort/sortRows twin uses (kept as a self-contained copy
@@ -107,6 +108,7 @@ export function renderStandings(container, data, slug) {
   container.innerHTML = `<div class="seg-toggle" role="tablist">
       <button data-view="table" class="${view === "table" ? "active" : ""}">Table</button>
       <button data-view="paths" class="${view === "paths" ? "active" : ""}">Paths</button>
+      <button data-view="retro" class="${view === "retro" ? "active" : ""}">Retrospective</button>
     </div><div id="standings-body"></div>`;
   container.querySelectorAll(".seg-toggle button").forEach((b) =>
     b.addEventListener("click", () => {
@@ -116,6 +118,7 @@ export function renderStandings(container, data, slug) {
   );
   const body = container.querySelector("#standings-body");
   if (view === "paths") renderPaths(body, data, slug);
+  else if (view === "retro") renderRetro(body, data, slug);
   else renderStandingsTable(body, data, slug, (teamId) => {
     viewBySlug.set(slug, "paths");
     renderStandings(container, data, slug);
