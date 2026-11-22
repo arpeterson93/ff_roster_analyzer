@@ -70,7 +70,7 @@ def fetch(session: requests.Session, url: str, base_params: dict, views: list[st
     return None, -1
 
 
-def pull_season(session, league_id: int, season: int, current_season: int, with_rosters: bool) -> dict:
+def pull_season(session, league_id: int, season: int, current_season: int, with_rosters: bool, with_activity: bool = False) -> dict:
     url, base = season_url(league_id, season, current_season)
     out: dict = {"season": season, "status": "ok"}
 

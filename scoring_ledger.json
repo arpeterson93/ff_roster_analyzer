@@ -5,7 +5,7 @@
   },
   "PTD": {
     "status": "good",
-    "comment": "Only include leagues with 4"
+    "comment": "Only include leagues with 4-6"
   },
   "2PR": {
     "status": "good",
@@ -108,55 +108,55 @@
     "comment": ""
   },
   "P400": {
-    "status": "bad",
+    "status": "good",
     "comment": ""
   },
   "RY200": {
-    "status": "bad",
+    "status": "good",
     "comment": ""
   },
   "REY200": {
-    "status": "bad",
+    "status": "good",
     "comment": ""
   },
   "RY100": {
-    "status": "bad",
+    "status": "good",
     "comment": ""
   },
   "REY100": {
-    "status": "bad",
+    "status": "good",
     "comment": ""
   },
   "FGM0": {
-    "status": "bad",
+    "status": "good",
     "comment": ""
   },
   "P300": {
-    "status": "bad",
+    "status": "good",
     "comment": ""
   },
   "RTD40": {
-    "status": "bad",
+    "status": "good",
     "comment": ""
   },
   "RETD50": {
-    "status": "bad",
+    "status": "good",
     "comment": ""
   },
   "PTD40": {
-    "status": "bad",
+    "status": "good",
     "comment": ""
   },
   "RETD40": {
-    "status": "bad",
+    "status": "good",
     "comment": ""
   },
   "RTD50": {
-    "status": "bad",
+    "status": "good",
     "comment": ""
   },
   "PTD50": {
-    "status": "bad",
+    "status": "good",
     "comment": ""
   },
   "FGM40": {
