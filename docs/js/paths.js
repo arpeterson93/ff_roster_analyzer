@@ -221,7 +221,8 @@ export function pfRace(sim, teamId, mask) {
   const others = sim.teamIds.filter((t) => t !== teamId);
   let count = 0, top = 0, viaLast = 0, outside = 0;
   const bars = [], mine = [], gaps = [];
-  const rivals = new Map();
+  const holders = new Map(); // team -> sims (of those where I'm outside the top seeds) in which it takes the last seed
+  const teamPf = new Map(others.map((t) => [t, []])), teamGap = new Map(others.map((t) => [t, []]));
   for (let i = 0; i < sim.n; i++) {
     if (!mask[i]) continue;
     count++;
@@ -229,6 +230,13 @@ export function pfRace(sim, teamId, mask) {
     if (s >= 1 && s < last) { top++; continue; }
     outside++;
     if (s === last) viaLast++;
+    let holder = s === last ? teamId : null;
+    for (const t of others) {
+      const pfv = sim.pf.get(t)[i];
+      teamPf.get(t).push(pfv); teamGap.get(t).push(pfv - myPf[i]);
+      if (holder === null && sim.seeds.get(t)[i] === last) holder = t;
+    }
+    if (holder !== null) holders.set(holder, (holders.get(holder) || 0) + 1);
     let barPf = -Infinity, barTeam = null;
     for (const t of others) {
       const ts = sim.seeds.get(t)[i];
@@ -238,9 +246,6 @@ export function pfRace(sim, teamId, mask) {
     }
     if (barTeam === null) continue;
     bars.push(barPf); mine.push(myPf[i]); gaps.push(barPf - myPf[i]);
-    const r = rivals.get(barTeam) || { team_id: barTeam, n: 0, finalPf: [], gap: [] };
-    r.n++; r.finalPf.push(barPf); r.gap.push(barPf - myPf[i]);
-    rivals.set(barTeam, r);
   }
   const base = sim.basePf.get(teamId);
   const myGames = sim.games.filter((g) => g.home === teamId || g.away === teamId).length;
@@ -248,8 +253,12 @@ export function pfRace(sim, teamId, mask) {
     count, outside, top: count ? top / count : null, viaLast: count ? viaLast / count : null,
     madeWhenOutside: outside ? viaLast / outside : null,
     bar: summarize(bars), mine: summarize(mine), basePf: base, myGames,
-    rivals: [...rivals.values()]
-      .map((r) => ({ team_id: r.team_id, share: r.n / (bars.length || 1), basePf: sim.basePf.get(r.team_id), finalPf: summarize(r.finalPf), gap: summarize(r.gap) }))
+    // Everyone's share of seed `last` across the sims where I'm outside the top seeds (me included, so the shares sum to 100%).
+    race: [teamId, ...others]
+      .map((t) => ({
+        team_id: t, share: outside ? (holders.get(t) || 0) / outside : 0, basePf: sim.basePf.get(t),
+        finalPf: t === teamId ? summarize(mine) : summarize(teamPf.get(t)), gap: t === teamId ? null : summarize(teamGap.get(t)),
+      }))
       .sort((a, b) => b.share - a.share),
   };
 }
@@ -375,16 +384,16 @@ export function renderPaths(container, data, slug, { teamId } = {}) {
       const liveCell = (id, base) => (anyLive
         ? `<td title="Points for in finished games plus points scored so far this week">${fmt(withLive(id, base), 1)} <span class="muted small">(${id === tid ? "you" : signed(withLive(id, base) - myLive) + " vs you"})</span></td>`
         : "");
-      const youRow = `
-        <tr class="your-team-row"><td><strong>${escapeHtml(teamName(tid))}</strong> <span class="muted small">(you)</span></td><td class="muted">–</td>
-          <td>${fmt(pfr.basePf, 1)}</td>${liveCell(tid, pfr.basePf)}
-          <td>${fmt(pfr.mine.p50, 0)}</td>
-          <td class="muted">–</td></tr>`;
-      const rivalRows = youRow + pfr.rivals.slice(0, 6).map((r) => `
-        <tr><td>${escapeHtml(teamName(r.team_id))}</td><td>${pct(r.share)}</td>
-          <td>${fmt(r.basePf, 1)}${anyLive ? "" : ` <span class="muted small">(${signed(r.basePf - pfr.basePf)} vs you)</span>`}</td>${liveCell(r.team_id, r.basePf)}
+      // Everyone's share of seed N, you included (shares add up to 100% across the sims where you miss the top seeds).
+      const raceTeams = pfr.race.filter((r, i) => r.team_id === tid || (i < 7 && r.share >= 0.005));
+      const rivalRows = raceTeams.map((r) => {
+        const me = r.team_id === tid;
+        return `
+        <tr${me ? ' class="your-team-row"' : ""}><td>${me ? `<strong>${escapeHtml(teamName(r.team_id))}</strong> <span class="muted small">(you)</span>` : escapeHtml(teamName(r.team_id))}</td><td>${pct(r.share)}</td>
+          <td>${fmt(r.basePf, 1)}${anyLive || me ? "" : ` <span class="muted small">(${signed(r.basePf - pfr.basePf)} vs you)</span>`}</td>${liveCell(r.team_id, r.basePf)}
           <td>${fmt(r.finalPf.p50, 0)}</td>
-          <td title="Median final-PF gap on you in the sims where this team is the bar; negative = you finished ahead of them but still missed because someone else got in">${r.gap.p50 >= 0 ? "+" : "−"}${fmt(Math.abs(r.gap.p50), 0)}</td></tr>`).join("");
+          ${me ? '<td class="muted">–</td>' : `<td title="Median points they finish ahead of (+) or behind (−) you, across the sims where you miss the top ${lastSeed - 1}">${r.gap.p50 >= 0 ? "+" : "−"}${fmt(Math.abs(r.gap.p50), 0)}</td>`}</tr>`;
+      }).join("");
       pfCard = `
       <div class="card">
         <h2>The points-for race <span class="muted small">(seed ${lastSeed} goes to the most points scored outside seeds 1-${lastSeed - 1}, not to the best record)</span></h2>
@@ -393,8 +402,8 @@ export function renderPaths(container, data, slug, { teamId } = {}) {
         ${viaPfShare >= 0.4 ? `<p class="small"><strong>This is mostly a points race for ${escapeHtml(teamName(tid))}.</strong> Wins still matter, but mainly because they come with the points that clear the bar, and because they shape who else lands in the top ${lastSeed - 1}.</p>` : ""}
         <p>The bar moves from sim to sim with who occupies seeds 1-${lastSeed - 1}: projected median <strong>${fmt(pfr.bar.p50, 0)}</strong> final points (middle half ${fmt(pfr.bar.p25, 0)}-${fmt(pfr.bar.p75, 0)}).
           You have <strong>${fmt(pfr.basePf, 1)}</strong> in finished games${anyLive ? ` (<strong>${fmt(myLive, 1)}</strong> counting this week's live points)` : ""}, so you need roughly <strong>${fmt(Math.max(0, need), 0)}</strong> more over your last ${gamesLeft} game${gamesLeft === 1 ? "" : "s"}${perGame !== null ? ` (<strong>${fmt(Math.max(0, perGame), 1)}</strong>/game; the sim has you scoring ${fmt(projPerGame, 1)}/game)` : ""}.</p>
-        <h3>You vs. who you have to pass</h3>
-        <div class="table-wrap"><table class="path-ladder"><thead><tr><th>Team</th><th title="Share of the sims where you're outside the top ${lastSeed - 1} that this team is the highest-scoring team you must beat">Is the bar</th><th title="Points for in finished games (what ESPN has recorded)">PF now</th>${anyLive ? `<th title="Finished games plus points scored so far in games in progress">PF + live</th>` : ""}<th title="Projected final points for, median across the sims (includes this week's games and the rest of the season)">Projected final PF</th><th title="Median points they finish ahead of you, when they're the bar">Gap on you</th></tr></thead><tbody>${rivalRows}</tbody></table></div>
+        <h3>Who takes seed ${lastSeed} when you miss the top ${lastSeed - 1}</h3>
+        <div class="table-wrap"><table class="path-ladder"><thead><tr><th>Team</th><th title="Of the sims where you miss the top ${lastSeed - 1}, how often this team ends up with seed ${lastSeed} (the most points among teams outside the top ${lastSeed - 1}). Adds up to 100% including you.">Takes seed ${lastSeed}</th><th title="Points for in finished games (what ESPN has recorded)">PF now</th>${anyLive ? `<th title="Finished games plus points scored so far in games in progress">PF + live</th>` : ""}<th title="Projected final points for, median across the sims (includes this week's games and the rest of the season)">Projected final PF</th><th title="Median points they finish ahead of (+) or behind (−) you, in the sims where you miss the top ${lastSeed - 1}">Gap on you</th></tr></thead><tbody>${rivalRows}</tbody></table></div>
         <p class="small muted">Computed from the same sims, so it follows your what-if picks above. Tiebreaks beyond points scored (points against) are included in the sim; head-to-head is not.</p>
       </div>`;
     }
