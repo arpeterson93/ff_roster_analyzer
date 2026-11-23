@@ -123,13 +123,36 @@ def test_js_mutual_trade_scoring_rules():
     assert out["picked"] == [5, 4, 2]
 
 
+def _synthetic_league(tmp_path, teams=8, weeks_played=5, reg=9):
+    """A small round-robin league with 4 played weeks' worth of varied scores, written as the
+    four JSON files run_odds_retro.js reads. (CI runs pytest before docs/data is restored, so
+    the test can't depend on real site data.)"""
+    ids = list(range(1, teams + 1))
+    sched = []
+    for w in range(1, reg + 1):
+        order = ids[w % teams:] + ids[:w % teams]
+        for i in range(teams // 2):
+            h, a = order[i], order[teams - 1 - i]
+            played = w <= weeks_played
+            sched.append({"week": w, "home_team_id": h, "away_team_id": a, "played": played,
+                          "home_score": 90 + (h * 7 + w * 3) % 40 if played else None,
+                          "away_score": 90 + (a * 11 + w * 5) % 40 if played else None})
+    standings = [{"team_id": t, "division": "East" if t <= teams // 2 else "West", "playoff_odds": 0.5, "bye_odds": 0.1} for t in ids]
+    meta = {"reg_season_count": reg, "playoff_team_count": 4, "settings": {"division_winners_first": False}}
+    for name, obj in (("meta", meta), ("standings", standings), ("schedule", sched), ("lineups", {})):
+        (tmp_path / f"{name}.json").write_text(json.dumps(obj))
+    return tmp_path
+
+
 @pytest.mark.skipif(NODE is None, reason="no node binary available")
-def test_js_retrospective_each_week_fills_the_playoff_field():
-    """Every week's odds across the league sum to the playoff field size; week 0 is
-    a pre-season coin-flip-ish spread and the sample team's odds move week to week."""
-    out = json.loads(subprocess.run([NODE, str(ROOT / "tests" / "js" / "run_odds_retro.js"), str(ROOT / "docs" / "data" / "o-league")],
+def test_js_retrospective_each_week_fills_the_playoff_field(tmp_path):
+    """Every week's odds across the league sum to the playoff field size and the sample
+    team's odds move week to week."""
+    d = _synthetic_league(tmp_path)
+    out = json.loads(subprocess.run([NODE, str(ROOT / "tests" / "js" / "run_odds_retro.js"), str(d)],
                                     capture_output=True, text=True, check=True).stdout)
     assert out["weeks"] == list(range(out["lastWeek"] + 1))
+    assert out["lastWeek"] == 5
     for s in out["sums"]:
         assert s == pytest.approx(out["playoffCount"], abs=1e-6)
     assert len(set(out["sample"])) > 1

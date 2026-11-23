@@ -449,6 +449,7 @@ var FFOdds = {
   adjustmentsFromTrade: oddsAdjustmentsFromTrade, scoreTrade: oddsScoreTrade, pickTop: oddsPickTop, parseSeedingConfig: oddsParseSeedingConfig,
   bracketByeCount: oddsBracketByeCount,
   retrospective: oddsRetrospective,
+  seedingSetup: oddsSeedingSetup,
 };
 if (typeof module !== "undefined" && module.exports) {
   module.exports = FFOdds;
