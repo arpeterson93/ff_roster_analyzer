@@ -183,7 +183,11 @@ in a league's YAML to skip it entirely and just use the YAML values.
    o-league    | pa_l5_weight           | 0.5
    o-league    | pa_prior_season_weeks  | 6
    o-league    | division_winners_first | true
+   o-league    | playoff_reseed         | false
    ```
+   `playoff_reseed` (default false) controls the bracket the Title game % / Champ%
+   columns are simulated through: false = a fixed bracket (seed 1 always plays the
+   4/5 winner), true = after round 1 the best remaining seed plays the worst remaining.
    Recognized flat keys are listed in `ingest/settings_sheet.py`'s
    `_SETTINGS_SCHEMA`. An unrecognized key is ignored with a warning, not a
    pipeline failure.

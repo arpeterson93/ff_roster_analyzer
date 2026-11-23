@@ -185,6 +185,70 @@ def bracket_bye_count(playoff_team_count: int) -> int:
     return bracket_size - playoff_team_count
 
 
+def bracket_rounds(playoff_team_count: int) -> int:
+    """Number of single-elimination rounds for the playoff field (6 teams -> an
+    8-slot bracket -> 3 rounds: quarterfinal, semifinal, championship)."""
+    size, rounds = 1, 0
+    while size < playoff_team_count:
+        size *= 2
+        rounds += 1
+    return rounds
+
+
+def _bracket_slots(playoff_team_count: int) -> list[int | None]:
+    """Round-1 slots in bracket-tree order (adjacent slots meet, winners of
+    adjacent pairs meet next): seed s sits across from seed size+1-s, and a
+    seed above the field size is an empty slot (its opponent has a bye)."""
+    size = 1
+    while size < playoff_team_count:
+        size *= 2
+    order = [1]
+    while len(order) < size:
+        m = len(order) * 2
+        order = [x for sd in order for x in (sd, m + 1 - sd)]
+    return [sd if sd <= playoff_team_count else None for sd in order]
+
+
+def play_bracket(seeds: list[int], scores: list[dict[int, float]], reseed: bool, fixed: list[dict[frozenset, int]] | None = None):
+    """One simulated playoff bracket. `seeds` = team indices in seed order;
+    `scores[r][team]` = that team's score in round r; `fixed[r]` = actual
+    results already played ({frozenset({a, b}): winner}) that override the
+    scores. Round 1 always follows the standard bracket (1 vs the last seed,
+    and so on, byes for the top seeds when the field is short of a power of
+    2). Later rounds either follow the bracket tree (reseed=False) or - the
+    "reseed" rule some leagues use - pair the best remaining seed with the
+    worst remaining, the next best with the next worst, and so on.
+    Returns (finalists, champion), as team indices (or (None, None))."""
+    if not seeds:
+        return [], None
+    seed_of = {t: k for k, t in enumerate(seeds)}
+    slots = [None if sd is None else seeds[sd - 1] for sd in _bracket_slots(len(seeds))]
+    alive = list(slots)
+    rounds = bracket_rounds(len(seeds))
+    finalists: list[int] = []
+    for r in range(rounds):
+        if r > 0 and reseed:
+            teams = sorted((t for t in alive if t is not None), key=lambda t: seed_of[t])
+            alive = [x for k in range(len(teams) // 2) for x in (teams[k], teams[len(teams) - 1 - k])]
+        nxt = []
+        for k in range(0, len(alive), 2):
+            a, b = alive[k], alive[k + 1]
+            if a is None or b is None:
+                nxt.append(a if b is None else b)
+                continue
+            winner = fixed[r].get(frozenset((a, b))) if fixed and r < len(fixed) else None
+            if winner is None:
+                sa, sb = scores[r][a], scores[r][b]
+                winner = a if (sa > sb or (sa == sb and seed_of[a] < seed_of[b])) else b
+            nxt.append(winner)
+        alive = nxt
+        if r == rounds - 2:  # the two teams left going into the final
+            finalists = [t for t in alive if t is not None]
+        if rounds == 1:
+            finalists = [t for t in slots if t is not None]
+    return finalists, alive[0]
+
+
 def simulate_playoffs(
     teams: list[TeamState],
     remaining_matchups: list[RemainingMatchup],
@@ -199,8 +263,19 @@ def simulate_playoffs(
     paths: dict | None = None,
     seed_configs: dict[int, "SeedConfig"] | None = None,
     division_tiebreak_order: list[str] | None = None,
+    playoff_weeks: list[int] | None = None,
+    playoff_reseed: bool = False,
+    playoff_results: dict[tuple[int, frozenset], int] | None = None,
 ) -> dict[int, dict]:
-    """paths: optional out-parameter. When a dict is passed it is filled with
+    """playoff_weeks: the NFL week of each playoff round, in order (e.g. [15, 16, 17]
+    for a 6-team field). When given, each simulated season's bracket is played out
+    on the same per-week team mean/sd and the result adds `title_game_odds` (reach the
+    championship game) and `title_odds` (win it) per team. playoff_reseed: pair the
+    best remaining seed with the worst after round 1 instead of following a fixed
+    bracket tree. playoff_results: playoff games already played, {(week,
+    frozenset({team_a, team_b})): winner team_id}, which override the simulated score.
+
+    paths: optional out-parameter. When a dict is passed it is filled with
     the raw per-iteration outcomes the Playoff Paths view needs ("team_ids",
     "base_wins", "games" as (week, home_id, away_id, home_won bool array) and
     "seed_of", an iterations x teams int array, 0 = missed the playoffs) -
@@ -263,6 +338,25 @@ def simulate_playoffs(
             game_outcomes.append((week, m.home_team_id, m.away_team_id, home_wins))
             wins[:, hi] += home_wins * 1.0 + tie * 0.5
             wins[:, ai] += away_wins * 1.0 + tie * 0.5
+
+    # Playoff-round scores are drawn AFTER every regular-season game so adding the
+    # playoff rounds leaves the regular-season outcomes (and so every existing odds) untouched.
+    round_scores: list[np.ndarray] = []
+    for week in (playoff_weeks or [])[: bracket_rounds(playoff_team_count)]:
+        known = {t: [team_week_mean[(t, w)] for w in sorted({k[1] for k in team_week_mean}) if (t, w) in team_week_mean] for t in team_ids}
+        means = np.array([team_week_mean.get((t, week), float(np.mean(known[t])) if known[t] else 0.0) for t in team_ids], dtype=float)
+        known_sd = [v for v in team_week_sd.values() if v]
+        sds = np.array([max(team_week_sd.get((t, week), float(np.mean(known_sd)) if known_sd else 0.0), 1e-9) for t in team_ids], dtype=float)
+        round_scores.append(rng.normal(means, sds, size=(iterations, n)))
+    fixed_by_round: list[dict[frozenset, int]] = []
+    for week in (playoff_weeks or [])[: len(round_scores)]:
+        fixed_by_round.append({
+            frozenset(idx[t] for t in pair): idx[winner]
+            for (w, pair), winner in (playoff_results or {}).items()
+            if w == week and all(t in idx for t in pair) and winner in idx
+        })
+    title_game = np.zeros((iterations, n), dtype=bool)
+    champion = np.zeros((iterations, n), dtype=bool)
 
     division_of = [t.division_id for t in teams]
 
@@ -333,6 +427,14 @@ def simulate_playoffs(
             seed_of[it, team_i] = s_
         for team_i in div_winners:
             division_winner[it, team_i] = True
+        if round_scores:
+            finalists, champ = play_bracket(
+                seeds, [{i: float(rs[it, i]) for i in seeds} for rs in round_scores], playoff_reseed, fixed_by_round,
+            )
+            for team_i in finalists:
+                title_game[it, team_i] = True
+            if champ is not None:
+                champion[it, champ] = True
 
     if paths is not None:
         paths.update(
@@ -357,6 +459,8 @@ def simulate_playoffs(
             "playoff_odds": float(np.mean(made_playoffs[:, i])),
             "bye_odds": float(np.mean(np.isin(seed_of[:, i], list(range(1, bye_seeds + 1))))),
             "division_win_odds": float(np.mean(division_winner[:, i])),
+            "title_game_odds": float(np.mean(title_game[:, i])) if round_scores else None,
+            "title_odds": float(np.mean(champion[:, i])) if round_scores else None,
             "seed_probs": seed_probs,
             "iterations": iterations,
         }

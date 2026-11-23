@@ -30,6 +30,9 @@ _SETTINGS_SCHEMA: dict[str, tuple[tuple[str, ...], type]] = {
     "pa_l5_weight": (("valuation", "pa_l5_weight"), float),
     "pa_prior_season_weeks": (("valuation", "pa_prior_season_weeks"), int),
     "division_winners_first": (("sim", "division_winners_first"), lambda v: str(v).strip().lower() in ("true", "1", "yes")),
+    # Reseed after the first playoff round (best remaining seed plays the worst remaining)
+    # instead of following a fixed bracket - see engine.standings.play_bracket.
+    "playoff_reseed": (("sim", "playoff_reseed"), lambda v: str(v).strip().lower() in ("true", "1", "yes")),
     # Which source feeds ROS/weekly player projections - see
     # ingest/sleeper_client.py. Lives at cfg's top level (not nested under
     # valuation/sim) since engine/pipeline.py reads it directly off cfg, not

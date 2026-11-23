@@ -7,6 +7,8 @@ from engine.standings import (
     SeedTeamState,
     TeamState,
     bracket_bye_count,
+    bracket_rounds,
+    play_bracket,
     compute_current_seeds,
     matchup_win_probability,
     simulate_playoffs,
@@ -300,3 +302,73 @@ def test_encode_paths_carries_final_pf_and_last_seed_rule():
     assert np.all(pf == 300.0)  # team 3 has no game left: its final PF is its current PF
     pf1 = np.frombuffer(base64.b64decode(enc["pf"]["1"]), dtype="<u2") / 10.0
     assert np.all(pf1 > 100.0) and np.allclose(pf1, paths["pf"][:, 0], atol=0.051)
+
+
+def _scores(*rounds):
+    return [dict(enumerate(r)) for r in rounds]
+
+
+def test_bracket_rounds():
+    assert [bracket_rounds(n) for n in (1, 2, 4, 6, 8, 9)] == [0, 1, 2, 3, 3, 4]
+
+
+def test_fixed_bracket_six_teams_follows_the_tree():
+    # Team i has seed i+1. Round 1: 3v6, 4v5 (byes for 1, 2). Fixed tree: 1 meets the 4/5 winner, 2 meets the 3/6 winner.
+    # Make seed 6 (idx 5) and seed 5 (idx 4) win round 1; then 1 vs 5 and 2 vs 6.
+    r1 = [0, 0, 1, 1, 9, 9]           # idx5 beats idx2, idx4 beats idx3
+    r2 = [9, 1, 0, 0, 5, 9]           # idx0 beats idx4; idx5 beats idx1
+    r3 = [9, 0, 0, 0, 0, 5]           # final: idx0 vs idx5 -> idx0
+    finalists, champ = play_bracket(list(range(6)), _scores(r1, r2, r3), reseed=False)
+    assert sorted(finalists) == [0, 5] and champ == 0
+
+
+def test_reseed_pairs_best_remaining_with_worst_remaining():
+    # Same round 1 survivors (idx 4 and 5 beat 3 and 2). Reseeded round 2: seed1 (idx0) plays the WORST remaining (idx5),
+    # seed2 (idx1) plays idx4 - the fixed tree would have been 0v4 and 1v5.
+    r1 = [0, 0, 1, 1, 9, 9]
+    r2 = [9, 0, 0, 0, 1, 5]           # idx0 beats idx5; idx1 vs idx4 -> idx4 higher (1 > 0)
+    r3 = [9, 0, 0, 0, 1, 0]           # final idx0 vs idx4 -> idx0
+    finalists, champ = play_bracket(list(range(6)), _scores(r1, r2, r3), reseed=True)
+    assert sorted(finalists) == [0, 4] and champ == 0
+    fixed_finalists, _ = play_bracket(list(range(6)), _scores(r1, r2, r3), reseed=False)
+    assert sorted(fixed_finalists) != sorted(finalists)
+
+
+def test_bracket_actual_results_override_scores():
+    r1 = [0, 0, 1, 1, 9, 9]
+    finalists, champ = play_bracket(
+        list(range(4)), _scores([5, 0, 0, 5], [9, 0, 0, 0]), reseed=False, fixed=[{frozenset((0, 3)): 3}, {}],
+    )
+    assert champ in (3, 1, 2) and 0 not in finalists  # seed 1 was knocked out by the recorded result
+
+
+def _six_team_league():
+    teams = [TeamState(team_id=i, division_id=i % 2, wins=0, losses=0, ties=0, points_for=0.0, points_against=0.0) for i in range(1, 7)]
+    mean = {(t.team_id, w): 100.0 + t.team_id * 3 for t in teams for w in (1, 2, 3, 4)}
+    sd = {k: 15.0 for k in mean}
+    rem = [RemainingMatchup(week=1, home_team_id=1, away_team_id=2), RemainingMatchup(week=1, home_team_id=3, away_team_id=4), RemainingMatchup(week=1, home_team_id=5, away_team_id=6)]
+    return teams, rem, mean, sd
+
+
+def test_simulate_playoffs_title_odds_sum_to_one_and_leave_other_odds_untouched():
+    teams, rem, mean, sd = _six_team_league()
+    kw = dict(iterations=4000, seed=7, playoff_team_count=4, division_winners_first=False)
+    base = simulate_playoffs(teams, rem, mean, sd, **kw)
+    out = simulate_playoffs(teams, rem, mean, sd, playoff_weeks=[2, 3], **kw)
+    assert sum(v["title_odds"] for v in out.values()) == pytest.approx(1.0)
+    assert sum(v["title_game_odds"] for v in out.values()) == pytest.approx(2.0)
+    assert all(v["title_odds"] <= v["title_game_odds"] <= v["playoff_odds"] + 1e-9 for v in out.values())
+    for tid in base:  # regular-season odds are identical with or without the bracket
+        assert out[tid]["playoff_odds"] == base[tid]["playoff_odds"] and out[tid]["seed_probs"] == base[tid]["seed_probs"]
+    assert base[1]["title_odds"] is None
+    reseeded = simulate_playoffs(teams, rem, mean, sd, playoff_weeks=[2, 3], playoff_reseed=True, **kw)
+    assert sum(v["title_odds"] for v in reseeded.values()) == pytest.approx(1.0)
+
+
+def test_simulate_playoffs_recorded_playoff_result_is_respected():
+    teams, rem, mean, sd = _six_team_league()
+    kw = dict(iterations=2000, seed=3, playoff_team_count=4, division_winners_first=False, playoff_weeks=[2, 3])
+    # Pin round 1 (week 2) for every possible pair so the first-round losers can never win the title.
+    pins = {(2, frozenset((a, b))): a for a in range(1, 7) for b in range(1, 7) if a != b and a < b}
+    out = simulate_playoffs(teams, rem, mean, sd, playoff_results=pins, **kw)
+    assert sum(v["title_odds"] for v in out.values()) == pytest.approx(1.0)

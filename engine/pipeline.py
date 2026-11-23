@@ -1986,6 +1986,7 @@ def run_league(
             "pa_l5_weight": val_cfg["pa_l5_weight"],
             "pa_prior_season_weeks": val_cfg["pa_prior_season_weeks"],
             "division_winners_first": sim_cfg["division_winners_first"],
+            "playoff_reseed": bool(sim_cfg.get("playoff_reseed", False)),
             "seeding_raw": sim_cfg.get("seeding_raw", {}),
             "projection_source": projection_source,
         },

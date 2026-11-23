@@ -97,6 +97,8 @@ function valueFor(row, key) {
   if (key === "playoff") return row.playoff_odds;
   if (key === "bye") return row.bye_odds;
   if (key === "divwin") return row.division_win_odds;
+  if (key === "titlegame") return row.title_game_odds;
+  if (key === "champ") return row.title_odds;
   return null;
 }
 
@@ -140,6 +142,9 @@ function renderStandingsTable(container, data, slug, openPaths) {
   // _thru_week_standings) - absent from older builds and once the regular
   // season is over, in which case the whole block is simply not drawn.
   const thruWeek = allRows.find((r) => r.thru)?.thru.week ?? null;
+  // Championship odds come from the playoff-bracket sim; older builds don't have them.
+  const hasTitle = allRows.some((r) => r.title_odds !== null && r.title_odds !== undefined);
+  const titleCell = (v) => (v === null || v === undefined ? "–" : `${fmt(v * 100, 0)}%`);
 
   // Seed one week out, plus how far it moved from today's seed (lower seed
   // number = better, so a smaller number is an improvement).
@@ -180,6 +185,7 @@ function renderStandingsTable(container, data, slug, openPaths) {
           <td>${fmt(s.playoff_odds * 100, 0)}%</td>
           <td>${fmt(s.bye_odds * 100, 0)}%</td>
           <td>${fmt(s.division_win_odds * 100, 0)}%</td>
+          ${hasTitle ? `<td>${titleCell(s.title_game_odds)}</td><td>${titleCell(s.title_odds)}</td>` : ""}
           <td>${seedBar(s.seed_probs)}</td>
         </tr>`;
       })
@@ -202,6 +208,7 @@ function renderStandingsTable(container, data, slug, openPaths) {
                 ${sortTh("Playoff%", "playoff", sortState, ` rowspan="2"`)}
                 ${sortTh("Bye%", "bye", sortState, ` rowspan="2"`)}
                 ${sortTh("Div win%", "divwin", sortState, ` rowspan="2"`)}
+                ${hasTitle ? `${sortTh("Title game%", "titlegame", sortState, ` rowspan="2" title="Chance to reach the championship game (simulated through the playoff bracket)"`)}${sortTh("Champ%", "champ", sortState, ` rowspan="2" title="Chance to win the championship (simulated through the playoff bracket; set the reseed rule in Settings)"`)}` : ""}
                 <th rowspan="2">Seed dist.</th>
               </tr>
               <tr>

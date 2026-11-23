@@ -185,6 +185,8 @@ def run_league(cfg: dict, data_root: Path, id_map: ids_mod.IdMap, remaining_frac
     sim_cfg = dict(cfg["sim"])
     if "division_winners_first" in meta_settings:
         sim_cfg["division_winners_first"] = meta_settings["division_winners_first"]
+    if "playoff_reseed" in meta_settings:
+        sim_cfg["playoff_reseed"] = meta_settings["playoff_reseed"]
     if meta_settings.get("seeding_raw"):
         sim_cfg["seeding_raw"] = meta_settings["seeding_raw"]
 

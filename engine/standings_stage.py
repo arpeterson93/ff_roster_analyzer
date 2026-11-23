@@ -13,6 +13,7 @@ from engine.standings import (
     SeedConfig,
     SeedTeamState,
     TeamState,
+    bracket_rounds,
     compute_current_seeds,
     matchup_win_probability,
     simulate_playoffs,
@@ -186,12 +187,20 @@ def standings_outputs(
             n: SeedConfig(division_priority=sim_cfg["division_winners_first"] and n <= division_count, tiebreak_order=["wins", "points_for"])
             for n in range(1, settings.playoff_team_count + 1)
         }
+    # Playoff rounds: one NFL week each, straight after the regular season. Games already played
+    # (once the bracket is underway) pin their real winners.
+    playoff_weeks = [settings.reg_season_count + r + 1 for r in range(bracket_rounds(settings.playoff_team_count))]
+    playoff_results: dict[tuple[int, frozenset], int] = {}
+    for m in espn_matchups:
+        if m.played and m.week in playoff_weeks and m.home_score is not None and m.away_score is not None and m.home_score != m.away_score:
+            playoff_results[(m.week, frozenset((m.home_team_id, m.away_team_id)))] = m.home_team_id if m.home_score > m.away_score else m.away_team_id
     raw_paths: dict | None = {} if paths_out is not None else None
     sim_results = simulate_playoffs(
         team_states, remaining, sim_team_week_mean, sim_team_week_sd,
         iterations=sim_cfg["iterations"], seed=sim_cfg["seed"],
         playoff_team_count=settings.playoff_team_count, division_winners_first=sim_cfg["division_winners_first"],
         paths=raw_paths, seed_configs=seed_configs, division_tiebreak_order=division_tiebreak_order,
+        playoff_weeks=playoff_weeks, playoff_reseed=bool(sim_cfg.get("playoff_reseed", False)), playoff_results=playoff_results,
     )
     if paths_out is not None:
         paths_out.update(encode_paths(raw_paths))
@@ -235,6 +244,7 @@ def standings_outputs(
                 "division": settings.divisions.get(t.division_id, str(t.division_id)),
                 "expected_wins": s["expected_wins"], "playoff_odds": s["playoff_odds"], "bye_odds": s["bye_odds"],
                 "division_win_odds": s["division_win_odds"], "seed_probs": s["seed_probs"], "iterations": s["iterations"],
+                "title_game_odds": s["title_game_odds"], "title_odds": s["title_odds"],
             }
         )
 
