@@ -360,9 +360,29 @@ export function renderPaths(container, data, slug, { teamId } = {}) {
       const projMine = pfr.mine.p50 - pfr.basePf;
       const perGame = gamesLeft ? need / gamesLeft : null;
       const projPerGame = gamesLeft ? projMine / gamesLeft : null;
-      const rivalRows = pfr.rivals.slice(0, 6).map((r) => `
+      // Points scored so far in games still in progress (schedule.json carries them on the live rows;
+      // ESPN's own points_for only adds a week once it is over).
+      const liveBy = new Map();
+      (data.schedule || []).forEach((m) => {
+        if (!m.live) return;
+        liveBy.set(m.home_team_id, m.home_score || 0);
+        liveBy.set(m.away_team_id, m.away_score || 0);
+      });
+      const anyLive = liveBy.size > 0;
+      const withLive = (id, base) => base + (liveBy.get(id) || 0);
+      const myLive = withLive(tid, pfr.basePf);
+      const signed = (v) => `${v >= 0 ? "+" : "−"}${fmt(Math.abs(v), 1)}`;
+      const liveCell = (id, base) => (anyLive
+        ? `<td title="Points for in finished games plus points scored so far this week">${fmt(withLive(id, base), 1)} <span class="muted small">(${id === tid ? "you" : signed(withLive(id, base) - myLive) + " vs you"})</span></td>`
+        : "");
+      const youRow = `
+        <tr class="your-team-row"><td><strong>${escapeHtml(teamName(tid))}</strong> <span class="muted small">(you)</span></td><td class="muted">–</td>
+          <td>${fmt(pfr.basePf, 1)}</td>${liveCell(tid, pfr.basePf)}
+          <td>${fmt(pfr.mine.p50, 0)}</td>
+          <td class="muted">–</td></tr>`;
+      const rivalRows = youRow + pfr.rivals.slice(0, 6).map((r) => `
         <tr><td>${escapeHtml(teamName(r.team_id))}</td><td>${pct(r.share)}</td>
-          <td>${fmt(r.basePf, 1)} <span class="muted small">(${r.basePf - pfr.basePf >= 0 ? "+" : "−"}${fmt(Math.abs(r.basePf - pfr.basePf), 1)} vs you)</span></td>
+          <td>${fmt(r.basePf, 1)}${anyLive ? "" : ` <span class="muted small">(${signed(r.basePf - pfr.basePf)} vs you)</span>`}</td>${liveCell(r.team_id, r.basePf)}
           <td>${fmt(r.finalPf.p50, 0)}</td>
           <td title="Median final-PF gap on you in the sims where this team is the bar; negative = you finished ahead of them but still missed because someone else got in">${r.gap.p50 >= 0 ? "+" : "−"}${fmt(Math.abs(r.gap.p50), 0)}</td></tr>`).join("");
       pfCard = `
@@ -371,10 +391,10 @@ export function renderPaths(container, data, slug, { teamId } = {}) {
         <p>You finish outside the top ${lastSeed - 1} in <strong>${pct(pfr.outside / pfr.count)}</strong> of sims, and take seed ${lastSeed} in <strong>${pct(pfr.madeWhenOutside)}</strong> of those.
           Of your playoff odds, about <strong>${pct(viaTopShare)}</strong> come from finishing in the top ${lastSeed - 1} and <strong>${pct(viaPfShare)}</strong> from winning the points race.</p>
         ${viaPfShare >= 0.4 ? `<p class="small"><strong>This is mostly a points race for ${escapeHtml(teamName(tid))}.</strong> Wins still matter, but mainly because they come with the points that clear the bar, and because they shape who else lands in the top ${lastSeed - 1}.</p>` : ""}
-        <p>The bar moves from sim to sim with who occupies seeds 1-${lastSeed - 1}: median <strong>${fmt(pfr.bar.p50, 0)}</strong> points (middle half ${fmt(pfr.bar.p25, 0)}-${fmt(pfr.bar.p75, 0)}).
-          You have <strong>${fmt(pfr.basePf, 1)}</strong>, so you need roughly <strong>${fmt(Math.max(0, need), 0)}</strong> more over your last ${gamesLeft} game${gamesLeft === 1 ? "" : "s"}${perGame !== null ? ` (<strong>${fmt(Math.max(0, perGame), 1)}</strong>/game; the sim has you scoring ${fmt(projPerGame, 1)}/game)` : ""}.</p>
-        <h3>Who you have to pass</h3>
-        <div class="table-wrap"><table class="path-ladder"><thead><tr><th>Team</th><th title="Share of the sims where you're outside the top ${lastSeed - 1} that this team is the highest-scoring team you must beat">Is the bar</th><th>PF now</th><th>Median final PF</th><th title="Median points they finish ahead of you, when they're the bar">Gap on you</th></tr></thead><tbody>${rivalRows}</tbody></table></div>
+        <p>The bar moves from sim to sim with who occupies seeds 1-${lastSeed - 1}: projected median <strong>${fmt(pfr.bar.p50, 0)}</strong> final points (middle half ${fmt(pfr.bar.p25, 0)}-${fmt(pfr.bar.p75, 0)}).
+          You have <strong>${fmt(pfr.basePf, 1)}</strong> in finished games${anyLive ? ` (<strong>${fmt(myLive, 1)}</strong> counting this week's live points)` : ""}, so you need roughly <strong>${fmt(Math.max(0, need), 0)}</strong> more over your last ${gamesLeft} game${gamesLeft === 1 ? "" : "s"}${perGame !== null ? ` (<strong>${fmt(Math.max(0, perGame), 1)}</strong>/game; the sim has you scoring ${fmt(projPerGame, 1)}/game)` : ""}.</p>
+        <h3>You vs. who you have to pass</h3>
+        <div class="table-wrap"><table class="path-ladder"><thead><tr><th>Team</th><th title="Share of the sims where you're outside the top ${lastSeed - 1} that this team is the highest-scoring team you must beat">Is the bar</th><th title="Points for in finished games (what ESPN has recorded)">PF now</th>${anyLive ? `<th title="Finished games plus points scored so far in games in progress">PF + live</th>` : ""}<th title="Projected final points for, median across the sims (includes this week's games and the rest of the season)">Projected final PF</th><th title="Median points they finish ahead of you, when they're the bar">Gap on you</th></tr></thead><tbody>${rivalRows}</tbody></table></div>
         <p class="small muted">Computed from the same sims, so it follows your what-if picks above. Tiebreaks beyond points scored (points against) are included in the sim; head-to-head is not.</p>
       </div>`;
     }
