@@ -1,0 +1,38 @@
+# Manually triggered: builds data/sd_by_rank/<league>.json (outcome SD of weekly points by weekly and ROS
+# position rank, scored with the league's real scoring) using the repo's ESPN cookie secrets for private
+# leagues, and uploads it as a run artifact (download with `gh run download`). Nothing is committed.
+# See tools/sd_by_rank/build_sd_tables.py.
+name: Build SD tables
+on:
+  workflow_dispatch:
+    inputs:
+      league:
+        description: "League slug, e.g. any-given-sunday"
+        required: true
+        default: any-given-sunday
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      ESPN_S2_AGS: ${{ secrets.ESPN_S2_AGS }}
+      SWID_AGS: ${{ secrets.SWID_AGS }}
+      ESPN_S2_OLEAGUE: ${{ secrets.ESPN_S2_OLEAGUE }}
+      SWID_OLEAGUE: ${{ secrets.SWID_OLEAGUE }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - run: pip install -r requirements.txt
+      - name: Build tables
+        env:
+          LEAGUE: ${{ github.event.inputs.league }}
+        run: python -m tools.sd_by_rank.build_sd_tables --league "$LEAGUE"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sd-by-rank
+          path: data/sd_by_rank/
+          retention-days: 7

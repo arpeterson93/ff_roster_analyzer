@@ -10,7 +10,7 @@ Usage: python -m tools.sd_by_rank.build_sd_tables [--league o-league] [--out PAT
 Default output: data/sd_by_rank/<league>.json. Each table is also written smoothed with
 engine.curve.smooth_sd, which is what engine/pipeline.py consumes (see engine.curve.load_outcome_sd).
 Private leagues need ESPN cookies in the environment (ESPN_S2 / SWID); the O League is public."""
-import argparse, sys, json, datetime as dt, collections
+import argparse, os, sys, json, datetime as dt, collections
 from pathlib import Path
 import numpy as np, polars as pl, nflreadpy as nfl, requests, yaml
 
@@ -29,7 +29,13 @@ SEASONS = list(range(2020, 2026))
 POS = ["QB", "RB", "WR", "TE", "K"]
 
 stats = pl.concat([nfl.load_player_stats(s).filter(pl.col("season_type") == "REG") for s in SEASONS], how="diagonal_relaxed")
-resp = requests.get(SETTINGS_URL.format(year=cfg["season"], league_id=cfg["league_id"]), params={"view": "mSettings"}, headers=HEADERS, timeout=60)
+cookies = {}
+if cfg.get("credentials"):  # private league: cookie env var names come from the league config (set as Actions secrets)
+    s2, swid = os.environ.get(cfg["credentials"]["espn_s2"]), os.environ.get(cfg["credentials"]["swid"])
+    if not (s2 and swid):
+        sys.exit(f"{args.league} is private: set {cfg['credentials']['espn_s2']} and {cfg['credentials']['swid']} in the environment")
+    cookies = {"espn_s2": s2, "SWID": swid}
+resp = requests.get(SETTINGS_URL.format(year=cfg["season"], league_id=cfg["league_id"]), params={"view": "mSettings"}, headers=HEADERS, cookies=cookies, timeout=60)
 resp.raise_for_status()
 rules = ScoringRules.from_espn(scoring_format_items(resp.json()["settings"]), is_dst=False)
 stats = stats.filter(pl.col("position").is_in(POS))
