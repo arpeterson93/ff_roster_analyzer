@@ -131,3 +131,10 @@ def test_espn_points_allowed_excludes_defensive_and_return_scores():
     assert espn_points_allowed(20, {"special_teams_tds": 1, "def_safeties": 1}) == 11
     assert espn_points_allowed(24, {}) == 24
     assert espn_points_allowed(24, None) == 24
+
+
+def test_espn_points_allowed_prefers_play_by_play_figure():
+    from engine.scoring import espn_points_allowed, register_non_offense_points
+    register_non_offense_points({("G1", "SF"): 6.0})  # pick-six with a missed extra point
+    assert espn_points_allowed(35, {"def_tds": 1}, "G1", "SF") == 29
+    assert espn_points_allowed(35, {"def_tds": 1}, "G2", "SF") == 28  # no pbp entry -> estimate

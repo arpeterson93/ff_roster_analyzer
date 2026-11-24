@@ -146,7 +146,7 @@ def _dst_season_ppg_sd(
         opp_offense = offense_by_game.get((row["game_id"], row["opponent_team"]))
         if game is None or opp_offense is None or row["opponent_team"] not in game:
             continue
-        points_allowed = espn_points_allowed(game[row["opponent_team"]], opp_offense)
+        points_allowed = espn_points_allowed(game[row["opponent_team"]], opp_offense, row["game_id"], row["opponent_team"])
         yards_allowed = (opp_offense.get("passing_yards") or 0) + (opp_offense.get("rushing_yards") or 0)
         pts = scoring.dst_points_for_row(row, points_allowed=points_allowed, yards_allowed=yards_allowed)
         by_team.setdefault(row["team"], []).append(pts)

@@ -207,11 +207,25 @@ def _ya_bracket_expr(abbr: str):
     return lambda ctx: 1.0 if _in_bracket(ctx["yards_allowed"], low, high) else 0.0
 
 
-def espn_points_allowed(game_score: float, scoring_team_row: dict | None) -> float:
+# (game_id, scoring_team) -> points that team scored WITHOUT its offense, from play-by-play.
+# Filled by register_non_offense_points(); espn_points_allowed falls back to the team_stats estimate
+# for any game not in it.
+_PBP_NON_OFFENSE: dict[tuple[str, str], float] = {}
+
+
+def register_non_offense_points(table: dict[tuple[str, str], float]) -> None:
+    _PBP_NON_OFFENSE.update(table)
+
+
+def espn_points_allowed(game_score: float, scoring_team_row: dict | None, game_id: str | None = None, scoring_team: str | None = None) -> float:
     """Points allowed by a D/ST the way ESPN counts them: the opponent's final score minus
     what that opponent scored without its offense - defensive TDs (pick-sixes, fumble returns),
-    return TDs and safeties. Each TD is assumed to carry its extra point (7), since team_stats
-    can't say whether it was good. `scoring_team_row` is the opponent's own team_stats row."""
+    return TDs, safeties and defensive 2-pointers. The exact figure comes from play-by-play when
+    registered for the game; otherwise it is estimated from team_stats, assuming each TD carried
+    a good extra point (7)."""
+    exact = _PBP_NON_OFFENSE.get((game_id, scoring_team)) if game_id and scoring_team else None
+    if exact is not None:
+        return max(0.0, game_score - exact)
     if not scoring_team_row:
         return game_score
     non_offense = 7 * (_get(scoring_team_row, "def_tds") + _get(scoring_team_row, "special_teams_tds")) + 2 * _get(scoring_team_row, "def_safeties")

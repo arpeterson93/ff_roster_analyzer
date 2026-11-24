@@ -98,7 +98,7 @@ def dst_points_by_team_week_pos(
         opp_offense = offense_by_game.get((row["game_id"], row["opponent_team"]))
         if game is None or opp_offense is None or row["opponent_team"] not in game:
             continue
-        points_allowed = espn_points_allowed(game[row["opponent_team"]], opp_offense)
+        points_allowed = espn_points_allowed(game[row["opponent_team"]], opp_offense, row["game_id"], row["opponent_team"])
         yards_allowed = (opp_offense.get("passing_yards") or 0) + (opp_offense.get("rushing_yards") or 0)
         pts = dst_scoring.dst_points_for_row(row, points_allowed=points_allowed, yards_allowed=yards_allowed)
         key = (row["team"], row["week"], "DST")

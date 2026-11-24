@@ -53,7 +53,7 @@ from engine.play_log import (
     scoring_plays_for_player, scoring_time_index, zero_point_plays_for_player,
 )
 from engine.points_against import dst_points_against_detail, points_against_detail, with_kick_attempts, with_remaining_schedule
-from engine.scoring import ScoringRules, espn_points_allowed
+from engine.scoring import ScoringRules, espn_points_allowed, register_non_offense_points
 from engine import odds_history, standings_stage
 from engine.faab_league import build_faab_league, processed_weeks_of, snapshot_entries, update_estimate_log
 from engine.history import load_and_build as load_history
@@ -829,11 +829,22 @@ def _build_curve_for_league(cfg: dict, offense_positions: list[str], player_rule
     )
 
 
+def _register_pbp_scores(seasons: list[int], current_season: int | None = None) -> None:
+    """Load play-by-play so D/ST points allowed exclude the opponent's defensive/return scores exactly
+    (extra points included). On failure the team_stats estimate in espn_points_allowed is used."""
+    for s in seasons:
+        try:
+            register_non_offense_points(nd.non_offense_points(nd.play_by_play(s, current_season=current_season if s == current_season else None)))
+        except Exception as exc:  # noqa: BLE001 - never block the pipeline on this refinement
+            logger.warning("play-by-play D/ST scoring unavailable for %s (%s); using the team_stats estimate", s, exc)
+
+
 def _build_dst_curve_for_league(cfg: dict, dst_rules: ScoringRules, weeks_complete: int, season: int) -> Curve:
     val_cfg = cfg["valuation"]
     curve_seasons = val_cfg["curve_seasons"]
     starter_pool = val_cfg["starter_pool"].get("DST", 32)
 
+    _register_pbp_scores(list(curve_seasons))
     hist_team_stats = {s: nd.team_stats(s) for s in curve_seasons}
     hist_schedules = {s: nd.schedules(s) for s in curve_seasons}
     hist_curve = build_dst_curve(hist_team_stats, hist_schedules, dst_rules, val_cfg["curve_min_games"], starter_pool)
@@ -841,6 +852,7 @@ def _build_dst_curve_for_league(cfg: dict, dst_rules: ScoringRules, weeks_comple
     if weeks_complete <= 0:
         return hist_curve
 
+    _register_pbp_scores([season], season)
     current_team_stats = nd.team_stats(season, current_season=season)
     current_schedules = nd.schedules(season, current_season=season)
     cur_min_games = max(1, min(val_cfg["curve_min_games"], weeks_complete // 2))
@@ -970,6 +982,7 @@ def run_league(
 
     # --- schedule / week context ---
     schedules_current = nd.schedules(season, current_season=season)
+    _register_pbp_scores([season], season)
     weeks_played, bye_weeks, opponent = nd.nfl_week_context(season, schedules_current)
     game_final = nd.game_final_by_team_week(schedules_current, season)
     weeks_complete = nd.weeks_complete(schedules_current, season)
@@ -1093,6 +1106,7 @@ def run_league(
 
     prior_stats = nd.player_stats(prior_season)
     prior_schedules = nd.schedules(prior_season)
+    _register_pbp_scores([prior_season])
     prior_is_home = nd.home_away_from_schedule(prior_schedules, prior_season)
     current_points = points_by_team_week_pos(current_stats, season, offense_positions, player_rules)
     prior_points = points_by_team_week_pos(prior_stats, prior_season, offense_positions, player_rules)
@@ -1169,7 +1183,7 @@ def run_league(
             opp_row = current_team_stats_by_game.get((row["game_id"], row["opponent_team"]))
             if game is None or opp_row is None or row["opponent_team"] not in game:
                 continue
-            points_allowed = espn_points_allowed(game[row["opponent_team"]], opp_row)
+            points_allowed = espn_points_allowed(game[row["opponent_team"]], opp_row, row["game_id"], row["opponent_team"])
             yards_allowed = (opp_row.get("passing_yards") or 0) + (opp_row.get("rushing_yards") or 0)
             entry = dict(row)
             entry["points_allowed"] = points_allowed

@@ -106,6 +106,41 @@ def play_by_play(seasons: int | list[int], current_season: int | None = None) ->
     return _normalize_team_columns(df, ["posteam", "defteam", "home_team", "away_team"])
 
 
+def non_offense_points(pbp: pl.DataFrame) -> dict[tuple[str, str], float]:
+    """(game_id, team) -> points that team scored without its offense: defensive and return TDs
+    with their extra point / 2-pointer, safeties, and defensive 2-point returns. ESPN leaves
+    these out of the other defense's points allowed."""
+    out: dict[tuple[str, str], float] = {}
+    if pbp.height == 0:
+        return out
+
+    def add(game_id, team, pts):
+        if team:
+            out[(game_id, team)] = out.get((game_id, team), 0.0) + pts
+
+    cols = set(pbp.columns)
+    for g in pbp.sort("play_id").partition_by("game_id", maintain_order=True):
+        rows = g.to_dicts()
+        game_id = rows[0]["game_id"]
+        for i, r in enumerate(rows):
+            if r.get("touchdown") == 1 and r.get("td_team") and (r.get("td_team") != r.get("posteam") or r.get("own_kickoff_recovery_td") == 1):
+                team = r["td_team"]
+                pts = 6.0
+                for nxt in rows[i + 1:i + 4]:  # the try is the next scrimmage-type play
+                    if nxt.get("extra_point_attempt") == 1 or nxt.get("two_point_attempt") == 1:
+                        if nxt.get("extra_point_result") == "good":
+                            pts += 1
+                        elif nxt.get("two_point_conv_result") == "success":
+                            pts += 2
+                        break
+                add(game_id, team, pts)
+            if r.get("safety") == 1:
+                add(game_id, r.get("defteam"), 2.0)
+            if "defensive_two_point_conv" in cols and r.get("defensive_two_point_conv") == 1:
+                add(game_id, r.get("defteam"), 2.0)
+    return out
+
+
 def ff_opportunity_weekly(seasons: int | list[int], current_season: int | None = None) -> pl.DataFrame:
     """Weekly expected-fantasy-points components (ffverse/ffopportunity's
     xgboost model: completions/yards/TDs/INTs/first-downs an AVERAGE player

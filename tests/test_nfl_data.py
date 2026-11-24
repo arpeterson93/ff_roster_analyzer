@@ -185,3 +185,18 @@ def test_game_context_neutral_site_and_venue_reflect_the_actual_game_not_either_
 def test_game_context_ignores_other_seasons_and_game_types():
     df = pl.DataFrame([_schedule_row(game_type="POST"), _schedule_row(season=2025)])
     assert game_context_from_schedule(df, 2026) == {}
+
+
+def test_non_offense_points_from_pbp():
+    import polars as pl
+    from ingest.nfl_data import non_offense_points
+    base = dict(touchdown=0, td_team=None, posteam=None, defteam=None, safety=0, own_kickoff_recovery_td=0,
+                extra_point_attempt=0, two_point_attempt=0, extra_point_result=None, two_point_conv_result=None,
+                defensive_two_point_conv=0)
+    plays = [
+        {**base, "game_id": "G", "play_id": 1, "posteam": "MIN", "defteam": "SF", "touchdown": 1, "td_team": "SF"},  # pick-six
+        {**base, "game_id": "G", "play_id": 2, "posteam": "SF", "defteam": "MIN", "extra_point_attempt": 1, "extra_point_result": "good"},
+        {**base, "game_id": "G", "play_id": 3, "posteam": "SF", "defteam": "MIN", "touchdown": 1, "td_team": "SF"},  # offense TD
+        {**base, "game_id": "G", "play_id": 4, "posteam": "MIN", "defteam": "SF", "safety": 1},
+    ]
+    assert non_offense_points(pl.DataFrame(plays)) == {("G", "SF"): 9.0}
