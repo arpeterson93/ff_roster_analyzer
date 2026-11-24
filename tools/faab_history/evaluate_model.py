@@ -52,6 +52,9 @@ from pathlib import Path
 import numpy as np
 
 from engine.faab_estimate import (
+    _shrunk_interest_fractions,
+    apply_event_availability,
+    load_event_availability,
     FEATURE_NAMES,
     KNN_FEATURE_NAMES,
     POSITIONS,
@@ -235,7 +238,17 @@ def main():
     if args.table.suffix == ".parquet":
         import polars as pl
 
-        all_rows = pl.read_parquet(args.table).to_dicts()
+        # Columns nothing downstream reads (checked against engine/faab_estimate.py and this file) are dropped before
+        # the 5.5M-row table becomes Python dicts - that conversion is what ran a laptop out of memory.
+        unused = [
+            "drop_player_ids", "contingent_variants_dropped", "source_league_name", "source_league_ppr_label",
+            "source_league_size", "bid_amount_raw", "date", "team_that_week", "pct_of_bidder_season_spend",
+            "pct_of_league_season_spend", "league_avg_pct_budget_remaining_at_bid", "bidder_pct_budget_remaining_at_bid",
+            "num_competing_bidders", "team_id",
+        ]
+        frame = pl.read_parquet(args.table)
+        all_rows = frame.drop([c for c in unused if c in frame.columns]).to_dicts()
+        del frame
     else:
         all_rows = json.loads(args.table.read_text())
     # add_synthetic_price_wins here, before the split, mirrors engine.
@@ -265,6 +278,10 @@ def main():
     interest_train = consolidate_cross_league_events(
         dedupe_events_for_interest([r for r in train if r["source_league_id"] in interest_eligible_leagues and r["week"] != 1]), is_price=False
     )
+    # Same denominator fix the live model applies (FaabModel.__init__): leagues_eligible = leagues where the player was
+    # actually available that week, not just leagues with a training row. Without it a gate-failing comp reads 100%.
+    n_raised = apply_event_availability(interest_train, load_event_availability())
+    print(f"event availability raised the denominator on {n_raised} interest rows")
     price_train = consolidate_cross_league_events(build_price_rows(train), is_price=True)
     print(f"interest train (deduped+consolidated, leagues {interest_eligible_leagues}): {len(interest_train)}  price train (won + synthetic other_failure, consolidated): {len(price_train)}")
 
@@ -281,10 +298,10 @@ def main():
         by_pos: dict[str, list[dict]] = defaultdict(list)
         for r in rows:
             by_pos[r["position"]].append(r)
-        matrix, mean, std, targets, points_vals, snap_vals, combined = {}, {}, {}, {}, {}, {}, {}
+        matrix, mean, std, targets, points_vals, snap_vals, combined, pos_rows = {}, {}, {}, {}, {}, {}, {}, {}
         for pos, prows in by_pos.items():
             mat, m, s = build_position_matrix(prows)
-            matrix[pos], mean[pos], std[pos] = mat, m, s
+            matrix[pos], mean[pos], std[pos], pos_rows[pos] = mat, m, s, prows
             if is_price_pool:
                 targets[pos] = np.array([target_pct(r) for r in prows])
             else:
@@ -293,7 +310,7 @@ def main():
             sv = [feature_vector(pr)["snap_pct_prior_week"] for pr in prows]
             points_vals[pos], snap_vals[pos] = pv, sv
             combined[pos] = np.array([(pct_rank(pv, x) + pct_rank(sv, y)) / 2.0 for x, y in zip(pv, sv)])
-        return {"matrix": matrix, "mean": mean, "std": std, "targets": targets, "points_vals": points_vals, "snap_vals": snap_vals, "combined": combined}
+        return {"rows": pos_rows, "matrix": matrix, "mean": mean, "std": std, "targets": targets, "points_vals": points_vals, "snap_vals": snap_vals, "combined": combined}
 
     interest_pool = build_pool(interest_train, is_price_pool=False)
     price_pool = build_pool(price_train, is_price_pool=True)
@@ -307,6 +324,19 @@ def main():
         nearest_idx = np.argsort(dists)[:K]
         weights = 1.0 / (dists[nearest_idx] + 0.05)
         return float(np.sum(weights * targets[nearest_idx]) / np.sum(weights))
+
+    def knn_interest(pool: dict, pos: str, q_fv: dict):
+        """The live model's interest calc (engine.faab_estimate.comp_based_estimate): each neighbour's own
+        leagues_with_bid / leagues_eligible, Buhlmann-shrunk toward its neighbourhood, distance-weighted."""
+        mat, mean, std = pool["matrix"].get(pos), pool["mean"].get(pos), pool["std"].get(pos)
+        if mat is None or len(mat) == 0:
+            return 0.0
+        qv = (np.array([q_fv[f] for f in KNN_FEATURE_NAMES]) - mean) / std
+        dists = np.linalg.norm(mat - qv, axis=1)
+        idx = np.argsort(dists)[:K]
+        weights = 1.0 / (dists[idx] + 0.05)
+        fractions = _shrunk_interest_fractions([pool["rows"][pos][i] for i in idx])
+        return float(np.sum(weights * np.array(fractions)) / np.sum(weights))
 
     def bucket_predict(pool: dict, pos: str, q_fv: dict):
         targets, points_vals, snap_vals, combined = pool["targets"].get(pos), pool["points_vals"].get(pos), pool["snap_vals"].get(pos), pool["combined"].get(pos)
@@ -333,7 +363,8 @@ def main():
         q_fv = feature_vector(r)
         actual = target_pct(r)
 
-        comp_p_bid = knn_predict(interest_pool, pos, q_fv)
+        comp_p_bid = knn_interest(interest_pool, pos, q_fv)
+        comp_p_bid_binary = knn_predict(interest_pool, pos, q_fv)  # the old any-bid-at-all vote, kept for comparison
         comp_price = knn_predict(price_pool, pos, q_fv)
         simple_p_bid = bucket_predict(interest_pool, pos, q_fv)
         simple_price = bucket_predict(price_pool, pos, q_fv)
@@ -353,7 +384,7 @@ def main():
                 "comp_pct": comp_p_bid * comp_price,
                 "simple_pct": simple_p_bid * simple_price,
                 "regression_pct": reg_p_bid * reg_price,
-                "comp_bid_probability": comp_p_bid, "comp_conditional_price": comp_price,
+                "comp_bid_probability": comp_p_bid, "comp_bid_probability_binary": comp_p_bid_binary, "comp_conditional_price": comp_price,
                 "simple_bid_probability": simple_p_bid, "simple_conditional_price": simple_price,
                 "regression_bid_probability": reg_p_bid, "regression_conditional_price": reg_price,
                 "prior_week_actual_points": q_fv["prior_week_actual_points"],

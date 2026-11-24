@@ -1,0 +1,62 @@
+name: faab-eval
+
+# Re-runs the held-out FAAB evaluation (tools/faab_history/evaluate_model.py) against the pooled training table and
+# rebuilds The O League's model-backtest file from it, then commits eval_pooled.json and o-league-model-backtest.json
+# to main. Manual only (workflow_dispatch): the evaluation loads the 5.5M-row pooled table, which is more memory
+# than a laptop comfortably has, so it runs here instead. Public repo -> the standard 16 GB runner; a swap file is
+# added as a safety margin.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - run: pip install -r requirements.txt
+
+      - name: Add swap
+        run: |
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
+      - name: Fetch pooled training table
+        run: python -m tools.faab_history.fetch_release_data
+
+      - name: Held-out evaluation (O League holdout)
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          python -m tools.faab_history.evaluate_model             --table tools/faab_history/combined-training-table.parquet             --holdout-league-id 355398             --out tools/faab_history/eval_pooled.json
+
+      - name: Rebuild the O League backtest
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python -m tools.faab_history.build_league_tx_history --slug o-league
+
+      - name: Commit results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add tools/faab_history/eval_pooled.json tools/faab_history/o-league-model-backtest.json
+          if git diff --cached --quiet; then
+            echo "no changes to commit"
+            exit 0
+          fi
+          git commit -m "Re-run held-out FAAB evaluation with availability-corrected interest"
+          git pull --rebase origin main
+          git push origin HEAD:main
