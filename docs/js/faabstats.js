@@ -167,9 +167,14 @@ export function leagueLens(fl, pos, week, currentSeason) {
 // viewed, and what actually happened to each here: won at X% of budget, bid but lost, or nobody bid. Events come
 // from model_backtest.events: [season, week, name, pos, outcome w/l/n, actual_pct, pooled_median, p_bid].
 // Closeness = relative gap in pooled median plus gap in bid probability, with a small nudge toward recent seasons.
-export function similarEvents(bt, pos, pooledMedian, pBid, currentSeason, limit = 8) {
-  const ev = bt && bt.events;
-  if (!ev || !ev.length || pooledMedian === null || pooledMedian === undefined) return [];
+export function similarEvents(bt, pos, pooledMedian, pBid, currentSeason, limit = 8, modelLog = null, logSeason = null) {
+  // The backtest is frozen at the last completed season; this season's settled model_log rows (what the live
+  // model said before each week's waivers vs what then happened) extend it.
+  const live = (modelLog || [])
+    .filter((m) => m.status !== "pending" && m.med !== null && m.med !== undefined && m.p !== null && m.p !== undefined)
+    .map((m) => [logSeason, m.week, m.name, m.pos, m.status === "won" ? "w" : m.status === "lost" ? "l" : "n", m.win_pct ?? null, m.med, m.p]);
+  const ev = [...((bt && bt.events) || []), ...live];
+  if (!ev.length || pooledMedian === null || pooledMedian === undefined) return [];
   const p0 = pBid ?? 0;
   return ev
     .filter((e) => e[3] === pos)

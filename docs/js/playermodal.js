@@ -1012,7 +1012,7 @@ function leagueLensSection(player, data, est) {
   const adjusted = hasBase ? base * lens.shrunk : null;
   const where = lens.basis === "bucket" ? `${player.position}, weeks ${lens.bucket}` : `${player.position}, all season`;
   const direction = Math.abs(lens.shrunk - 1) < 0.1 ? "about the same as" : lens.shrunk > 1 ? "above" : "below";
-  const similar = hasBase ? similarEvents(fl.model_backtest, player.position, base, (est.bid_probability || {}).comp_based_median, fl.season) : [];
+  const similar = hasBase ? similarEvents(fl.model_backtest, player.position, base, (est.bid_probability || {}).comp_based_median, fl.season, 8, fl.model_log, fl.season) : [];
   const outcomeCell = (e) => (e.outcome === "w" ? `<strong>${fmt(e.actual * 100, 1)}%</strong>` : e.outcome === "l" ? `<span class="muted">bid, lost</span>` : `<span class="muted">no bid</span>`);
   const simRows = similar.map((e) => `<tr><td>${e.season} wk ${e.week}</td><td>${escapeHtml(e.name || "?")}</td><td>${fmt(e.pooled * 100, 1)}%</td><td>${fmt(e.p * 100, 0)}%</td><td>${outcomeCell(e)}</td></tr>`).join("");
   const fallback = lens.comparable.map((r) => `<li>${r.season} wk ${r.week}: ${escapeHtml(r.name || "?")} - ${fmt(r.pct * 100, 1)}% of budget${r.n_bids > 1 ? ` <span class="muted">(${r.n_bids} bidders)</span>` : ""}</li>`).join("");
