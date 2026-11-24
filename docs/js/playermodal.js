@@ -1014,7 +1014,7 @@ function leagueLensSection(player, data, est) {
   const direction = Math.abs(lens.shrunk - 1) < 0.1 ? "about the same as" : lens.shrunk > 1 ? "above" : "below";
   const similar = hasBase ? similarEvents(fl.model_backtest, player.position, base, (est.bid_probability || {}).comp_based_median, fl.season) : [];
   const outcomeCell = (e) => (e.outcome === "w" ? `<strong>${fmt(e.actual * 100, 1)}%</strong>` : e.outcome === "l" ? `<span class="muted">bid, lost</span>` : `<span class="muted">no bid</span>`);
-  const simRows = similar.map((e) => `<tr><td>${e.season} wk ${e.week}</td><td>${escapeHtml(e.name || "?")}</td><td>${fmt(e.pooled * 100, 1)}%</td><td>${outcomeCell(e)}</td></tr>`).join("");
+  const simRows = similar.map((e) => `<tr><td>${e.season} wk ${e.week}</td><td>${escapeHtml(e.name || "?")}</td><td>${fmt(e.pooled * 100, 1)}%</td><td>${fmt(e.p * 100, 0)}%</td><td>${outcomeCell(e)}</td></tr>`).join("");
   const fallback = lens.comparable.map((r) => `<li>${r.season} wk ${r.week}: ${escapeHtml(r.name || "?")} - ${fmt(r.pct * 100, 1)}% of budget${r.n_bids > 1 ? ` <span class="muted">(${r.n_bids} bidders)</span>` : ""}</li>`).join("");
   return `
     <div class="faabl-lens">
@@ -1022,7 +1022,7 @@ function leagueLensSection(player, data, est) {
       <p class="small" style="margin:0">${escapeHtml(where)} winning bids here run <strong>${fmt(lens.shrunk, 2)}×</strong> the pooled median - ${direction} the other leagues behind the estimate above${lens.n < THIN_N ? ` <span class="muted">(thin: only ${lens.n} past wins)</span>` : ` <span class="muted">(${lens.n} past wins)</span>`}.</p>
       ${adjusted !== null ? `<p class="small" style="margin:4px 0 0">Pooled median ${fmt(base * 100, 1)}% → <strong>league-adjusted ${fmt(adjusted * 100, 1)}%</strong>.</p>` : ""}
       ${simRows
-        ? `<details open><summary class="small">Similar ${escapeHtml(player.position)}s here: pooled read vs what happened</summary><div class="table-wrap"><table class="faabl-table"><thead><tr><th>When</th><th>Player</th><th>Pooled median</th><th>This league</th></tr></thead><tbody>${simRows}</tbody></table></div><p class="muted small" style="margin:4px 0 0">Closest by pooled median and bid chance, only players who were available here. Percent of budget.</p></details>`
+        ? `<details open><summary class="small">Similar ${escapeHtml(player.position)}s here: pooled read vs what happened</summary><div class="table-wrap"><table class="faabl-table"><thead><tr><th>When</th><th>Player</th><th>Pooled median</th><th>Pooled interest</th><th>This league</th></tr></thead><tbody>${simRows}</tbody></table></div><p class="muted small" style="margin:4px 0 0">Closest by pooled median and pooled interest (share of pooled leagues where someone bids on comparable players), only players who were available here. Percent of budget.</p></details>`
         : fallback ? `<details><summary class="small">Recent winning ${escapeHtml(player.position)} bids in this league</summary><ul>${fallback}</ul></details>` : ""}
     </div>
   `;
