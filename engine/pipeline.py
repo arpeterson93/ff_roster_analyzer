@@ -18,7 +18,7 @@ except ImportError:
 
 import polars as pl
 
-from engine.curve import Curve, blend_current, build_curve, build_dst_curve
+from engine.curve import Curve, blend_current, build_curve, build_dst_curve, load_outcome_sd
 from engine.expected_points import weekly_xfp_points
 from engine.faab_estimate import (
     INJURY_FLAG_STATUSES,
@@ -1049,6 +1049,13 @@ def run_league(
 
     # --- curves ---
     curve = _build_curve_for_league(cfg, offense_positions, player_rules, weeks_complete, season)
+    # Outcome-SD tables (tools/sd_by_rank): SD of a ranked player's actual weekly points, weekly rank for the
+    # current week and ROS rank for later ones. Opt out with valuation.sd_method: within_player; a league without
+    # a built table file keeps the curve's within-player SD.
+    outcome_sd = None
+    if val_cfg.get("sd_method", "outcome") == "outcome":
+        outcome_sd = load_outcome_sd(Path(__file__).resolve().parent.parent / "data" / "sd_by_rank" / f"{slug}.json")
+        logger.info("sd tables: %s", "outcome-SD by rank" if outcome_sd else "within-player SD (no sd_by_rank file)")
     if has_dst:
         dst_curve = _build_dst_curve_for_league(cfg, dst_rules, weeks_complete, season)
         curve.ppg.update(dst_curve.ppg)
@@ -1352,6 +1359,7 @@ def run_league(
             curve=curve, matchup_index=matchup_index, current_week=current_week, final_week=final_week,
             reg_season_count=reg_season_count, opponent=opponent, cfg=val_cfg,
             espn_weekly_projections=espn_weekly, ir_return_week=ir_return_week,
+            week_pos_rank=week_pos_rank, outcome_sd=outcome_sd,
         )
 
         players_ctx[res.id] = PlayerCtx(

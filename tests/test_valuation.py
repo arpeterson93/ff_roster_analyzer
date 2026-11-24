@@ -157,3 +157,29 @@ def test_matchup_index_and_rank_still_attached_for_informational_display():
     week1 = next(w for w in proj.weekly if w.week == 1)
     assert week1.index == pytest.approx(1.2)
     assert week1.rank is None  # MATCHUP fixture never populated rank for T1
+
+
+OUTCOME = {"weekly": {"WR": {1: 9.0, 15: 6.0}}, "ros": {"WR": {1: 10.0, 15: 7.0}}}
+
+
+def test_outcome_sd_current_week_uses_weekly_rank_and_later_weeks_use_ros_rank():
+    proj = _project(week_pos_rank=15, ros_pos_rank=5, outcome_sd=OUTCOME)
+    sd = {w.week: w.sd for w in proj.weekly}
+    assert sd[1] == pytest.approx(6.0)   # current week: weekly-rank table at rank 15
+    assert sd[2] == pytest.approx(10.0)  # later weeks: ROS-rank table, rank 5 -> nearest listed rank (1)
+    assert sd[4] == pytest.approx(10.0)
+
+
+def test_outcome_sd_without_a_weekly_rank_uses_the_ros_table_and_clamps_deep_ranks():
+    proj = _project(week_pos_rank=None, ros_pos_rank=15, outcome_sd=OUTCOME)
+    assert {w.week: w.sd for w in proj.weekly}[1] == pytest.approx(7.0)  # past the table's last rank -> last value
+
+
+def test_outcome_sd_falls_back_to_the_curve_for_positions_without_a_table():
+    proj = _project(outcome_sd={"weekly": {"RB": {1: 5.0}}, "ros": {"RB": {1: 5.0}}})
+    assert proj.weekly[0].sd == pytest.approx(2.0)  # CURVE.sd at WR rank 5
+
+
+def test_unranked_player_keeps_zero_sd_with_outcome_tables():
+    proj = _project(ros_pos_rank=None, outcome_sd=OUTCOME)
+    assert all(w.sd == 0.0 for w in proj.weekly)

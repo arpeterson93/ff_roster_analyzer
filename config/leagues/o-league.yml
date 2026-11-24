@@ -15,6 +15,7 @@ faab_history:            # FAAB tab's league-specific history (engine/faab_leagu
 valuation:
   curve_seasons: [2022, 2023, 2024, 2025]
   curve_min_games: 8
+  sd_method: outcome            # outcome = SD of ranked players' actual weekly points (data/sd_by_rank/<slug>.json); within_player = the older per-player SD
   curve_current_max_weight: 0.5
   curve_current_full_weight_weeks: 8
   matchup_dampening: 0.5

@@ -80,6 +80,35 @@ def smooth_sd(sd: dict[int, float], monotone: bool) -> dict[int, float]:
     return dict(zip(ranks, smoothed))
 
 
+def load_outcome_sd(path) -> dict[str, dict[str, dict[int, float]]] | None:
+    """{"weekly": {pos: {rank: sd}}, "ros": {pos: {rank: sd}}} from tools/sd_by_rank's smoothed outcome-SD
+    tables (the SD of a ranked player's actual weekly points, which includes the uncertainty in the rank
+    itself), or None when the league has no such file."""
+    import json
+    from pathlib import Path
+
+    p = Path(path)
+    if not p.exists():
+        return None
+    positions = json.loads(p.read_text(encoding="utf-8")).get("positions", {})
+    out: dict[str, dict[str, dict[int, float]]] = {"weekly": {}, "ros": {}}
+    for pos, tables in positions.items():
+        for kind in ("weekly", "ros"):
+            rows = tables.get(kind) or []
+            if rows:
+                out[kind][pos] = {int(r[0]): float(r[4]) for r in rows}  # column 4 = smoothed SD
+    return out if out["ros"] else None
+
+
+def outcome_sd_at(table: dict[int, float], rank: int) -> float:
+    """SD at `rank`, clamped to the table's range (deeper players take the last rank's SD); a rank missing
+    from the table (a gap) takes the nearest listed rank."""
+    r = int(rank)
+    if r in table:
+        return table[r]
+    return table[min(table, key=lambda k: abs(k - r))]
+
+
 def _player_season_ppg_sd(
     df: pl.DataFrame, season: int, position: str, scoring: ScoringRules, min_games: int
 ) -> list[tuple[float, float]]:

@@ -119,3 +119,15 @@ def test_smooth_sd_flat_positions_reduce_noise_without_shifting_the_level():
 def test_smooth_sd_leaves_tiny_tables_alone():
     from engine.curve import smooth_sd
     assert smooth_sd({1: 5.0, 2: 6.0}, monotone=True) == {1: 5.0, 2: 6.0}
+
+
+def test_load_outcome_sd_reads_smoothed_column_and_clamps(tmp_path):
+    import json
+    from engine.curve import load_outcome_sd, outcome_sd_at
+
+    p = tmp_path / "t.json"
+    p.write_text(json.dumps({"positions": {"WR": {"weekly": [[1, 9.0, 11.0, 80, 8.5], [2, 7.0, 9.0, 80, 8.0]], "ros": [[1, 9.5, 11.0, 80, 9.0], [2, 7.5, 9.0, 80, 8.2]]}}}))
+    t = load_outcome_sd(p)
+    assert t["weekly"]["WR"] == {1: 8.5, 2: 8.0} and t["ros"]["WR"] == {1: 9.0, 2: 8.2}
+    assert outcome_sd_at(t["ros"]["WR"], 50) == 8.2 and outcome_sd_at(t["ros"]["WR"], 0) == 9.0
+    assert load_outcome_sd(tmp_path / "missing.json") is None

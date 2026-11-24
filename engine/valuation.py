@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from engine.curve import Curve
+from engine.curve import Curve, outcome_sd_at
 from engine.matchups import MatchupIndex
 
 
@@ -60,6 +60,8 @@ def project_player(
     cfg: dict,
     espn_weekly_projections: dict[int, float] | None = None,
     ir_return_week: int | None = None,
+    week_pos_rank: int | None = None,
+    outcome_sd: dict | None = None,
 ) -> Projection:
     ranked = ros_pos_rank is not None
     baseline = curve.ppg_at(position, ros_pos_rank) if ranked else 0.0
@@ -116,6 +118,19 @@ def project_player(
 
     ros_total = sum(raw.values())
 
+    def _week_sd(w: int) -> float:
+        """Weekly SD for this player. With outcome-SD tables (see engine.curve.load_outcome_sd): the current
+        week uses the weekly-rank table when the player has a weekly rank, every other week the ROS-rank
+        table. Without them (or for a position they don't cover, e.g. D/ST): the curve's within-player SD
+        by ROS rank."""
+        if not ranked:
+            return 0.0
+        if outcome_sd and position in outcome_sd["ros"]:
+            if w == current_week and week_pos_rank is not None and position in outcome_sd["weekly"]:
+                return outcome_sd_at(outcome_sd["weekly"][position], week_pos_rank)
+            return outcome_sd_at(outcome_sd["ros"][position], ros_pos_rank)
+        return curve.sd_at(position, ros_pos_rank)
+
     weekly = [
         WeeklyProjection(
             week=w,
@@ -124,7 +139,7 @@ def project_player(
             rank=rank_for_week.get(w),
             projected=raw[w],
             our_projected=our_raw[w],
-            sd=curve.sd_at(position, ros_pos_rank) if ranked else 0.0,
+            sd=_week_sd(w),
         )
         for w in weeks
     ]
