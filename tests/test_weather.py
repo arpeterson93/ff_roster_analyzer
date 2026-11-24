@@ -109,3 +109,10 @@ def test_fetch_game_weather_treats_a_retractable_roof_stadium_as_an_always_dome(
         with patch("ingest.weather.requests.get") as mock_get:
             assert fetch_game_weather("HOU00", roof, "2026-09-13T17:00:00Z") is None
         mock_get.assert_not_called()
+
+
+def test_new_orleans_mapped_and_user_agent_is_generic():
+    from ingest import weather
+    assert "NOR00" in weather.STADIUM_COORDS
+    assert weather._HEADERS["User-Agent"].startswith("ff-roster-analyzer")
+    assert "@" not in weather._HEADERS["User-Agent"]

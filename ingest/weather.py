@@ -17,13 +17,17 @@ misleading-once-the-roof-closes guess.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime
 
 import requests
 
 logger = logging.getLogger(__name__)
 
-_HEADERS = {"User-Agent": "ff-roster-analyzer (arpeterson93@gmail.com)", "Accept": "application/geo+json"}
+# NWS only requires an identifying User-Agent. A generic client name is sent by default; a contact (email or
+# URL) is added only if WEATHER_CONTACT is set in the environment, so none is ever hard-coded in the repo.
+_UA = "ff-roster-analyzer" + (f" ({os.environ['WEATHER_CONTACT']})" if os.environ.get("WEATHER_CONTACT") else "")
+_HEADERS = {"User-Agent": _UA, "Accept": "application/geo+json"}
 _TIMEOUT = 10
 
 # nflverse stadium_id -> (lat, lon). Only stadiums that actually need a real
@@ -65,6 +69,7 @@ STADIUM_COORDS: dict[str, tuple[float, float]] = {
     "MIA00": (25.9580, -80.2389),  # Hard Rock Stadium, Miami Gardens
     "WAS00": (38.9077, -76.8645),  # FedExField, Landover
     "GNB00": (44.5013, -88.0622),  # Lambeau Field, Green Bay
+    "NOR00": (29.9511, -90.0812),  # Caesars Superdome, New Orleans (dome)
 }
 
 # A permanently closed roof - no forecast is ever meaningful there.
