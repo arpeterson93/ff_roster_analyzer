@@ -1565,7 +1565,7 @@ function seasonPointsRankForPosition(player, data) {
   return idx === -1 ? null : idx + 1;
 }
 
-// News tab: ESPN's own player-news feed (Rotowire blurbs plus ESPN stories), fetched live the first time the
+// News tab: the Rotowire items in ESPN's player-news feed (ESPN's own stories and videos are left out), fetched live the first time the
 // tab is opened. The endpoint is public and sends open CORS headers, so nothing is stored in the data pipeline.
 // Defenses (negative espn_id) have no feed, so they get no tab.
 const NEWS_URL = "https://site.api.espn.com/apis/fantasy/v2/games/ffl/news/players";
@@ -1581,22 +1581,17 @@ function newsDate(iso) {
 }
 
 export function newsItemsHtml(feed) {
-  const items = (feed || [])
-    .filter((i) => i && (i.type === "Rotowire" || i.type === "Story") && i.headline)
-    .slice(0, 12);
+  const items = (feed || []).filter((i) => i && i.type === "Rotowire" && i.headline).slice(0, 12);
   if (!items.length) return `<p class="muted small">No recent news.</p>`;
   return items
     .map((i) => {
       const date = newsDate(i.published || i.lastModified);
-      const link = (i.links && (i.links.web && i.links.web.href)) || "";
-      if (i.type === "Rotowire") {
-        return `<div class="news-item"><div class="news-meta"><span class="news-src">Rotowire</span>${date ? ` <span class="muted small">${escapeHtml(date)}</span>` : ""}</div>
-          <div class="news-headline">${escapeHtml(i.headline)}</div>
-          ${i.description ? `<p class="news-body">${escapeHtml(i.description)}</p>` : ""}</div>`;
-      }
-      const head = link && /^https:\/\//.test(link) ? `<a href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(i.headline)}</a>` : escapeHtml(i.headline);
-      return `<div class="news-item"><div class="news-meta"><span class="news-src news-src-espn">ESPN</span>${date ? ` <span class="muted small">${escapeHtml(date)}</span>` : ""}</div>
-        <div class="news-headline">${head}</div></div>`;
+      // headline/description are the same short report; `story` is Rotowire's longer fantasy analysis (the "Spin").
+      const spin = i.story && i.story.trim() !== i.headline.trim() ? i.story : "";
+      return `<div class="news-item">
+        <div class="news-meta">${date ? `<span class="muted small">${escapeHtml(date)}</span>` : ""}</div>
+        <div class="news-headline">${escapeHtml(i.headline)}</div>
+        ${spin ? `<p class="news-body"><span class="news-spin">Spin</span> ${escapeHtml(spin)}</p>` : ""}</div>`;
     })
     .join("");
 }
@@ -1608,7 +1603,7 @@ async function loadNews(panel, player) {
   try {
     let feed = _newsCache.get(player.espn_id);
     if (!feed) {
-      const res = await fetch(`${NEWS_URL}?playerId=${encodeURIComponent(player.espn_id)}&limit=30`);
+      const res = await fetch(`${NEWS_URL}?playerId=${encodeURIComponent(player.espn_id)}&limit=50`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       feed = (await res.json()).feed || [];
       _newsCache.set(player.espn_id, feed);
@@ -1622,7 +1617,7 @@ async function loadNews(panel, player) {
 
 function newsTabHtml() {
   return `<div data-news-body><p class="muted small">Loading news...</p></div>
-    <p class="muted small news-credit">Via ESPN's player news feed. Blurbs are written by Rotowire.</p>`;
+    <p class="muted small news-credit">News and analysis by Rotowire, via ESPN's player news feed.</p>`;
 }
 
 function playerModalBodyHtml(player, data, { showCompareTrigger = true } = {}) {
