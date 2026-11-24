@@ -1565,11 +1565,72 @@ function seasonPointsRankForPosition(player, data) {
   return idx === -1 ? null : idx + 1;
 }
 
+// News tab: ESPN's own player-news feed (Rotowire blurbs plus ESPN stories), fetched live the first time the
+// tab is opened. The endpoint is public and sends open CORS headers, so nothing is stored in the data pipeline.
+// Defenses (negative espn_id) have no feed, so they get no tab.
+const NEWS_URL = "https://site.api.espn.com/apis/fantasy/v2/games/ffl/news/players";
+const _newsCache = new Map();
+
+function newsEnabled(player) {
+  return Number(player.espn_id) > 0;
+}
+
+function newsDate(iso) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+export function newsItemsHtml(feed) {
+  const items = (feed || [])
+    .filter((i) => i && (i.type === "Rotowire" || i.type === "Story") && i.headline)
+    .slice(0, 12);
+  if (!items.length) return `<p class="muted small">No recent news.</p>`;
+  return items
+    .map((i) => {
+      const date = newsDate(i.published || i.lastModified);
+      const link = (i.links && (i.links.web && i.links.web.href)) || "";
+      if (i.type === "Rotowire") {
+        return `<div class="news-item"><div class="news-meta"><span class="news-src">Rotowire</span>${date ? ` <span class="muted small">${escapeHtml(date)}</span>` : ""}</div>
+          <div class="news-headline">${escapeHtml(i.headline)}</div>
+          ${i.description ? `<p class="news-body">${escapeHtml(i.description)}</p>` : ""}</div>`;
+      }
+      const head = link && /^https:\/\//.test(link) ? `<a href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(i.headline)}</a>` : escapeHtml(i.headline);
+      return `<div class="news-item"><div class="news-meta"><span class="news-src news-src-espn">ESPN</span>${date ? ` <span class="muted small">${escapeHtml(date)}</span>` : ""}</div>
+        <div class="news-headline">${head}</div></div>`;
+    })
+    .join("");
+}
+
+async function loadNews(panel, player) {
+  if (panel.dataset.loaded) return;
+  panel.dataset.loaded = "1";
+  const body = panel.querySelector("[data-news-body]");
+  try {
+    let feed = _newsCache.get(player.espn_id);
+    if (!feed) {
+      const res = await fetch(`${NEWS_URL}?playerId=${encodeURIComponent(player.espn_id)}&limit=30`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      feed = (await res.json()).feed || [];
+      _newsCache.set(player.espn_id, feed);
+    }
+    body.innerHTML = newsItemsHtml(feed);
+  } catch (err) {
+    panel.dataset.loaded = "";
+    body.innerHTML = `<p class="muted small">Couldn't load news right now. Try again in a moment.</p>`;
+  }
+}
+
+function newsTabHtml() {
+  return `<div data-news-body><p class="muted small">Loading news...</p></div>
+    <p class="muted small news-credit">Via ESPN's player news feed. Blurbs are written by Rotowire.</p>`;
+}
+
 function playerModalBodyHtml(player, data, { showCompareTrigger = true } = {}) {
   const faabHtml = faabEstimateSection(player, data);
   const tabs = [
     { key: "projections", label: "Game Log", html: overviewTabHtml(player, data) },
     ...(faabHtml ? [{ key: "faab", label: "FAAB Lab", html: faabHtml }] : []),
+    ...(newsEnabled(player) ? [{ key: "news", label: "News", html: newsTabHtml() }] : []),
   ];
 
   return `
@@ -1666,9 +1727,13 @@ function wireCompareTrigger(scopeEl, player, data) {
 // .compare-col for the compare view) rather than the whole document, so two
 // independent Overview/FAAB tab groups on screen at once (compare mode)
 // don't cross-wire each other's clicks.
-function wirePlayerModalTabs(scopeEl) {
+function wirePlayerModalTabs(scopeEl, player) {
   scopeEl.querySelectorAll(".modal-tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
+      if (btn.dataset.modalTab === "news" && player) {
+        const newsPanel = scopeEl.querySelector('[data-modal-panel="news"]');
+        if (newsPanel) loadNews(newsPanel, player);
+      }
       scopeEl.querySelectorAll(".modal-tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
       scopeEl.querySelectorAll(".modal-tabpanel").forEach((p) => p.classList.toggle("active", p.dataset.modalPanel === btn.dataset.modalTab));
     });
@@ -1746,7 +1811,7 @@ export function openPlayerModal(player, data) {
   // not .modal-content - modalBox (not scope) is the right search root for
   // both.
   modalBox.querySelector(".player-modal-header-actions > .modal-close")?.addEventListener("click", closeModal);
-  wirePlayerModalTabs(scope);
+  wirePlayerModalTabs(scope, player);
   wireFaabConfidenceSlider(scope, player, data);
   wireGameLogRows(scope);
   wirePriceCompRows(scope);
@@ -1797,7 +1862,7 @@ export function openComparePlayerModal(playerA, playerB, data) {
   const modalBox = document.querySelector(".modal-box");
   const modalContent = document.querySelector(".modal-content");
   const headerSlot = modalBox.querySelector(".modal-header-slot");
-  modalContent.querySelectorAll(".compare-col").forEach((col) => wirePlayerModalTabs(col));
+  modalContent.querySelectorAll(".compare-col").forEach((col) => wirePlayerModalTabs(col, col.dataset.compareCol === "b" ? playerB : playerA));
   wireFaabConfidenceSlider(modalContent.querySelector('[data-compare-col="a"]'), playerA, data);
   wireFaabConfidenceSlider(modalContent.querySelector('[data-compare-col="b"]'), playerB, data);
   modalContent.querySelectorAll(".compare-col").forEach((col) => wireGameLogRows(col));
