@@ -130,6 +130,33 @@ TRAINING_TABLE_PATH = Path(__file__).resolve().parent.parent / "tools" / "faab_h
 # conversation this was built from) and other leagues on the site have no
 # FAAB history of their own to train on regardless.
 POOLED_TRAINING_TABLE_PATH = Path(__file__).resolve().parent.parent / "tools" / "faab_history" / "combined-training-table.parquet"
+# Per-event count of pooled leagues where the player was genuinely unrostered that week (see
+# tools/faab_history/build_event_availability.py). Small, committed. Lifts leagues_eligible on interest comps whose
+# player fails is_faab_relevant, which have no synthetic no_bid rows and would otherwise read as a 100% bid rate.
+EVENT_AVAILABILITY_PATH = Path(__file__).resolve().parent.parent / "tools" / "faab_history" / "event-availability.json"
+
+
+def apply_event_availability(interest_rows: list[dict], availability: dict[str, int]) -> int:
+    """Raise each interest row's leagues_eligible to the true number of leagues where the player was available
+    (never lowers it, never below leagues_with_bid). Returns how many rows changed."""
+    changed = 0
+    for r in interest_rows:
+        n = availability.get(f"{r['season']}-{r['week']}-{r['add_player_id']}")
+        if n is None:
+            continue
+        n = max(n, r.get("leagues_with_bid") or 0)
+        if n > (r.get("leagues_eligible") or 0):
+            r["leagues_eligible"] = n
+            changed += 1
+    return changed
+
+
+def load_event_availability(path: Path | None = EVENT_AVAILABILITY_PATH) -> dict[str, int]:
+    if path is None or not path.exists():
+        return {}
+    return json.loads(path.read_text()).get("available", {})
+
+
 # .parquet, not .json, unlike TRAINING_TABLE_PATH above - see load_pools and
 # FaabModel.__init__'s branch on this path's suffix. The pooled table's raw
 # row count (5.6M+ as of 2026-09 and growing) makes json.loads(path.read_
@@ -2213,7 +2240,7 @@ def _same_week_availability_from_counts(rows: list[dict], rostered_in: set[str],
 class FaabModel:
     """Fit once per pipeline run, reused for every candidate player."""
 
-    def __init__(self, training_table_path: Path = TRAINING_TABLE_PATH):
+    def __init__(self, training_table_path: Path = TRAINING_TABLE_PATH, event_availability_path: Path | None = EVENT_AVAILABILITY_PATH):
         # .parquet (the pooled multi-league table - see load_pools' own
         # docstring for why this one specifically can't go through a plain
         # json.loads anymore) vs .json (the small O-League-only table,
@@ -2221,6 +2248,7 @@ class FaabModel:
         # comment on why it deliberately stays this function's default).
         if training_table_path.suffix == ".parquet":
             self.interest_rows, self.price_rows, self.event_won_rows_index = load_pools(training_table_path)
+            apply_event_availability(self.interest_rows, load_event_availability(event_availability_path))
         else:
             all_rows = json.loads(training_table_path.read_text())
             # add_synthetic_price_wins runs BEFORE any other trainable_rows

@@ -1011,3 +1011,16 @@ def test_same_week_availability_a_league_already_rostered_with_no_activity_is_no
     all_roster_leagues = {"1", "2", "3"}
     out = _same_week_availability_from_counts(rows, rostered_in={"2"}, all_roster_leagues=all_roster_leagues)
     assert out["leagues_eligible"] == 2  # league 1 (won) + league 3 (free agent, not rostered) - league 2 excluded
+
+
+def test_apply_event_availability_raises_denominator_only():
+    from engine.faab_estimate import apply_event_availability
+    rows = [
+        {"season": 2023, "week": 11, "add_player_id": 1, "leagues_with_bid": 3, "leagues_eligible": 3},  # gate-failing: only bidders counted
+        {"season": 2023, "week": 11, "add_player_id": 2, "leagues_with_bid": 2, "leagues_eligible": 40},  # already larger than availability
+        {"season": 2023, "week": 11, "add_player_id": 3, "leagues_with_bid": 4, "leagues_eligible": 4},  # no entry
+        {"season": 2023, "week": 11, "add_player_id": 4, "leagues_with_bid": 5, "leagues_eligible": 5},  # availability below bids
+    ]
+    avail = {"2023-11-1": 238, "2023-11-2": 30, "2023-11-4": 2}
+    assert apply_event_availability(rows, avail) == 1
+    assert [r["leagues_eligible"] for r in rows] == [238, 40, 4, 5]
