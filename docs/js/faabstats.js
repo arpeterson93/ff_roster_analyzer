@@ -158,11 +158,28 @@ export function leagueLens(fl, pos, week, currentSeason) {
   const cell = bucketWins.length >= THIN_N ? ratioStat(bucketWins, fl.baselines, pos, bucket) : ratioStat(posWins, fl.baselines, pos, null);
   const basis = bucketWins.length >= THIN_N ? "bucket" : "position";
   const budget = fl.budgets ? fl.budgets[String(currentSeason)] ?? null : null;
-  const comparable = (bucketWins.length ? bucketWins : posWins)
-    .slice()
-    .sort((a, b) => b.season - a.season || b.week - a.week)
-    .slice(0, 6);
+  // Fallback only (a league with no pooled-model history): recent same-position wins, any week.
+  const comparable = posWins.slice().sort((a, b) => b.season - a.season || b.week - a.week).slice(0, 6);
   return { ...cell, basis, bucket, pos, comparable, budget, totalPosWins: posWins.length };
+}
+
+// Past players in this league whose pooled-model read (median price, bid probability) looked like the one being
+// viewed, and what actually happened to each here: won at X% of budget, bid but lost, or nobody bid. Events come
+// from model_backtest.events: [season, week, name, pos, outcome w/l/n, actual_pct, pooled_median, p_bid].
+// Closeness = relative gap in pooled median plus gap in bid probability, with a small nudge toward recent seasons.
+export function similarEvents(bt, pos, pooledMedian, pBid, currentSeason, limit = 8) {
+  const ev = bt && bt.events;
+  if (!ev || !ev.length || pooledMedian === null || pooledMedian === undefined) return [];
+  const p0 = pBid ?? 0;
+  return ev
+    .filter((e) => e[3] === pos)
+    .map((e) => {
+      const d = Math.abs(e[6] - pooledMedian) / (0.02 + pooledMedian) + 2 * Math.abs(e[7] - p0) + 0.04 * Math.max(0, currentSeason - e[0]);
+      return { season: e[0], week: e[1], name: e[2], outcome: e[4], actual: e[5], pooled: e[6], p: e[7], d };
+    })
+    .sort((a, b) => a.d - b.d)
+    .slice(0, limit)
+    .sort((a, b) => b.season - a.season || b.week - a.week);
 }
 
 // ---- model vs reality ----

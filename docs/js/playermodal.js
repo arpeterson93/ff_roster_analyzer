@@ -4,7 +4,7 @@ import { waiverLabel } from "./availability.js";
 import { openModal, closeModal } from "./modal.js";
 import { blocksForPosition, groupedHeaderHtml, statCellsHtml } from "./statcolumns.js";
 import { loadWatchlist, setWatched } from "./watchlist.js";
-import { leagueLens, THIN_N } from "./faabstats.js";
+import { leagueLens, similarEvents, THIN_N } from "./faabstats.js";
 
 // Bar-per-play chart (x = elapsed game time, y = points scored on THAT
 // play) plus a top-plays table, for weeks with a per-play breakdown (see
@@ -996,9 +996,10 @@ function teamInterestSection(teamInterest, data) {
 // the comps table IS the explanation for comp_based, not just supporting
 // detail, so it's shown in full rather than collapsed away.
 // "In this league" strip for the FAAB Lab: how this league's winning bids for
-// this position compare with the pooled leagues the global estimate is built
-// from (faab_league.json via faabstats.js's leagueLens), the global estimate
-// scaled by that ratio, and the most recent comparable winning bids here.
+// this position compare with the pooled leagues behind the global estimate
+// (faab_league.json via faabstats.js's leagueLens), the global estimate scaled
+// by that ratio, and past players here whose pooled read looked like this
+// player's, with what actually happened to each (everything in % of budget).
 // Absent entirely when the league has no FAAB history yet.
 function leagueLensSection(player, data, est) {
   const fl = data.faabLeague;
@@ -1006,20 +1007,23 @@ function leagueLensSection(player, data, est) {
   const week = (est.inputs || {}).week;
   const lens = leagueLens(fl, player.position, week, fl.season);
   if (!lens || lens.shrunk === null || lens.shrunk === undefined) return "";
-  const budget = lens.budget || fl.budgets[String(Math.max(...Object.keys(fl.budgets).map(Number)))] || null;
-  const dollars = (p) => (budget ? ` <span class="muted">(≈$${fmt(p * budget, 0)})</span>` : "");
   const base = (est.conditional_price || {}).comp_based_median;
   const hasBase = base !== undefined && base !== null && base > 0 && !est.single_backing_flag;
   const adjusted = hasBase ? base * lens.shrunk : null;
   const where = lens.basis === "bucket" ? `${player.position}, weeks ${lens.bucket}` : `${player.position}, all season`;
   const direction = Math.abs(lens.shrunk - 1) < 0.1 ? "about the same as" : lens.shrunk > 1 ? "above" : "below";
-  const comps = lens.comparable.map((r) => `<li>${r.season} wk ${r.week}: ${escapeHtml(r.name || "?")} - $${fmt(r.bid, 2)} <span class="muted">(${fmt(r.pct * 100, 1)}% of budget${r.n_bids > 1 ? `, ${r.n_bids} bidders` : ""})</span></li>`).join("");
+  const similar = hasBase ? similarEvents(fl.model_backtest, player.position, base, (est.bid_probability || {}).comp_based_median, fl.season) : [];
+  const outcomeCell = (e) => (e.outcome === "w" ? `<strong>${fmt(e.actual * 100, 1)}%</strong>` : e.outcome === "l" ? `<span class="muted">bid, lost</span>` : `<span class="muted">no bid</span>`);
+  const simRows = similar.map((e) => `<tr><td>${e.season} wk ${e.week}</td><td>${escapeHtml(e.name || "?")}</td><td>${fmt(e.pooled * 100, 1)}%</td><td>${outcomeCell(e)}</td></tr>`).join("");
+  const fallback = lens.comparable.map((r) => `<li>${r.season} wk ${r.week}: ${escapeHtml(r.name || "?")} - ${fmt(r.pct * 100, 1)}% of budget${r.n_bids > 1 ? ` <span class="muted">(${r.n_bids} bidders)</span>` : ""}</li>`).join("");
   return `
     <div class="faabl-lens">
       <h3>In this league</h3>
       <p class="small" style="margin:0">${escapeHtml(where)} winning bids here run <strong>${fmt(lens.shrunk, 2)}×</strong> the pooled median - ${direction} the other leagues behind the estimate above${lens.n < THIN_N ? ` <span class="muted">(thin: only ${lens.n} past wins)</span>` : ` <span class="muted">(${lens.n} past wins)</span>`}.</p>
-      ${adjusted !== null ? `<p class="small" style="margin:4px 0 0">Global median ${fmt(base * 100, 1)}%${dollars(base)} → <strong>league-adjusted ${fmt(adjusted * 100, 1)}%</strong>${dollars(adjusted)}.</p>` : ""}
-      ${comps ? `<details><summary class="small">Recent winning ${escapeHtml(player.position)} bids in this league</summary><ul>${comps}</ul></details>` : ""}
+      ${adjusted !== null ? `<p class="small" style="margin:4px 0 0">Pooled median ${fmt(base * 100, 1)}% → <strong>league-adjusted ${fmt(adjusted * 100, 1)}%</strong>.</p>` : ""}
+      ${simRows
+        ? `<details open><summary class="small">Similar ${escapeHtml(player.position)}s here: pooled read vs what happened</summary><div class="table-wrap"><table class="faabl-table"><thead><tr><th>When</th><th>Player</th><th>Pooled median</th><th>This league</th></tr></thead><tbody>${simRows}</tbody></table></div><p class="muted small" style="margin:4px 0 0">Closest by pooled median and bid chance, only players who were available here. Percent of budget.</p></details>`
+        : fallback ? `<details><summary class="small">Recent winning ${escapeHtml(player.position)} bids in this league</summary><ul>${fallback}</ul></details>` : ""}
     </div>
   `;
 }

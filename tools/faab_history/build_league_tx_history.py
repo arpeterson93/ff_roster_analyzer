@@ -80,7 +80,33 @@ def build_backtest(slug: str) -> dict | None:
         for r in rows if r["signal"] == "won"
     ]
     calib = [[round(r["comp_bid_probability"], 4), 1 if r["signal"] in ("won", "outbid") else 0] for r in rows if r["signal"] in ("won", "outbid", "no_bid")]
-    return {"source": "held-out evaluation of the pooled model on this league's own past bids", "won": won, "calib": calib}
+    return {
+        "source": "held-out evaluation of the pooled model on this league's own past bids",
+        "won": won, "calib": calib, "events": _events(rows),
+    }
+
+
+def _events(rows: list[dict]) -> list[list]:
+    """One row per (season, week, player) this league's pooled prediction covered:
+    [season, week, name, pos, outcome, actual_pct, pooled_median_pct, p_bid]. outcome is "w" (a claim won -
+    actual_pct is the winning bid), "l" (claims were made but all lost) or "n" (the player was available and
+    nobody bid). Cancelled/invalid claims are neither, so they are left out. Powers the player modal's
+    "similar players in this league" list."""
+    rank = {"won": 0, "outbid": 1, "no_bid": 2}
+    code = {"won": "w", "outbid": "l", "no_bid": "n"}
+    best: dict[tuple, dict] = {}
+    for r in rows:
+        if r["signal"] not in rank:
+            continue
+        key = (r["season"], r["week"], r["add_player_id"])
+        if key not in best or rank[r["signal"]] < rank[best[key]["signal"]]:
+            best[key] = r
+    return [
+        [r["season"], r["week"], r["name"], r["position"], code[r["signal"]],
+         round(r["actual_pct"], 5) if r["signal"] == "won" else None,
+         round(r["comp_conditional_price"], 5), round(r["comp_bid_probability"], 4)]
+        for r in sorted(best.values(), key=lambda r: (r["season"], r["week"]))
+    ]
 
 
 def main() -> None:
