@@ -53,7 +53,7 @@ from engine.play_log import (
     scoring_plays_for_player, scoring_time_index, zero_point_plays_for_player,
 )
 from engine.points_against import dst_points_against_detail, points_against_detail, with_kick_attempts, with_remaining_schedule
-from engine.scoring import ScoringRules
+from engine.scoring import ScoringRules, espn_points_allowed
 from engine import odds_history, standings_stage
 from engine.faab_league import build_faab_league, processed_weeks_of, snapshot_entries, update_estimate_log
 from engine.history import load_and_build as load_history
@@ -1169,7 +1169,7 @@ def run_league(
             opp_row = current_team_stats_by_game.get((row["game_id"], row["opponent_team"]))
             if game is None or opp_row is None or row["opponent_team"] not in game:
                 continue
-            points_allowed = game[row["opponent_team"]]
+            points_allowed = espn_points_allowed(game[row["opponent_team"]], opp_row)
             yards_allowed = (opp_row.get("passing_yards") or 0) + (opp_row.get("rushing_yards") or 0)
             entry = dict(row)
             entry["points_allowed"] = points_allowed

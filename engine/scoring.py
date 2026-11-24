@@ -207,6 +207,17 @@ def _ya_bracket_expr(abbr: str):
     return lambda ctx: 1.0 if _in_bracket(ctx["yards_allowed"], low, high) else 0.0
 
 
+def espn_points_allowed(game_score: float, scoring_team_row: dict | None) -> float:
+    """Points allowed by a D/ST the way ESPN counts them: the opponent's final score minus
+    what that opponent scored without its offense - defensive TDs (pick-sixes, fumble returns),
+    return TDs and safeties. Each TD is assumed to carry its extra point (7), since team_stats
+    can't say whether it was good. `scoring_team_row` is the opponent's own team_stats row."""
+    if not scoring_team_row:
+        return game_score
+    non_offense = 7 * (_get(scoring_team_row, "def_tds") + _get(scoring_team_row, "special_teams_tds")) + 2 * _get(scoring_team_row, "def_safeties")
+    return max(0.0, game_score - non_offense)
+
+
 DST_STAT_EXPR: dict[str, callable] = {
     "SK": lambda ctx: _get(ctx["team_row"], "def_sacks"),
     "HALFSK": lambda ctx: _get(ctx["team_row"], "def_sacks"),

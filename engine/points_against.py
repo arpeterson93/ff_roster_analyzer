@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import polars as pl
 
-from engine.scoring import ScoringRules
+from engine.scoring import ScoringRules, espn_points_allowed
 from ingest.nfl_data import game_scores as _load_game_scores
 
 PASSING_BLOCK = ("Passing", [("completions", "C"), ("attempts", "A"), ("passing_yards", "Yds"), ("passing_tds", "TD"), ("passing_interceptions", "Int")])
@@ -235,7 +235,7 @@ def dst_points_against_detail(
         opp_offense_row = offense_by_game.get((row["game_id"], offense))
         if game is None or opp_offense_row is None or offense not in game:
             continue
-        points_allowed = game[offense]
+        points_allowed = espn_points_allowed(game[offense], opp_offense_row)
         yards_allowed = (opp_offense_row.get("passing_yards") or 0) + (opp_offense_row.get("rushing_yards") or 0)
         pts = dst_scoring.dst_points_for_row(row, points_allowed=points_allowed, yards_allowed=yards_allowed)
         stats = {

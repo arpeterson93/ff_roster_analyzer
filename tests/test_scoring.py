@@ -122,3 +122,12 @@ def test_uncomputable_dst_stats_always_score_zero(caplog):
     assert rules.dst_points_for_row({}, points_allowed=0, yards_allowed=0) == pytest.approx(0.0)
     assert "2PRET" in caplog.text
     assert "1PSF" in caplog.text
+
+
+def test_espn_points_allowed_excludes_defensive_and_return_scores():
+    from engine.scoring import espn_points_allowed
+    # MIN @ SF 2026 wk 11: SF 35 with a pick-six -> ESPN charges MIN with 28.
+    assert espn_points_allowed(35, {"def_tds": 1}) == 28
+    assert espn_points_allowed(20, {"special_teams_tds": 1, "def_safeties": 1}) == 11
+    assert espn_points_allowed(24, {}) == 24
+    assert espn_points_allowed(24, None) == 24
