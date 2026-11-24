@@ -96,3 +96,26 @@ def test_blend_current_caps_at_max_weight():
     # weeks_played=16 >> full_weight_weeks=8 -> weight caps at max_weight=0.5
     blended = blend_current(hist, cur, weeks_played=16, max_weight=0.5, full_weight_weeks=8)
     assert blended.ppg_at("WR", 1) == pytest.approx(0.5 * 20.0 + 0.5 * 30.0)
+
+
+def test_smooth_sd_monotone_positions_are_non_increasing_and_keep_the_trend():
+    from engine.curve import smooth_sd
+    raw = {1: 6.1, 2: 7.9, 3: 6.0, 4: 5.3, 5: 5.6, 6: 4.7, 7: 5.1, 8: 4.4, 9: 4.6, 10: 3.9, 11: 4.2, 12: 3.5}
+    out = smooth_sd(raw, monotone=True)
+    vals = [out[r] for r in sorted(out)]
+    assert all(a >= b - 1e-12 for a, b in zip(vals, vals[1:]))  # TE1 no longer below TE2
+    assert vals[0] > vals[-1] and vals[0] < max(raw.values())
+    assert sum(vals) / len(vals) == pytest.approx(sum(raw.values()) / len(raw), rel=0.05)
+
+
+def test_smooth_sd_flat_positions_reduce_noise_without_shifting_the_level():
+    from engine.curve import smooth_sd
+    raw = {r: 7.5 + (1.5 if r % 2 else -1.5) for r in range(1, 21)}
+    out = smooth_sd(raw, monotone=False)
+    assert max(out.values()) - min(out.values()) < 1.0
+    assert sum(out.values()) / 20 == pytest.approx(7.5, abs=0.2)
+
+
+def test_smooth_sd_leaves_tiny_tables_alone():
+    from engine.curve import smooth_sd
+    assert smooth_sd({1: 5.0, 2: 6.0}, monotone=True) == {1: 5.0, 2: 6.0}

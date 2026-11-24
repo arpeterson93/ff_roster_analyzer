@@ -13,6 +13,15 @@ from ingest.nfl_data import game_scores as _load_game_scores
 
 OFFENSE_POSITIONS = ["QB", "RB", "WR", "TE", "K"]
 
+# The per-rank SD table is an average over only a handful of players per rank per
+# season, so it zigzags (a TE2 with a bigger SD than the TE1, say). Smoothed before use:
+# RB/WR/TE spreads genuinely shrink as rank worsens, so they get a non-increasing
+# (isotonic) fit plus a light moving average; QB/K/DST are roughly flat, so a wider
+# moving average. See smooth_sd.
+SD_MONOTONE_POSITIONS = frozenset({"RB", "WR", "TE"})
+SD_SMOOTH_WINDOW = 9
+SD_MONOTONE_WINDOW = 5
+
 
 @dataclass
 class Curve:
@@ -34,6 +43,41 @@ class Curve:
             return 0.0
         r = max(1, min(rank, self.max_rank[pos]))
         return table[r]
+
+
+def _moving_average(values: list[float], window: int) -> list[float]:
+    """Centered moving average with the window truncated at the ends (still non-increasing for a non-increasing input)."""
+    half = window // 2
+    return [float(np.mean(values[max(0, i - half): i + half + 1])) for i in range(len(values))]
+
+
+def _isotonic_non_increasing(values: list[float]) -> list[float]:
+    """Pool-adjacent-violators: the closest non-increasing sequence (least squares)."""
+    blocks: list[list[float]] = []  # [sum, count]
+    for v in values:
+        blocks.append([v, 1])
+        while len(blocks) > 1 and blocks[-2][0] / blocks[-2][1] < blocks[-1][0] / blocks[-1][1]:
+            s_, n_ = blocks.pop()
+            blocks[-1][0] += s_
+            blocks[-1][1] += n_
+    out: list[float] = []
+    for s_, n_ in blocks:
+        out.extend([s_ / n_] * n_)
+    return out
+
+
+def smooth_sd(sd: dict[int, float], monotone: bool) -> dict[int, float]:
+    """Smooth one position's {rank: SD} table. monotone=True (RB/WR/TE): non-increasing fit
+    then a light moving average; otherwise a wider moving average."""
+    if len(sd) < 3:
+        return dict(sd)
+    ranks = sorted(sd)
+    vals = [sd[r] for r in ranks]
+    if monotone:
+        smoothed = _moving_average(_isotonic_non_increasing(vals), SD_MONOTONE_WINDOW)
+    else:
+        smoothed = _moving_average(vals, SD_SMOOTH_WINDOW)
+    return dict(zip(ranks, smoothed))
 
 
 def _player_season_ppg_sd(
@@ -132,7 +176,7 @@ def build_curve(
         if not ppg:
             continue
         curve.ppg[pos] = ppg
-        curve.sd[pos] = sd
+        curve.sd[pos] = smooth_sd(sd, pos in SD_MONOTONE_POSITIONS)
         curve.max_rank[pos] = max_rank
         n = starter_pool.get(pos, 32)
         top_n = [ppg[r] for r in range(1, min(n, max_rank) + 1)]
@@ -155,7 +199,7 @@ def build_dst_curve(
     ppg, sd, max_rank = _build_position_curve(per_season, starter_pool)
     if ppg:
         curve.ppg["DST"] = ppg
-        curve.sd["DST"] = sd
+        curve.sd["DST"] = smooth_sd(sd, False)
         curve.max_rank["DST"] = max_rank
         top_n = [ppg[r] for r in range(1, min(starter_pool, max_rank) + 1)]
         curve.position_avg["DST"] = float(np.mean(top_n)) if top_n else 0.0
