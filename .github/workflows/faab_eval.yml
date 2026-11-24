@@ -27,11 +27,12 @@ jobs:
       - run: pip install -r requirements.txt
 
       - name: Add swap
+        # /swapfile already exists (and is in use) on the hosted image, so use a fresh path; best-effort only.
         run: |
-          sudo fallocate -l 8G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          sudo fallocate -l 8G /mnt/extra.swap || true
+          sudo chmod 600 /mnt/extra.swap || true
+          sudo mkswap /mnt/extra.swap || true
+          sudo swapon /mnt/extra.swap || true
           free -h
 
       - name: Fetch pooled training table
