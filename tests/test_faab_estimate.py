@@ -1024,3 +1024,21 @@ def test_apply_event_availability_raises_denominator_only():
     avail = {"2023-11-1": 238, "2023-11-2": 30, "2023-11-4": 2}
     assert apply_event_availability(rows, avail) == 1
     assert [r["leagues_eligible"] for r in rows] == [238, 40, 4, 5]
+
+
+def test_load_same_week_data_ignores_a_pull_made_before_waivers_ran(tmp_path):
+    import json as _json
+    from engine.faab_estimate import MIN_SETTLED_CLAIMS_FOR_SAME_WEEK, load_same_week_data
+    bids, rosters = tmp_path / "b.json", tmp_path / "r.json"
+    rosters.write_text(_json.dumps({"week": 12, "leagues": {"1": ["00-1"], "2": []}}))
+    # week 12 pulled early: only 2 settled claims -> dropped, rosters with it
+    bids.write_text(_json.dumps([{"week": 12, "signal": "won", "gsis_id": "00-1"}, {"week": 12, "signal": "won", "gsis_id": "00-2"}, {"week": 12, "signal": "other_failure", "gsis_id": "00-3"}]))
+    by_gsis, weeks, rostered, universe, underfilled = load_same_week_data(bids, rosters)
+    assert not by_gsis and not weeks and not rostered and not universe and underfilled == {12}
+    # a full pull is kept
+    full = [{"week": 12, "signal": "won", "gsis_id": f"00-{i}"} for i in range(MIN_SETTLED_CLAIMS_FOR_SAME_WEEK)]
+    bids.write_text(_json.dumps(full))
+    by_gsis, weeks, rostered, universe, underfilled = load_same_week_data(bids, rosters)
+    assert weeks == {12} and universe[12] == {"1", "2"} and ("00-1", 12) in rostered and not underfilled
+    # nothing on disk at all is fine
+    assert load_same_week_data(tmp_path / "x", tmp_path / "y")[1] == set()

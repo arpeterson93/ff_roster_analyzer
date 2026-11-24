@@ -169,6 +169,11 @@ CURRENT_WEEK_BIDS_PATH = Path(__file__).resolve().parent.parent / "tools" / "faa
 # below). Optional: a week this hasn't run yet, or found nothing, just
 # means same_week_signal always returns None, not a crash - see
 # FaabModel.__init__'s own handling.
+# A weekly pull only counts as "real" once this many SETTLED claims (won/outbid) are in it. A normal week has
+# 1,500-2,500 won + 600-1,300 outbid across the pooled leagues; a run before most leagues' waivers have processed
+# (2026-11-24 week 12: 2 won) would otherwise read every player as "0 of ~470 leagues bid" and overwrite the
+# pooled estimates with zeros. Below this, FaabModel ignores the week's bids AND rosters and the pooled model stands.
+MIN_SETTLED_CLAIMS_FOR_SAME_WEEK = 300
 CURRENT_WEEK_ROSTERS_PATH = Path(__file__).resolve().parent.parent / "tools" / "faab_history" / "current-week-rosters.json"
 # The same script's other output - one rostered-gsis-id snapshot per pooled
 # league for THE CURRENT WEEK ONLY, same "not accumulating, may not exist
@@ -2237,6 +2242,46 @@ def _same_week_availability_from_counts(rows: list[dict], rostered_in: set[str],
 
 
 # ---------------------------------------------------------------------------
+def load_same_week_data(bids_path: Path, rosters_path: Path):
+    """The current-week pull (tools/faab_history/pull_current_week_bids.py) as lookups:
+    (by_gsis {(gsis_id, week): [rows]}, weeks_with_data, rostered_leagues {(gsis_id, week): {league ids}},
+    roster_universe {week: {league ids}}, underfilled_weeks).
+
+    weeks_with_data is the weeks the puller ran for, off EVERY row, so a caller can tell "pulled and found nothing on
+    this player" (a real zero) from "not pulled yet". roster_universe is the leagues with a roster snapshot that
+    week - the denominator same_week_availability unions against. A week with fewer than
+    MIN_SETTLED_CLAIMS_FOR_SAME_WEEK settled claims ran before most leagues' waivers processed: its bids and its
+    rosters are both dropped (and the week listed in underfilled_weeks) so the pooled historical model answers
+    instead of a wall of zeros."""
+    by_gsis: dict[tuple[str, int], list[dict]] = defaultdict(list)
+    weeks_with_data: set[int] = set()
+    underfilled: set[int] = set()
+    if bids_path.exists():
+        bid_rows = json.loads(bids_path.read_text())
+        settled: dict[int, int] = defaultdict(int)
+        for r in bid_rows:
+            if r.get("signal") in ("won", "outbid"):
+                settled[r["week"]] += 1
+        underfilled = {w for w in {r["week"] for r in bid_rows} if settled[w] < MIN_SETTLED_CLAIMS_FOR_SAME_WEEK}
+        for r in bid_rows:
+            if r["week"] in underfilled:
+                continue
+            weeks_with_data.add(r["week"])
+            if r.get("gsis_id"):
+                by_gsis[(r["gsis_id"], r["week"])].append(r)
+    rostered: dict[tuple[str, int], set[str]] = defaultdict(set)
+    universe: dict[int, set[str]] = {}
+    if rosters_path.exists():
+        doc = json.loads(rosters_path.read_text())
+        week, leagues = doc["week"], doc["leagues"]
+        if week not in underfilled:
+            universe[week] = set(leagues.keys())
+            for lid, gsis_ids in leagues.items():
+                for gsis_id in gsis_ids:
+                    rostered[(gsis_id, week)].add(lid)
+    return by_gsis, weeks_with_data, rostered, universe, underfilled
+
+
 class FaabModel:
     """Fit once per pipeline run, reused for every candidate player."""
 
@@ -2306,46 +2351,10 @@ class FaabModel:
         # comp_based_estimate, or _knn at all). Keyed by (gsis_id, week) -
         # multiple OTHER leagues' rows for the same real player-week just
         # become multiple entries under one key, not extra k-NN neighbors.
-        self.same_week_by_gsis: dict[tuple[str, int], list[dict]] = defaultdict(list)
-        # Weeks the puller actually ran for, off EVERY row (not just the
-        # gsis_id-mapped ones same_week_by_gsis indexes) - lets a caller tell
-        # "we pulled this week and found zero real activity on this specific
-        # player" (a real observed negative) apart from "the puller hasn't
-        # run for this week at all yet" (no signal either way). See
-        # rankings.js's Rankings-table override, the reason this exists.
-        self.same_week_weeks_with_data: set[int] = set()
-        if CURRENT_WEEK_BIDS_PATH.exists():
-            for r in json.loads(CURRENT_WEEK_BIDS_PATH.read_text()):
-                self.same_week_weeks_with_data.add(r["week"])
-                if r.get("gsis_id"):
-                    self.same_week_by_gsis[(r["gsis_id"], r["week"])].append(r)
-
-        # Real leagues_with_bid/leagues_eligible denominator for
-        # same_week_availability below - see CURRENT_WEEK_ROSTERS_PATH's own
-        # comment and pull_current_week_bids.py's module docstring for where
-        # this comes from. Keyed by week (not just a single "this week"
-        # scalar) purely so a stale rosters file left over from a prior
-        # week's run - the bids file gets overwritten every run too, but a
-        # crash between the two writes could leave one ahead of the other -
-        # can't be silently mistaken for the CURRENT week's own data;
-        # same_week_availability only ever gets a real total for the
-        # specific week key this dict actually has.
-        self.same_week_rostered_leagues: dict[tuple[str, int], set[str]] = defaultdict(set)
-        # The full set of league ids (as str - see CURRENT_WEEK_ROSTERS_PATH's
-        # keys, JSON object keys are always strings) pull_current_week_bids.py
-        # got a real roster snapshot for THIS week - the universe
-        # same_week_availability unions against, not just a count (see
-        # _same_week_availability_from_counts's own docstring on why a plain
-        # count + naive subtraction shipped broken).
-        self.same_week_roster_universe: dict[int, set[str]] = {}
-        if CURRENT_WEEK_ROSTERS_PATH.exists():
-            rosters_doc = json.loads(CURRENT_WEEK_ROSTERS_PATH.read_text())
-            rosters_week = rosters_doc["week"]
-            leagues = rosters_doc["leagues"]
-            self.same_week_roster_universe[rosters_week] = set(leagues.keys())
-            for lid, gsis_ids in leagues.items():
-                for gsis_id in gsis_ids:
-                    self.same_week_rostered_leagues[(gsis_id, rosters_week)].add(lid)
+        (
+            self.same_week_by_gsis, self.same_week_weeks_with_data, self.same_week_rostered_leagues,
+            self.same_week_roster_universe, self.same_week_underfilled_weeks,
+        ) = load_same_week_data(CURRENT_WEEK_BIDS_PATH, CURRENT_WEEK_ROSTERS_PATH)
 
     def same_week_signal(self, gsis_id: str | None, week: int) -> dict | None:
         """None when there's nothing to show (the common case - most
