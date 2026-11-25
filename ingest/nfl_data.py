@@ -71,13 +71,17 @@ def _is_current_season(seasons: list[int], current_season: int | None) -> bool:
     return current_season is not None and current_season in seasons
 
 
-def _cached_load(name: str, seasons: list[int], loader, *, current_season: int | None) -> pl.DataFrame:
+def _cached_load(name: str, seasons: list[int], loader, *, current_season: int | None, max_age: float | None = None) -> pl.DataFrame:
+    """max_age (seconds) re-fetches a cached file older than that even for a completed season - for columns nflverse
+    recomputes after the fact (nflfastR's fg_prob changed by up to 6 points between two cached copies of 2025)."""
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     path = _cache_path(name, seasons)
     fresh_for_current = _is_current_season(seasons, current_season)
     if path.exists():
         age = time.time() - path.stat().st_mtime
-        if not fresh_for_current or age < CURRENT_SEASON_TTL:
+        if max_age is not None and age > max_age:
+            pass  # too old for this caller - fall through to a re-fetch
+        elif not fresh_for_current or age < CURRENT_SEASON_TTL:
             return pl.read_parquet(path)
     df = loader()
     df.write_parquet(path)
@@ -92,14 +96,17 @@ def schedules(seasons: int | list[int], current_season: int | None = None) -> pl
     return _normalize_team_columns(df, ["away_team", "home_team"])
 
 
-def play_by_play(seasons: int | list[int], current_season: int | None = None) -> pl.DataFrame:
+def play_by_play(seasons: int | list[int], current_season: int | None = None, max_age_days: float | None = None) -> pl.DataFrame:
     """Play-by-play (nflfastR), for engine/play_log.py's per-play scoring
     breakdown - one row per play, not per player-week. Same graceful-empty-
     frame-on-failure behavior as player_stats below (a fresh current season
     before any real plays have happened yet shouldn't crash the pipeline)."""
     seasons_list = [seasons] if isinstance(seasons, int) else list(seasons)
     try:
-        df = _cached_load("pbp", seasons_list, lambda: nfl.load_pbp(seasons_list), current_season=current_season)
+        df = _cached_load(
+            "pbp", seasons_list, lambda: nfl.load_pbp(seasons_list), current_season=current_season,
+            max_age=max_age_days * 86400 if max_age_days is not None else None,
+        )
     except ConnectionError:
         probe = _cached_load("pbp_schema_probe", [2023], lambda: nfl.load_pbp([2023]), current_season=None)
         return probe.clear()

@@ -31,39 +31,38 @@ def test_extra_point_example_from_the_spec():
     assert round(expected_attempt_points(no_penalty, "xp", None, 0.95), 6) == 0.95
 
 
-def test_curve_is_smooth_monotone_and_sensible():
-    from engine.kicker_xpts import fg_make_prob, xp_make_prob
-    ps = [fg_make_prob(d) for d in range(18, 70)]
-    assert all(a > b for a, b in zip(ps, ps[1:]))            # strictly falling with distance
-    d2 = [ps[i] - 2 * ps[i + 1] + ps[i + 2] for i in range(len(ps) - 2)]
-    assert max(abs(x) for x in d2) < 0.02                      # no spikes
-    assert fg_make_prob(25) > 0.95 and 0.7 < fg_make_prob(50) < 0.85 and fg_make_prob(62) < 0.6
-    assert 0.9 < xp_make_prob() < 1.0
-
-
 def test_weekly_sum_over_attempts():
-    from engine.kicker_xpts import fg_make_prob, xp_make_prob
     pbp = pl.DataFrame({
         "field_goal_attempt": [1, 1, 0, 0],
         "extra_point_attempt": [0, 0, 1, 1],
         "kicker_player_id": ["K1", "K1", "K1", "K2"],
         "week": [3, 3, 3, 3],
         "kick_distance": [33.0, 52.0, None, None],
+        "fg_prob": [0.9, 0.6, None, None],
+        "extra_point_prob": [None, None, 0.95, 0.9],
     })
     out = kicker_weekly_xpts(pbp, RULES)
-    p1, p2, px = fg_make_prob(33.0), fg_make_prob(52.0), xp_make_prob()
-    assert round(out[("K1", 3)], 6) == round((p1 * 3 - (1 - p1)) + (p2 * 5 - (1 - p2)) + (px - (1 - px)), 6)
-    assert round(out[("K2", 3)], 6) == round(px - (1 - px), 6)
+    assert round(out[("K1", 3)], 6) == round((0.9 * 3 - 0.1) + (0.6 * 5 - 0.4) + 0.9, 6)
+    assert round(out[("K2", 3)], 6) == round(0.9 * 1 - 0.1, 6)
+
+
+def test_kicks_without_a_probability_or_distance_are_skipped():
+    pbp = pl.DataFrame({
+        "field_goal_attempt": [1, 1], "extra_point_attempt": [0, 0], "kicker_player_id": ["K1", "K1"], "week": [1, 1],
+        "kick_distance": [None, 40.0], "fg_prob": [0.5, None], "extra_point_prob": [None, None],
+    })
+    assert kicker_weekly_xpts(pbp, RULES) == {}
 
 
 def test_team_weekly_keys_by_kicking_team_and_regular_season():
-    from engine.kicker_xpts import team_weekly_kicker_xpts, xp_make_prob
+    from engine.kicker_xpts import team_weekly_kicker_xpts
     pbp = pl.DataFrame({
         "field_goal_attempt": [0, 0], "extra_point_attempt": [1, 1], "kicker_player_id": ["K1", "K2"],
-        "week": [4, 4], "kick_distance": [None, None], "posteam": ["BUF", "MIA"], "season_type": ["REG", "POST"],
+        "week": [4, 4], "kick_distance": [None, None], "fg_prob": [None, None], "extra_point_prob": [0.95, 0.95],
+        "posteam": ["BUF", "MIA"], "season_type": ["REG", "POST"],
     })
     out = team_weekly_kicker_xpts(pbp, RULES)
-    assert list(out) == [("BUF", 4, "K")] and round(out[("BUF", 4, "K")], 6) == round(2 * xp_make_prob() - 1, 6)
+    assert list(out) == [("BUF", 4, "K")] and round(out[("BUF", 4, "K")], 6) == round(0.95 - 0.05, 6)
 
 
 def test_empty_pbp_gives_nothing():

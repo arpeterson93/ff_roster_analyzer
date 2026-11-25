@@ -1,10 +1,9 @@
 """Kicker expected fantasy points (xFP) from play-by-play.
 
-ffopportunity (engine/expected_points.py) has no kicker model, so this builds one. Each kick's make probability
-comes from an NFL-wide curve fitted to real make/miss results (tools/fit_kicker_curve.py -> data/kicker_make_curve.json):
-a smooth logistic curve in kick distance for field goals, and one flat rate for extra points. nflfastR's own `fg_prob`
-is deliberately not used - it moves between data vintages (the same 2025 plays came back about 3 points lower from a
-stale cached file) and is noisier kick to kick. For each attempt the expected points under a league's own scoring are
+ffopportunity (engine/expected_points.py) has no kicker model, so this builds one from what nflfastR already
+publishes on every kick: `fg_prob` (its modelled chance the field goal is good, from distance and conditions) and
+`extra_point_prob`. (A home-made smoothed distance curve was tried and dropped: it matched nflfastR on average but was
+a little less accurate, especially on long kicks.) For each attempt the expected points under a league's own scoring are
 
     p(make) * points_if_made + (1 - p(make)) * points_if_missed
 
@@ -17,38 +16,13 @@ Blocked kicks count as misses (they are inside 1 - p). Two-point tries are not a
 """
 from __future__ import annotations
 
-import json
-import math
-from functools import lru_cache
-from pathlib import Path
-
 import polars as pl
 
 from engine.scoring import ScoringRules
 
-CURVE_PATH = Path(__file__).resolve().parent.parent / "data" / "kicker_make_curve.json"
-
 # (inclusive upper bound, nflverse bracket suffix) - the same brackets PLAYER_STAT_EXPR reads.
 _FG_BRACKETS = [(19, "0_19"), (29, "20_29"), (39, "30_39"), (49, "40_49"), (59, "50_59")]
 _FG_TOP_BRACKET = "60_"
-
-
-@lru_cache(maxsize=1)
-def _curve() -> dict:
-    return json.loads(CURVE_PATH.read_text(encoding="utf-8"))
-
-
-def fg_make_prob(distance: float | None) -> float:
-    """NFL-wide chance a field goal from `distance` yards is good, at the latest fitted season's level."""
-    c = _curve()["fg"]
-    x = ((distance if distance is not None else 35.0) - c["center"]) / c["scale"]
-    t = (c["season"] - c["trend_center"]) / c["trend_scale"]
-    b = c["coefs"]
-    return 1.0 / (1.0 + math.exp(-(b[0] + b[1] * x + b[2] * x * x + b[3] * t)))
-
-
-def xp_make_prob() -> float:
-    return _curve()["xp"]["p"]
 
 
 def fg_bracket(distance: float) -> str:
@@ -78,16 +52,16 @@ def expected_attempt_points(rules: ScoringRules, kind: str, distance: float | No
 
 def _weekly(pbp: pl.DataFrame, rules: ScoringRules, key_cols: list[str]) -> dict[tuple, float]:
     out: dict[tuple, float] = {}
-    if pbp.height == 0 or "kick_distance" not in pbp.columns:
+    if pbp.height == 0 or "fg_prob" not in pbp.columns:
         return out
-    fgs = pbp.filter((pl.col("field_goal_attempt") == 1) & pl.col("kick_distance").is_not_null())
-    for *key, dist in fgs.select(*key_cols, "kick_distance").iter_rows():
+    fgs = pbp.filter((pl.col("field_goal_attempt") == 1) & pl.col("kick_distance").is_not_null() & pl.col("fg_prob").is_not_null())
+    for *key, dist, p in fgs.select(*key_cols, "kick_distance", "fg_prob").iter_rows():
         k = tuple(key)
-        out[k] = out.get(k, 0.0) + expected_attempt_points(rules, "fg", dist, fg_make_prob(dist))
-    xp_value = expected_attempt_points(rules, "xp", None, xp_make_prob())
-    for *key, in pbp.filter(pl.col("extra_point_attempt") == 1).select(*key_cols).iter_rows():
+        out[k] = out.get(k, 0.0) + expected_attempt_points(rules, "fg", dist, p)
+    xps = pbp.filter((pl.col("extra_point_attempt") == 1) & pl.col("extra_point_prob").is_not_null())
+    for *key, p in xps.select(*key_cols, "extra_point_prob").iter_rows():
         k = tuple(key)
-        out[k] = out.get(k, 0.0) + xp_value
+        out[k] = out.get(k, 0.0) + expected_attempt_points(rules, "xp", None, p)
     return out
 
 

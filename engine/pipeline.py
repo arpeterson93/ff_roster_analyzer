@@ -162,6 +162,10 @@ def _actual_stats_row(row: dict, fields: list[str]) -> dict:
     return stats
 
 
+# nflfastR recomputes fg_prob after the fact, so the kicker xFP code re-fetches a cached play-by-play file older than this.
+_KICK_PBP_MAX_AGE_DAYS = 30
+
+
 def _actual_weekly_stats(
     position, nfl_team, pid, week, game_final, offense_lookup, dst_lookup, active_lookup, opponent, player_rules,
     ff_opp_lookup=None, k_xpts_lookup=None,
@@ -1146,7 +1150,7 @@ def run_league(
     if "K" in offense_positions:
         try:
             expected_current_points.update(team_weekly_kicker_xpts(nd.play_by_play(season, current_season=season), player_rules))
-            expected_prior_points.update(team_weekly_kicker_xpts(nd.play_by_play(prior_season), player_rules))
+            expected_prior_points.update(team_weekly_kicker_xpts(nd.play_by_play(prior_season, max_age_days=_KICK_PBP_MAX_AGE_DAYS), player_rules))
         except Exception:
             logger.warning("kicker expected points-allowed (play-by-play) failed - K left out of the Expected matchup table", exc_info=True)
             expected_matchup_positions = [p for p in offense_positions if p != "K"]

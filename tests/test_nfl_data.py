@@ -200,3 +200,30 @@ def test_non_offense_points_from_pbp():
         {**base, "game_id": "G", "play_id": 4, "posteam": "MIN", "defteam": "SF", "safety": 1},
     ]
     assert non_offense_points(pl.DataFrame(plays)) == {("G", "SF"): 9.0}
+
+
+def test_cached_load_max_age_refetches_an_old_completed_season_file(tmp_path, monkeypatch):
+    import os
+    import time
+
+    import polars as pl
+
+    from ingest import nfl_data as nd
+
+    monkeypatch.setattr(nd, "CACHE_DIR", tmp_path)
+    calls = []
+
+    def loader():
+        calls.append(1)
+        return pl.DataFrame({"x": [len(calls)]})
+
+    nd._cached_load("t", [2020], loader, current_season=2026)           # first call fetches and caches
+    nd._cached_load("t", [2020], loader, current_season=2026)           # a completed season is served from cache
+    assert len(calls) == 1
+    path = nd._cache_path("t", [2020])
+    old = time.time() - 40 * 86400
+    os.utime(path, (old, old))
+    nd._cached_load("t", [2020], loader, current_season=2026)           # still cached without max_age
+    assert len(calls) == 1
+    out = nd._cached_load("t", [2020], loader, current_season=2026, max_age=30 * 86400)
+    assert len(calls) == 2 and out["x"][0] == 2                          # too old for this caller -> re-fetched
