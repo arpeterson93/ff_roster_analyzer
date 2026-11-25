@@ -63,6 +63,16 @@ function rosStatsFor(teamId, data) {
   return { wins, losses, pf, pa };
 }
 
+// Win probability for the team's "Thru Wk N" game: the same schedule matchup's own home/away win_pct the ROS
+// record and the Schedule tab use. null when there's no game that week or no probability yet.
+function thruWinProb(row, data) {
+  if (!row.thru || !row.thru.result) return null;
+  const m = (data.schedule || []).find((g) => g.week === row.thru.week && (g.home_team_id === row.team_id || g.away_team_id === row.team_id));
+  if (!m) return null;
+  const p = m.home_team_id === row.team_id ? m.home_win_pct : m.away_win_pct;
+  return p === undefined ? null : p;
+}
+
 function seedBar(seedProbs) {
   const seeds = Object.keys(seedProbs).sort((a, b) => Number(a) - Number(b));
   const segments = seeds
@@ -93,6 +103,10 @@ function valueFor(row, key) {
   if (key === "ros_record") return row.ros.wins;
   if (key === "ros_pf") return row.ros.pf;
   if (key === "ros_pa") return row.ros.pa;
+  if (key === "thru_wp") return row.thru_wp;
+  if (key === "fin_record") return row.wins + row.ros.wins;
+  if (key === "fin_pf") return row.points_for + row.ros.pf;
+  if (key === "fin_pa") return row.points_against + row.ros.pa;
   if (key === "xwins") return row.expected_wins;
   if (key === "playoff") return row.playoff_odds;
   if (key === "bye") return row.bye_odds;
@@ -131,7 +145,7 @@ export function renderStandings(container, data, slug) {
 function renderStandingsTable(container, data, slug, openPaths) {
   const teamsById = data.teamsById;
   const yourTeamId = getYourTeam(slug);
-  const allRows = data.standings.map((s) => ({ ...s, team: teamsById.get(s.team_id), ros: rosStatsFor(s.team_id, data) }));
+  const allRows = data.standings.map((s) => ({ ...s, team: teamsById.get(s.team_id), ros: rosStatsFor(s.team_id, data), thru_wp: thruWinProb(s, data) }));
 
   // Real current seed (see engine.standings.compute_current_seeds), which
   // now covers every team - non-playoff teams are seeded past
@@ -176,11 +190,15 @@ function renderStandingsTable(container, data, slug, openPaths) {
           <td class="block-end">${fmt(s.points_against, 1)}</td>
           ${thruWeek === null ? "" : `<td>${thruSeedCell(s)}</td>
           <td title="${escapeHtml(thruResultTitle(s))}">${s.thru ? `${s.thru.wins}-${s.thru.losses}${s.thru.ties ? "-" + s.thru.ties : ""}` : "–"}${s.thru && s.thru.result ? ` <span class="muted small">${s.thru.result}</span>` : ""}</td>
+          <td>${s.thru_wp === null ? "–" : `${fmt(s.thru_wp * 100, 0)}%`}</td>
           <td>${s.thru ? fmt(s.thru.points_for, 1) : "–"}</td>
           <td class="block-end">${s.thru ? fmt(s.thru.points_against, 1) : "–"}</td>`}
           <td>${s.ros.wins}-${s.ros.losses}</td>
           <td>${fmt(s.ros.pf, 1)}</td>
           <td class="block-end">${fmt(s.ros.pa, 1)}</td>
+          <td>${s.wins + s.ros.wins}-${s.losses + s.ros.losses}${s.ties ? "-" + s.ties : ""}</td>
+          <td>${fmt(s.points_for + s.ros.pf, 1)}</td>
+          <td class="block-end">${fmt(s.points_against + s.ros.pa, 1)}</td>
           <td>${fmt(s.expected_wins, 1)}</td>
           <td>${fmt(s.playoff_odds * 100, 0)}%</td>
           <td>${fmt(s.bye_odds * 100, 0)}%</td>
@@ -202,8 +220,9 @@ function renderStandingsTable(container, data, slug, openPaths) {
                 ${sortTh("Team", "team", sortState, ` class="sticky-team" rowspan="2"`)}
                 ${sortTh("Div", "div", sortState, ` rowspan="2"`)}
                 <th colspan="3" class="block-end">Current</th>
-                ${thruWeek === null ? "" : `<th colspan="4" class="block-end" title="Current record plus this week's matchups played out at their projected scores (live-blended once the week has started), seeded with the same tiebreakers.">Thru Wk ${thruWeek}</th>`}
+                ${thruWeek === null ? "" : `<th colspan="5" class="block-end" title="Current record plus this week's matchups played out at their projected scores (live-blended once the week has started), seeded with the same tiebreakers.">Thru Wk ${thruWeek}</th>`}
                 <th colspan="3" class="block-end">ROS</th>
+                <th colspan="3" class="block-end" title="Projected regular-season finish: Current plus ROS (record from each remaining game's favorite/underdog call; PF and PA are the sums).">Finish</th>
                 ${sortTh("xWins", "xwins", sortState, ` rowspan="2"`)}
                 ${sortTh("Playoff%", "playoff", sortState, ` rowspan="2"`)}
                 ${sortTh("Bye%", "bye", sortState, ` rowspan="2"`)}
@@ -213,8 +232,9 @@ function renderStandingsTable(container, data, slug, openPaths) {
               </tr>
               <tr>
                 ${sortTh("Record", "cur_record", sortState)}${sortTh("PF", "cur_pf", sortState)}${sortTh("PA", "cur_pa", sortState, ` class="block-end"`)}
-                ${thruWeek === null ? "" : `${sortTh("Seed", "thru_seed", sortState)}${sortTh("Record", "thru_record", sortState)}${sortTh("PF", "thru_pf", sortState)}${sortTh("PA", "thru_pa", sortState, ` class="block-end"`)}`}
+                ${thruWeek === null ? "" : `${sortTh("Seed", "thru_seed", sortState)}${sortTh("Record", "thru_record", sortState)}${sortTh("WP", "thru_wp", sortState, ` title="Win probability for this week's game"`)}${sortTh("PF", "thru_pf", sortState)}${sortTh("PA", "thru_pa", sortState, ` class="block-end"`)}`}
                 ${sortTh("Record", "ros_record", sortState)}${sortTh("PF", "ros_pf", sortState)}${sortTh("PA", "ros_pa", sortState, ` class="block-end"`)}
+                ${sortTh("Record", "fin_record", sortState)}${sortTh("PF", "fin_pf", sortState)}${sortTh("PA", "fin_pa", sortState, ` class="block-end"`)}
               </tr>
             </thead>
             <tbody>${rows}</tbody>
