@@ -101,7 +101,8 @@ const DST_STAT_METRICS = flatten(blocksForPosition("DST"), "DST").map(([group, k
 
 export const METRICS = [
   { key: "fpts", label: "FPts", group: "Scoring", unit: "pts", positions: null, get: fptsGetter },
-  { key: "xfpts", label: "xFPts", group: "Scoring", unit: "pts", positions: USAGE_POSITIONS, get: xfpGetter },
+  // Kickers get xFPts too (engine/kicker_xpts.py), so K is allowed here alongside the usage positions.
+  { key: "xfpts", label: "xFPts", group: "Scoring", unit: "pts", positions: new Set([...USAGE_POSITIONS, "K"]), get: xfpGetter },
   { key: "snap_pct", label: "Snap %", group: "Usage", unit: "pct", positions: USAGE_POSITIONS, get: usageGetter(snapPct) },
   { key: "att_pct", label: "Att %", group: "Usage", unit: "pct", positions: USAGE_POSITIONS, get: usageGetter(attPct) },
   { key: "tgt_pct", label: "Tgt %", group: "Usage", unit: "pct", positions: USAGE_POSITIONS, get: usageGetter(tgtPct) },
