@@ -193,7 +193,7 @@ export function seasonTotalPoints(p, currentWeek, fromWeek = 1) {
 }
 
 // Expected-points (xFPTS) twin of seasonTotalPoints above - summed only
-// over weeks that actually have an xfp_points value (a K/DST week, or any
+// over weeks that actually have an xfp_points value (a DST week, or any
 // week ffopportunity has no row for, is excluded from both the sum and
 // the "any data at all" check, same as seasonTotalPoints excludes a
 // missing actual.points).

@@ -335,8 +335,8 @@ function statsFpts(p, statsWeek, currentWeek) {
 }
 
 // Expected-points (xFPTS) twin of statsFpts above - null whenever
-// ffopportunity has no model (K/DST) or no row for that player-week, same
-// convention as statsFpts.
+// there is no model (DST) or no row for that player-week, same convention as
+// statsFpts. Kickers have one (engine/kicker_xpts.py).
 function statsXfpts(p, statsWeek, currentWeek) {
   const from = statsWindowStart(statsWeek, currentWeek);
   if (from !== null) return seasonTotalXfp(p, currentWeek, from);
@@ -375,7 +375,7 @@ function scoringTimeCentroidPct(p, statsWeek, currentWeek, gameLogPlays) {
 // G/FPTS/xFPTS: flat columns right after Star/Rank/Player/Team, before the
 // grouped stat block - leftmost among the "stats" columns rather than
 // trailing after Usage%, so they're visible without scrolling. xFPTS is
-// dropped for K/DST (no ffopportunity model - see engine/expected_points.py).
+// dropped for DST only (no model). Kickers use engine/kicker_xpts.py.
 // The TIME (Scoring Time) column lives at the right end of the Usage group
 // instead - see statsUsageColumns.
 function statsLeadingColumns(data, filters) {
@@ -386,7 +386,7 @@ function statsLeadingColumns(data, filters) {
   // so a single-week view drops it.
   const g = { key: "_games", label: "G", title: "Games played in this range (byes and missed games excluded)", fmt: (_v, p) => gamesPlayed(p, sw, cw) ?? "-" };
   const withG = (cols) => (typeof sw === "number" ? cols : [g, ...cols]);
-  if (filters.position === "DST" || filters.position === "K") return withG([fpts]);
+  if (filters.position === "DST") return withG([fpts]);
   const xfpts = { key: "_xfpts", label: "xFPTS", title: "Expected fantasy points - see the implementation plan's D2", fmt: (_v, p) => fmtScore(statsXfpts(p, sw, cw)) };
   return withG([fpts, xfpts]);
 }

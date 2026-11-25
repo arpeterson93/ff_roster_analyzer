@@ -180,8 +180,8 @@ def _actual_weekly_stats(
     active_lookup.
 
     `xfp_points` (expected fantasy points, see engine/expected_points.py) is
-    a sibling of `points` throughout: None wherever ffopportunity has no
-    model at all (DST, K - see ffopportunity's own coverage) or simply has
+    a sibling of `points` throughout: None wherever there is no model at
+    all (DST; kickers come from engine/kicker_xpts.py) or simply has
     no row for this player-week, never 0.0 standing in for "no model"."""
     if not game_final.get((nfl_team, week), False):
         return None
@@ -1166,8 +1166,8 @@ def run_league(
 
     # xFPTS source (see engine/expected_points.py) - same resolve-by-gsis
     # pattern as actual_offense_by_id_week above. ffopportunity simply has
-    # no row at all for a K/DST week (no model for either - see
-    # engine/expected_points.py's module docstring), so no position filter
+    # no row at all for a K/DST week (K is filled separately from play-by-play
+    # below, see engine/kicker_xpts.py; DST has no model), so no position filter
     # is needed here; a missing lookup already falls out as the same
     # None xfp_points _actual_weekly_stats uses for "no model"/"no row".
     ff_opp_by_id_week: dict[tuple[str, int], dict] = {}
@@ -1604,8 +1604,10 @@ def run_league(
                     if scoring_plays or incompletions or zero_point_plays:
                         game_id = plays_for_player[0].get("game_id")
                         duration = game_durations.get(game_id, 60.0)
-                        # No kicker/DST model (see engine/expected_points.py),
-                        # but this loop is already offense_positions-only, and
+                        # No per-play expected list for K/DST (ffopportunity has no
+                        # model; K's expected points are a weekly figure, see
+                        # engine/kicker_xpts.py), but this loop is already
+                        # offense_positions-only, and
                         # gsis_id simply won't appear in week_exp_pass_rows/
                         # week_exp_rush_rows for a K - expected_plays_for_player
                         # degrades to an empty list, not an error.
