@@ -20,6 +20,7 @@ import polars as pl
 
 from engine.curve import Curve, blend_current, build_curve, build_dst_curve, load_outcome_sd
 from engine.expected_points import weekly_xfp_points
+from engine.kicker_xpts import kicker_weekly_xpts
 from engine.faab_estimate import (
     INJURY_FLAG_STATUSES,
     POOLED_TRAINING_TABLE_PATH,
@@ -163,7 +164,7 @@ def _actual_stats_row(row: dict, fields: list[str]) -> dict:
 
 def _actual_weekly_stats(
     position, nfl_team, pid, week, game_final, offense_lookup, dst_lookup, active_lookup, opponent, player_rules,
-    ff_opp_lookup=None,
+    ff_opp_lookup=None, k_xpts_lookup=None,
 ):
     """Real (not projected) stat line + points for one already-played week -
     powers both the Game Log and every FAAB "prior week"/season-average
@@ -190,6 +191,10 @@ def _actual_weekly_stats(
     row = offense_lookup.get((pid, week))
     ff_opp_row = (ff_opp_lookup or {}).get((pid, week))
     xfp_points = weekly_xfp_points(ff_opp_row, player_rules) if ff_opp_row else None
+    if position == "K" and k_xpts_lookup is not None:
+        # Kickers: expected points from their kicks' make probabilities (engine/kicker_xpts.py); a played week with no
+        # attempts is a real 0.
+        xfp_points = k_xpts_lookup.get((pid, week), 0.0)
     if row:
         return {
             "stats": _actual_stats_row(row, _OFFENSE_STAT_FIELDS), "points": player_rules.points_for_row(row),
@@ -1157,6 +1162,20 @@ def run_league(
         pid = id_map.resolve(gsis_id=row["player_id"], name=row["full_name"], pos=row["position"], team=row["posteam"]).id
         ff_opp_by_id_week[(pid, row["week"])] = row
 
+    # Kicker xFP (engine/kicker_xpts.py): nflfastR's per-kick make probability x this league's make/miss points.
+    # Best-effort - a pbp problem leaves kicker xfp_points None, as before.
+    kicker_xpts_by_id_week: dict[tuple[str, int], float] | None = None
+    if "K" in offense_positions:
+        try:
+            gsis_to_pid = {g: pid for pid, g in gsis_by_pid.items()}
+            kicker_xpts_by_id_week = {}
+            for (gsis, wk), val in kicker_weekly_xpts(nd.play_by_play(season, current_season=season), player_rules).items():
+                if gsis in gsis_to_pid:
+                    kicker_xpts_by_id_week[(gsis_to_pid[gsis], wk)] = round(val, 2)
+        except Exception:
+            logger.warning("kicker xFP (play-by-play) failed - kicker xfp_points left empty", exc_info=True)
+            kicker_xpts_by_id_week = None
+
     # Active-roster-but-no-stats-row weeks (see ACTIVE_ROSTER_STATUS above) -
     # keyed the same way as actual_offense_by_id_week so _actual_weekly_stats
     # can tell "genuinely didn't play" apart from "played, just produced
@@ -1445,7 +1464,7 @@ def run_league(
                         "rank": matchup_index.rank.get(p.position, {}).get(opponent.get((p.nfl_team, w))),
                         "projected": None, "sd": None,
                         "our_projected": None,
-                        "actual": _actual_weekly_stats(p.position, p.nfl_team, res.id, w, game_final, actual_offense_by_id_week, actual_dst_by_team_week, active_by_id_week, opponent, player_rules, ff_opp_by_id_week),
+                        "actual": _actual_weekly_stats(p.position, p.nfl_team, res.id, w, game_final, actual_offense_by_id_week, actual_dst_by_team_week, active_by_id_week, opponent, player_rules, ff_opp_by_id_week, kicker_xpts_by_id_week),
                         "implied_total": (game_context.get((p.nfl_team, w)) or {}).get("implied_total"),
                         "opponent_implied_total": (game_context.get((p.nfl_team, w)) or {}).get("opponent_implied_total"),
                         "weather": None,
@@ -1458,7 +1477,7 @@ def run_league(
                         "kickoff": kickoff.get((p.nfl_team, wp.week)),
                         "index": wp.index, "rank": wp.rank, "projected": wp.projected, "sd": wp.sd,
                         "our_projected": wp.our_projected,
-                        "actual": _actual_weekly_stats(p.position, p.nfl_team, res.id, wp.week, game_final, actual_offense_by_id_week, actual_dst_by_team_week, active_by_id_week, opponent, player_rules, ff_opp_by_id_week),
+                        "actual": _actual_weekly_stats(p.position, p.nfl_team, res.id, wp.week, game_final, actual_offense_by_id_week, actual_dst_by_team_week, active_by_id_week, opponent, player_rules, ff_opp_by_id_week, kicker_xpts_by_id_week),
                         # implied_total is this player's OWN team; opponent_implied_total
                         # is the team they're facing that week - for a DST, the opponent's
                         # number is the one that actually matters (how many points the
