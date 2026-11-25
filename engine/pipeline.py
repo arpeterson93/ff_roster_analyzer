@@ -20,7 +20,7 @@ import polars as pl
 
 from engine.curve import Curve, blend_current, build_curve, build_dst_curve, load_outcome_sd
 from engine.expected_points import weekly_xfp_points
-from engine.kicker_xpts import kicker_weekly_xpts
+from engine.kicker_xpts import kicker_weekly_xpts, team_weekly_kicker_xpts
 from engine.faab_estimate import (
     INJURY_FLAG_STATUSES,
     POOLED_TRAINING_TABLE_PATH,
@@ -1134,13 +1134,22 @@ def run_league(
     # (no ffopportunity kicker model - see engine/expected_points.py's
     # module docstring) and no DST (ffopportunity has no team-defense
     # concept at all).
-    expected_matchup_positions = [p for p in offense_positions if p != "K"]
+    # Kickers are the exception: ffopportunity has none, so their expected points come from engine/kicker_xpts.py
+    # (each kick's NFL-wide make probability x the league's make/miss points, summed per team per game).
+    expected_matchup_positions = list(offense_positions)
     expected_current_points = expected_points_by_team_week_pos(
-        nd.ff_opportunity_weekly(season, current_season=season), season, expected_matchup_positions, player_rules
+        nd.ff_opportunity_weekly(season, current_season=season), season, [p for p in offense_positions if p != "K"], player_rules
     )
     expected_prior_points = expected_points_by_team_week_pos(
-        nd.ff_opportunity_weekly(prior_season), prior_season, expected_matchup_positions, player_rules
+        nd.ff_opportunity_weekly(prior_season), prior_season, [p for p in offense_positions if p != "K"], player_rules
     )
+    if "K" in offense_positions:
+        try:
+            expected_current_points.update(team_weekly_kicker_xpts(nd.play_by_play(season, current_season=season), player_rules))
+            expected_prior_points.update(team_weekly_kicker_xpts(nd.play_by_play(prior_season), player_rules))
+        except Exception:
+            logger.warning("kicker expected points-allowed (play-by-play) failed - K left out of the Expected matchup table", exc_info=True)
+            expected_matchup_positions = [p for p in offense_positions if p != "K"]
 
     # Actual (not projected) per-week stat lines for weeks already played,
     # keyed for O(1) lookup while building each player's `weekly` array below.

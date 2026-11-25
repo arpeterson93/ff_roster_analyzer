@@ -733,7 +733,7 @@ export function renderMatchups(container, data) {
       // other position/team with no data this week.
       help.textContent =
         sourceSelect.value === "expected"
-          ? "1 = easiest matchup, higher = tougher (expected, based on opponent-faced opportunity - no kicker/DST model exists, so those columns show no data)"
+          ? "1 = easiest matchup, higher = tougher (expected, based on opponent-faced opportunity; kickers use each kick's NFL-wide make probability - no DST model exists, so that column shows no data)"
           : "1 = easiest matchup, higher = tougher" +
             (typeSelect.value === "add" ? ". Opp-Adjusted (+/-) = points allowed minus what the offenses faced normally score at the position (their other games); +3.2 means this defense gives up 3.2 more per game than expected." : "");
       const source = sourceSelect.value === "expected" ? data.matchups._expected || {} : data.matchups;
