@@ -16,6 +16,7 @@ import numpy as np, polars as pl, nflreadpy as nfl, requests, yaml
 
 from engine.curve import SD_MONOTONE_POSITIONS, smooth_sd
 from engine.scoring import ScoringRules
+from ingest import nfl_data as nd
 from tools.faab_history.league_profile import HEADERS, SETTINGS_URL, scoring_format_items
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -45,7 +46,7 @@ pts = {(r["player_id"], r["season"], r["week"]): r["pts"] for r in stats.select(
 ids = nfl.load_ff_playerids().select("fantasypros_id", "gsis_id").drop_nulls()
 fp2gsis = {str(int(float(a))): b for a, b in ids.iter_rows()}
 
-sched = nfl.load_schedules(SEASONS).filter(pl.col("game_type") == "REG")
+sched = nd.load_schedules(SEASONS).filter(pl.col("game_type") == "REG")
 first_day = {}
 for r in sched.select("season", "week", "gameday").iter_rows():
     d = dt.date.fromisoformat(str(r[2]))

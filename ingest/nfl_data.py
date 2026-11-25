@@ -8,6 +8,7 @@ equivalent).
 """
 from __future__ import annotations
 
+import io
 import os
 import time
 from datetime import date, datetime
@@ -16,6 +17,7 @@ from zoneinfo import ZoneInfo
 
 import nflreadpy as nfl
 import polars as pl
+import requests
 
 CACHE_DIR = Path(".cache/nflverse")
 # seconds; past seasons never change, cached forever. CI's "refresh" stage
@@ -88,10 +90,26 @@ def _cached_load(name: str, seasons: list[int], loader, *, current_season: int |
     return df
 
 
+_SCHEDULES_CSV_URL = "https://github.com/nflverse/nflverse-data/releases/download/schedules/games.csv"
+
+
+def load_schedules(seasons: int | list[int]) -> pl.DataFrame:
+    """nfl.load_schedules, with a CSV fallback. nflverse dropped schedules/games.parquet from its release (only
+    games.csv remains), so nflreadpy 0.1.5 404s; the CSV has the same columns."""
+    seasons_list = [seasons] if isinstance(seasons, int) else list(seasons)
+    try:
+        return nfl.load_schedules(seasons_list)
+    except ConnectionError:
+        resp = requests.get(_SCHEDULES_CSV_URL, timeout=60)
+        resp.raise_for_status()
+        df = pl.read_csv(io.BytesIO(resp.content), null_values=["NA"], infer_schema_length=10000)
+        return df.filter(pl.col("season").is_in(seasons_list))
+
+
 def schedules(seasons: int | list[int], current_season: int | None = None) -> pl.DataFrame:
     seasons_list = [seasons] if isinstance(seasons, int) else list(seasons)
     df = _cached_load(
-        "schedules", seasons_list, lambda: nfl.load_schedules(seasons_list), current_season=current_season
+        "schedules", seasons_list, lambda: load_schedules(seasons_list), current_season=current_season
     )
     return _normalize_team_columns(df, ["away_team", "home_team"])
 

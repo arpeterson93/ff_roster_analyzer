@@ -51,6 +51,8 @@ from datetime import date
 from pathlib import Path
 
 import nflreadpy as nfl
+
+from ingest import nfl_data as nd
 import polars as pl
 
 OFFENSE_POSITIONS = ["QB", "RB", "WR", "TE", "K"]
@@ -605,7 +607,7 @@ def load_frames(season: int, completed_only: bool = True):
     schedule-strength tables need the future weeks."""
     players = nfl.load_player_stats([season]).filter(pl.col("season_type") == "REG")
     teams = nfl.load_team_stats([season]).filter(pl.col("season_type") == "REG")
-    sched = nfl.load_schedules([season]).filter(pl.col("game_type") == "REG")
+    sched = nd.load_schedules([season]).filter(pl.col("game_type") == "REG")
     if completed_only:
         done = completed_week(sched)
         in_progress = sorted({w for w in players["week"].unique().to_list() if w > done})

@@ -341,7 +341,7 @@ def build_rank_index(seasons: list[int]) -> dict:
     week_starts: dict[tuple, dt.date] = {}
     byes: dict[int, dict[str, int]] = {}
     for season in seasons:
-        sched = nfl.load_schedules([season])
+        sched = nd.load_schedules([season])
         for row in sched.iter_rows(named=True):
             if not row["gameday"]:
                 continue

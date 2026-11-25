@@ -227,3 +227,20 @@ def test_cached_load_max_age_refetches_an_old_completed_season_file(tmp_path, mo
     assert len(calls) == 1
     out = nd._cached_load("t", [2020], loader, current_season=2026, max_age=30 * 86400)
     assert len(calls) == 2 and out["x"][0] == 2                          # too old for this caller -> re-fetched
+
+
+def test_load_schedules_falls_back_to_csv_when_parquet_404s(monkeypatch):
+    import polars as pl
+    from ingest import nfl_data as nd
+
+    def boom(_seasons):
+        raise ConnectionError("404")
+
+    class Resp:
+        content = b"game_id,season,week,roof\na,2025,1,NA\nb,2026,1,dome\n"
+        def raise_for_status(self): pass
+
+    monkeypatch.setattr(nd.nfl, "load_schedules", boom)
+    monkeypatch.setattr(nd.requests, "get", lambda *a, **k: Resp())
+    df = nd.load_schedules(2026)
+    assert df["game_id"].to_list() == ["b"] and df["roof"].to_list() == ["dome"]
